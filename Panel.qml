@@ -22,8 +22,6 @@ Panel {
   readonly property string script:
     Qt.resolvedUrl("bin/you-got-mail").toString().replace(/^file:\/\//, "")
 
-  // Closed envelope — unopened mail.
-  readonly property string iconEnvelope: "\uF0E0"
   readonly property string iconExternal: "\uF08E"
   readonly property string iconPrev: "\uF053"
   readonly property string iconNext: "\uF054"
@@ -236,14 +234,11 @@ Panel {
           anchors.centerIn: parent
           spacing: Style.space(5)
 
-          Text {
+          MailSlotIcon {
             anchors.verticalCenter: parent.verticalCenter
-            text: root.iconEnvelope
-            textFormat: Text.PlainText
-            font.family: root.fontFamily
-            font.pixelSize: Style.bar.iconFont
-            renderType: Text.NativeRendering
+            iconSize: Style.bar.iconCanvas
             color: root.opened ? root.accent : root.foreground
+            hasMail: root.hasUnread && root.reachable
           }
 
           Rectangle {
