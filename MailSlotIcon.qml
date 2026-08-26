@@ -2,13 +2,13 @@ import QtQuick
 import QtQuick.Window
 import qs.Commons
 
-// Closed envelope, back view: landscape body, straight flap crease, wax
-// seal. Not the front V-flap used by the other Gmail widget.
+// Rural mailbox with a pivoting flag. Flag up (theme accent) means mail.
 Item {
   id: root
 
   property real iconSize: Style.bar.iconCanvas
   property color color: Color.foreground
+  property color flagColor: color
   property bool hasMail: false
 
   width: iconSize
@@ -25,27 +25,22 @@ Item {
     return Math.round(v * root.dpr) / root.dpr
   }
 
-  readonly property real stroke: snap(Math.max(1.3, iconSize * 0.10))
-  readonly property real inset: snap(stroke / 2)
+  readonly property real boxW: snap(iconSize * 0.76)
+  readonly property real boxH: snap(iconSize * 0.50)
+  readonly property real boxX: snap(iconSize * 0.02)
+  readonly property real boxY: snap(iconSize * 0.40)
+  readonly property real boxR: snap(Math.max(1.1, iconSize * 0.08))
 
-  readonly property real bodyW: snap(iconSize - stroke)
-  readonly property real bodyH: snap(iconSize * 0.64)
-  readonly property real bodyX: inset
-  readonly property real bodyY: snap((iconSize - bodyH) / 2)
-  readonly property real bodyR: snap(Math.max(1.1, iconSize * 0.09))
+  readonly property real stemLen: snap(iconSize * 0.46)
+  readonly property real stemThick: snap(Math.max(1.7, iconSize * 0.11))
+  readonly property real clothLen: snap(iconSize * 0.42)
+  readonly property real clothThick: snap(Math.max(2.2, iconSize * 0.16))
+  readonly property real pivotX: snap(boxX + boxW - stemThick * 0.20)
+  readonly property real pivotY: snap(boxY + boxH * 0.16)
 
-  // Straight flap crease, broken in the middle for the seal.
-  readonly property real creaseY: snap(bodyY + bodyH * 0.40)
-  readonly property real creaseInset: snap(stroke * 1.7)
-
-  readonly property real sealR: snap(Math.max(1.6, iconSize * 0.12))
-  readonly property real sealX: snap(bodyX + bodyW / 2)
-  readonly property real sealY: creaseY
-  readonly property real sealGap: snap(sealR * 1.55)
-
-  property real sealAmount: hasMail ? 1 : 0
-  Behavior on sealAmount {
-    NumberAnimation { duration: 140; easing.type: Easing.InOutQuad }
+  property real flagAmount: hasMail ? 1 : 0
+  Behavior on flagAmount {
+    NumberAnimation { duration: 180; easing.type: Easing.InOutQuad }
   }
 
   layer.enabled: true
@@ -85,39 +80,42 @@ Item {
       var ctx = getContext("2d")
       ctx.reset()
       ctx.clearRect(0, 0, width, height)
-      ctx.strokeStyle = root.color
+
+      // Flag first so the box covers the pivot. Local +x is "along the stem";
+      // rotate -90° for flag-up. Cloth hangs +y (down when the flag is down,
+      // back over the box when the flag is up).
+      ctx.fillStyle = root.flagColor
+      ctx.save()
+      ctx.translate(root.pivotX, root.pivotY)
+      ctx.rotate(-Math.PI / 2 * root.flagAmount)
+      ctx.beginPath()
+      roundRect(ctx, 0, -root.stemThick / 2, root.stemLen, root.stemThick, root.stemThick / 2)
+      ctx.fill()
+      ctx.beginPath()
+      // Cloth in local -y so a -90° raise puts it over the box, not out
+      // to the right (which reads as a musical note).
+      roundRect(
+        ctx,
+        root.stemLen - root.clothThick,
+        -root.clothLen,
+        root.clothThick,
+        root.clothLen,
+        root.clothThick / 2
+      )
+      ctx.fill()
+      ctx.restore()
+
       ctx.fillStyle = root.color
-      ctx.lineWidth = root.stroke
-      ctx.lineJoin = "round"
-      ctx.lineCap = "round"
-
       ctx.beginPath()
-      roundRect(ctx, root.bodyX, root.bodyY, root.bodyW, root.bodyH, root.bodyR)
-      ctx.stroke()
-
-      var creaseLeft = root.bodyX + root.creaseInset
-      var creaseRight = root.bodyX + root.bodyW - root.creaseInset
-      var gap = root.sealAmount > 0.01 ? root.sealGap : 0
-      ctx.beginPath()
-      ctx.moveTo(creaseLeft, root.creaseY)
-      ctx.lineTo(root.sealX - gap, root.creaseY)
-      ctx.moveTo(root.sealX + gap, root.creaseY)
-      ctx.lineTo(creaseRight, root.creaseY)
-      ctx.stroke()
-
-      if (root.sealAmount > 0.01) {
-        ctx.globalAlpha = root.sealAmount
-        ctx.beginPath()
-        ctx.arc(root.sealX, root.sealY, root.sealR, 0, Math.PI * 2)
-        ctx.fill()
-        ctx.globalAlpha = 1
-      }
+      roundRect(ctx, root.boxX, root.boxY, root.boxW, root.boxH, root.boxR)
+      ctx.fill()
     }
   }
 
   onColorChanged: canvas.requestPaint()
-  onSealAmountChanged: canvas.requestPaint()
-  onBodyWChanged: canvas.requestPaint()
+  onFlagColorChanged: canvas.requestPaint()
+  onFlagAmountChanged: canvas.requestPaint()
+  onBoxWChanged: canvas.requestPaint()
   onDprChanged: canvas.requestPaint()
   Component.onCompleted: canvas.requestPaint()
 }

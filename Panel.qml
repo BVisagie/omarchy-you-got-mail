@@ -238,6 +238,7 @@ Panel {
             anchors.verticalCenter: parent.verticalCenter
             iconSize: Style.bar.iconCanvas
             color: root.opened ? root.accent : root.foreground
+            flagColor: (root.hasUnread && root.reachable) ? root.accent : root.foreground
             hasMail: root.hasUnread && root.reachable
           }
 
