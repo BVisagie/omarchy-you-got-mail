@@ -1,0 +1,309 @@
+#!/usr/bin/env bash
+# Gmail provider for You've Got Mail.
+#
+# Unread anywhere except spam, trash and drafts. Skip-inbox labels are
+# included because they are just unread mail that is not in INBOX.
+#
+#   gmail list [--page TOKEN]
+#   gmail read <id>
+#
+# gws owns the OAuth token. This script never sees a credential.
+
+set -uo pipefail
+umask 077
+
+export GOOGLE_WORKSPACE_CLI_KEYRING_BACKEND="${GOOGLE_WORKSPACE_CLI_KEYRING_BACKEND:-file}"
+
+for candidate in "$HOME/.local/share/mise/shims" "$HOME/.local/bin" "$HOME/.bun/bin"; do
+  case ":$PATH:" in
+    *":$candidate:"*) ;;
+    *) [ -d "$candidate" ] && PATH="$PATH:$candidate" ;;
+  esac
+done
+export PATH
+
+QUERY="is:unread -in:spam -in:trash -in:drafts"
+
+CACHE_DIR="${XDG_CACHE_HOME:-$HOME/.cache}/omarchy-you-got-mail"
+CACHE_FILE="$CACHE_DIR/messages.json"
+PROFILE_FILE="$CACHE_DIR/profile.json"
+LABEL_FILE="$CACHE_DIR/labels.json"
+
+die() {
+  printf '{"ok":false,"error":%s}\n' "$(printf '%s' "$1" | jq -Rs .)"
+  exit 0
+}
+
+write_private() {
+  local dest="$1" tmp
+  tmp="$(mktemp "$dest.XXXXXX" 2>/dev/null)" || return 1
+  chmod 600 -- "$tmp" 2>/dev/null
+  cat > "$tmp" || { rm -f -- "$tmp"; return 1; }
+  mv -f -- "$tmp" "$dest" || { rm -f -- "$tmp"; return 1; }
+}
+
+readable_file() {
+  [ -f "$1" ] && [ ! -L "$1" ]
+}
+
+max_messages() {
+  local value="${YOU_GOT_MAIL_MAX:-25}"
+  case "$value" in
+    ''|*[!0-9]*) printf '25'; return 0 ;;
+  esac
+  [ "${#value}" -le 3 ] || { printf '25'; return 0; }
+  local n=$((10#$value))
+  [ "$n" -ge 1 ] || { printf '25'; return 0; }
+  [ "$n" -le 50 ] || { printf '50'; return 0; }
+  printf '%s' "$n"
+}
+
+valid_id() {
+  [[ "$1" =~ ^[0-9a-f]{1,32}$ ]]
+}
+
+private_dir() {
+  local dir="$1" owner
+  mkdir -p -m 700 -- "$dir" 2>/dev/null
+  [[ -d "$dir" && ! -L "$dir" ]] || return 1
+  owner="$(stat -c '%u' -- "$dir" 2>/dev/null)" || return 1
+  [[ "$owner" == "$(id -u)" ]] || return 1
+  chmod 700 -- "$dir" 2>/dev/null || return 1
+  find "$dir" -mindepth 1 -maxdepth 1 ! -type f -exec rm -rf -- {} + 2>/dev/null
+  find "$dir" -mindepth 1 -maxdepth 1 -type f -exec chmod 600 -- {} + 2>/dev/null
+}
+
+command -v jq >/dev/null 2>&1 || die "jq not found on PATH"
+command -v gws >/dev/null 2>&1 || die "gws not found on PATH - see the README"
+private_dir "$CACHE_DIR" || die "cache directory is not usable"
+
+gws_gmail() {
+  gws gmail "$@" 2>/dev/null
+}
+
+ensure_json_object() {
+  local file="$1"
+  readable_file "$file" && jq -e 'type == "object"' -- "$file" >/dev/null 2>&1 && return 0
+  printf '{}\n' | write_private "$file"
+}
+
+account_email() {
+  local cached email
+  if readable_file "$PROFILE_FILE"; then
+    cached="$(jq -r '.emailAddress // empty' "$PROFILE_FILE" 2>/dev/null)"
+    [ -n "$cached" ] && { printf '%s' "$cached"; return 0; }
+  fi
+  email="$(gws_gmail users getProfile --params '{"userId":"me"}' \
+    | jq -r '.emailAddress // empty' 2>/dev/null)"
+  [ -n "$email" ] || return 1
+  printf '{"emailAddress":%s}\n' "$(printf '%s' "$email" | jq -Rs .)" | write_private "$PROFILE_FILE"
+  printf '%s' "$email"
+}
+
+search_url() {
+  local email="$1"
+  local q
+  q="$(jq -rn --arg q "$QUERY" '$q | @uri')"
+  if [[ "$email" =~ ^[A-Za-z0-9._+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}$ ]]; then
+    printf 'https://mail.google.com/mail/u/0/?authuser=%s#search/%s' \
+      "$(printf '%s' "$email" | jq -Rr @uri)" "$q"
+  else
+    printf 'https://mail.google.com/mail/u/0/#search/%s' "$q"
+  fi
+}
+
+message_url() {
+  local email="$1" thread="$2"
+  if [[ "$email" =~ ^[A-Za-z0-9._+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}$ ]]; then
+    printf 'https://mail.google.com/mail/u/0/?authuser=%s#all/%s' \
+      "$(printf '%s' "$email" | jq -Rr @uri)" "$thread"
+  else
+    printf 'https://mail.google.com/mail/u/0/#all/%s' "$thread"
+  fi
+}
+
+unread_count() {
+  local total
+  total="$(gws_gmail users labels get --params '{"userId":"me","id":"UNREAD"}' \
+    | jq -r '.messagesTotal // empty' 2>/dev/null)"
+  case "$total" in
+    ''|*[!0-9]*) printf '0' ;;
+    *) printf '%s' "$total" ;;
+  esac
+}
+
+fill_labels_from_cache() {
+  local ids unknown fetched
+  ids="$1"
+
+  unknown="$(jq -r --slurpfile cache "$CACHE_FILE" --slurpfile map "$LABEL_FILE" '
+      [ .[] | $cache[0][.].lab // [] | .[] ]
+      | map(select($map[0][.] == null))
+      | length
+    ' <<<"$ids" 2>/dev/null)"
+  case "$unknown" in ''|*[!0-9]*) return 0 ;; 0) return 0 ;; esac
+
+  fetched="$(gws_gmail users labels list --params '{"userId":"me"}' \
+    | jq -c '[.labels[]? | select(.type == "user")
+              | {key: .id, value: (.name | split("/") | last)}] | from_entries' 2>/dev/null)"
+  [ -n "$fetched" ] && printf '%s\n' "$fetched" | write_private "$LABEL_FILE"
+}
+
+fill_cache() {
+  local ids missing tmp id
+  missing="$(jq -r --slurpfile cache "$CACHE_FILE" '
+      .[] | select($cache[0][.] == null)
+    ' <<<"$1" 2>/dev/null)"
+  [ -n "$missing" ] || return 0
+
+  tmp="$(mktemp -d "${TMPDIR:-/tmp}/omarchy-you-got-mail.XXXXXX")" || return 0
+
+  while IFS= read -r id; do
+    valid_id "$id" || continue
+    printf '%s\n' "$id"
+  done <<<"$missing" | xargs -r -P 6 -I {} bash -c '
+      id="$1"
+      out="$2"
+      params=$(jq -nc --arg id "$id" \
+        "{userId:\"me\",id:\$id,format:\"metadata\",metadataHeaders:[\"Subject\",\"From\"]}")
+      gws gmail users messages get --params "$params" 2>/dev/null \
+        | jq -c "{(.id): {
+              subject: ((.payload.headers // [] | map(select(.name == \"Subject\")) | .[0].value) // \"\"),
+              from: ((.payload.headers // [] | map(select(.name == \"From\")) | .[0].value) // \"\"),
+              snippet: (.snippet // \"\"),
+              ts: ((.internalDate // \"0\") | tonumber? // 0),
+              threadId: (.threadId // .id),
+              lab: [(.labelIds // [])[] | select(startswith(\"Label_\"))]
+            }}" > "$out/$id.json" 2>/dev/null
+    ' _ {} "$tmp"
+
+  shopt -s nullglob
+  local parts=("$tmp"/*.json)
+  if (( ${#parts[@]} > 0 )); then
+    local merged
+    merged="$(jq -s '
+        (.[0] // {}) as $old
+        | reduce .[1:][] as $entry ($old; . + $entry)
+        | to_entries
+        | sort_by(-(.value.ts // 0))
+        | .[0:1000]
+        | from_entries
+      ' "$CACHE_FILE" "${parts[@]}" 2>/dev/null)"
+    [ -n "$merged" ] && printf '%s\n' "$merged" | write_private "$CACHE_FILE"
+  fi
+  shopt -u nullglob
+
+  rm -rf -- "$tmp"
+}
+
+render() {
+  local ids="$1" unread="$2" email="$3" next="$4" current="$5"
+  local search
+  search="$(search_url "$email")"
+
+  jq -nc \
+    --argjson ids "$ids" \
+    --slurpfile cache "$CACHE_FILE" \
+    --slurpfile labelmap "$LABEL_FILE" \
+    --argjson unread "$unread" \
+    --arg email "$email" \
+    --arg next "$next" \
+    --arg current "$current" \
+    --arg search "$search" \
+    --arg authuser "$email" '
+    def entity:
+      gsub("&lt;";"<") | gsub("&gt;";">") | gsub("&quot;";"\"")
+      | gsub("&#39;";"'"'"'") | gsub("&nbsp;";" ") | gsub("&amp;";"&");
+
+    def sender:
+      . as $raw
+      | (capture("^\\s*\"?(?<name>[^\"<]*?)\"?\\s*<(?<addr>[^>]+)>\\s*$") // null) as $m
+      | if $m == null then ($raw | ltrimstr(" ") | rtrimstr(" "))
+        elif ($m.name | length) > 0 then $m.name
+        else $m.addr end;
+
+    def mail_url($thread):
+      if ($authuser | test("^[A-Za-z0-9._+-]+@[A-Za-z0-9.-]+\\.[A-Za-z]{2,}$")) then
+        "https://mail.google.com/mail/u/0/?authuser=\($authuser | @uri)#all/\($thread)"
+      else
+        "https://mail.google.com/mail/u/0/#all/\($thread)"
+      end;
+
+    ($labelmap[0] // {}) as $names
+    | def mine: [ .[] | $names[.] | select(. != null) ];
+
+    ($cache[0] // {}) as $c
+    | {
+        ok: true,
+        email: $email,
+        unread: $unread,
+        searchUrl: $search,
+        nextPage: $next,
+        thisPage: $current,
+        messages: [
+          $ids[]
+          | . as $id
+          | ($c[$id] // {}) as $m
+          | ($m.threadId // $id) as $thread
+          | {
+              id: $id,
+              threadId: $thread,
+              subject: ((($m.subject // "") | entity) as $s
+                        | if ($s | length) > 0 then $s else "(no subject)" end),
+              from: (($m.from // "") | entity | sender),
+              snippet: (($m.snippet // "") | entity),
+              ts: (($m.ts // 0) / 1000 | floor),
+              labels: (($m.lab // []) | mine),
+              url: mail_url($thread)
+            }
+        ]
+      }'
+}
+
+cmd_list() {
+  local token="" max page ids next unread email
+
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --page) shift; token="${1:-}" ;;
+    esac
+    shift
+  done
+  case "$token" in *[!A-Za-z0-9_-]*) token="" ;; esac
+
+  max="$(max_messages)"
+  page="$(gws_gmail users messages list --params "$(
+    jq -nc --arg q "$QUERY" --argjson n "$max" --arg t "$token" \
+      '{userId:"me",q:$q,maxResults:$n} + (if $t == "" then {} else {pageToken:$t} end)')")"
+  if printf '%s' "$page" | jq -e '.error' >/dev/null 2>&1; then
+    die "$(printf '%s' "$page" | jq -r '.error.message // "could not read unread mail"')"
+  fi
+  ids="$(printf '%s' "$page" | jq -c '[.messages[]?.id | select(test("^[0-9a-f]{1,32}$"))]' 2>/dev/null)"
+  [ -n "$ids" ] || ids='[]'
+  next="$(printf '%s' "$page" | jq -r '.nextPageToken // empty' 2>/dev/null)"
+  case "$next" in *[!A-Za-z0-9_-]*) next="" ;; esac
+
+  unread="$(unread_count)"
+  email="$(account_email)" || email=""
+
+  ensure_json_object "$CACHE_FILE"
+  ensure_json_object "$LABEL_FILE"
+  fill_cache "$ids"
+  fill_labels_from_cache "$ids"
+  render "$ids" "$unread" "$email" "$next" "$token"
+}
+
+cmd_read() {
+  local id="${1:-}"
+  valid_id "$id" || die "not a message id"
+  gws_gmail users messages modify \
+    --params "$(jq -nc --arg id "$id" '{userId:"me",id:$id}')" \
+    --json '{"removeLabelIds":["UNREAD"]}' >/dev/null || die "could not mark as read"
+  printf '{"ok":true}\n'
+}
+
+case "${1:-list}" in
+  list) shift; cmd_list "$@" ;;
+  read) cmd_read "${2:-}" ;;
+  *)    die "unknown command" ;;
+esac

@@ -1,0 +1,23 @@
+{
+  "schemaVersion": 1,
+  "id": "bvisagie.you-got-mail",
+  "name": "You've Got Mail",
+  "version": "1.0.0",
+  "author": "BVisagie",
+  "description": "Unread mail only. Click a message to open it.",
+  "homepage": "https://github.com/BVisagie/omarchy-you-got-mail",
+  "license": "MIT",
+  "kinds": [
+    "bar-widget"
+  ],
+  "entryPoints": {
+    "barWidget": "Panel.qml"
+  },
+  "barWidget": {
+    "displayName": "You've Got Mail",
+    "description": "A sealed envelope for unread mail. Click a row to open it.",
+    "category": "Apps",
+    "allowMultiple": false,
+    "defaultSection": "right"
+  }
+}

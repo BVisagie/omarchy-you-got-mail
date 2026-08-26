@@ -1,0 +1,55 @@
+#!/usr/bin/env bash
+# you-got-mail - data source for the Omarchy "You've Got Mail" bar widget.
+#
+# The widget only knows two verbs. Providers live under ../providers/ and
+# implement the same commands, so v2 can add Fastmail (or IMAP) without
+# touching QML.
+#
+#   you-got-mail list [--page TOKEN]
+#   you-got-mail read <id>
+#
+# Output is always one JSON object. Failures print {"ok":false,...} and
+# exit 0: a widget that gets no JSON has nothing to show but a crash.
+
+set -uo pipefail
+umask 077
+
+ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+CONFIG_FILE="${XDG_CONFIG_HOME:-$HOME/.config}/omarchy-you-got-mail/config"
+
+die() {
+  printf '{"ok":false,"error":%s}\n' "$(printf '%s' "$1" | jq -Rs .)"
+  exit 0
+}
+
+readable_file() {
+  [ -f "$1" ] && [ ! -L "$1" ]
+}
+
+CFG_PROVIDER=""
+CFG_MAX=""
+if readable_file "$CONFIG_FILE"; then
+  while IFS= read -r line || [ -n "$line" ]; do
+    case "$line" in ''|'#'*) continue ;; esac
+    key="${line%%=*}"
+    value="${line#*=}"
+    key="${key//[[:space:]]/}"
+    value="${value#"${value%%[![:space:]]*}"}"
+    value="${value%"${value##*[![:space:]]}"}"
+    case "$key" in
+      provider) CFG_PROVIDER="$value" ;;
+      max)      CFG_MAX="$value" ;;
+    esac
+  done < "$CONFIG_FILE"
+fi
+
+PROVIDER="${YOU_GOT_MAIL_PROVIDER:-${CFG_PROVIDER:-gmail}}"
+case "$PROVIDER" in
+  ''|*[!a-z0-9-]*) die "unknown provider" ;;
+esac
+
+export YOU_GOT_MAIL_MAX="${YOU_GOT_MAIL_MAX:-${CFG_MAX:-25}}"
+
+script="$ROOT/providers/$PROVIDER"
+[ -f "$script" ] && [ -x "$script" ] || die "provider '$PROVIDER' is not installed"
+exec "$script" "$@"
