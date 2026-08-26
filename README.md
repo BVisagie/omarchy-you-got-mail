@@ -54,12 +54,16 @@ The panel refreshes every minute, and again when you open it or click a row.
 The search is:
 
 ```text
-is:unread -in:spam -in:trash -in:drafts
+is:unread -in:spam -in:trash -in:drafts -in:chats (in:inbox OR has:userlabels)
 ```
 
-Mail your filters file away from Inbox still appears. User-label chips on
-each row say which pile caught it. New skip-inbox labels show up on their
-own the first time unread mail lands on them.
+That is unread in Inbox, plus unread on labels you created (skip-inbox
+included). It does **not** use Gmail's raw `UNREAD` count, which also
+covers trash and archived Promotions/Updates mail that the web UI does
+not show next to Inbox or your labels.
+
+User-label chips on each row say which pile caught it. New skip-inbox
+labels show up on their own the first time unread mail lands on them.
 
 Clicking a message opens `#all/<threadId>` so skip-inbox mail resolves, and
 removes the Gmail `UNREAD` label.

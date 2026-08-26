@@ -22,7 +22,11 @@ for candidate in "$HOME/.local/share/mise/shims" "$HOME/.local/bin" "$HOME/.bun/
 done
 export PATH
 
-QUERY="is:unread -in:spam -in:trash -in:drafts"
+# Inbox unread, plus unread on labels you created (including skip-inbox).
+# Gmail's UNREAD system label also covers trash and archived tab mail
+# (Promotions/Updates with no user label) that the web UI does not show as
+# unread in Inbox or the label list — that is not part of this pile.
+QUERY="is:unread -in:spam -in:trash -in:drafts -in:chats (in:inbox OR has:userlabels)"
 
 CACHE_DIR="${XDG_CACHE_HOME:-$HOME/.cache}/omarchy-you-got-mail"
 CACHE_FILE="$CACHE_DIR/messages.json"
@@ -123,13 +127,19 @@ message_url() {
 }
 
 unread_count() {
-  local total
-  total="$(gws_gmail users labels get --params '{"userId":"me","id":"UNREAD"}' \
-    | jq -r '.messagesTotal // empty' 2>/dev/null)"
-  case "$total" in
-    ''|*[!0-9]*) printf '0' ;;
-    *) printf '%s' "$total" ;;
-  esac
+  local n=0 token="" rounds=0 page chunk
+  while [ "$rounds" -lt 20 ]; do
+    rounds=$((rounds + 1))
+    page="$(gws_gmail users messages list --params "$(
+      jq -nc --arg q "$QUERY" --arg t "$token" \
+        '{userId:"me",q:$q,maxResults:500} + (if $t == "" then {} else {pageToken:$t} end)')")"
+    chunk="$(printf '%s' "$page" | jq '[.messages[]?.id] | length' 2>/dev/null)"
+    case "$chunk" in ''|*[!0-9]*) break ;; esac
+    n=$((n + chunk))
+    token="$(printf '%s' "$page" | jq -r '.nextPageToken // empty' 2>/dev/null)"
+    [ -n "$token" ] || break
+  done
+  printf '%s' "$n"
 }
 
 fill_labels_from_cache() {
@@ -283,7 +293,11 @@ cmd_list() {
   next="$(printf '%s' "$page" | jq -r '.nextPageToken // empty' 2>/dev/null)"
   case "$next" in *[!A-Za-z0-9_-]*) next="" ;; esac
 
-  unread="$(unread_count)"
+  if [ -z "$token" ] && [ -z "$next" ]; then
+    unread="$(printf '%s' "$ids" | jq 'length')"
+  else
+    unread="$(unread_count)"
+  fi
   email="$(account_email)" || email=""
 
   ensure_json_object "$CACHE_FILE"
