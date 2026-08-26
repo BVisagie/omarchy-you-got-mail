@@ -2,9 +2,8 @@ import QtQuick
 import QtQuick.Window
 import qs.Commons
 
-// Letterbox mark: a door slot, empty or with a letter in the slit.
-// One fill colour so it follows any theme. Canvas so the slit is a real
-// punch-through (not a second glyph) and stays sharp at 1× and 2×.
+// Letterbox mark: a solid slot lip, and when there is mail a dog-eared
+// note sitting on it. Outline vs fill so the two shapes stay separate.
 Item {
   id: root
 
@@ -26,23 +25,21 @@ Item {
     return Math.round(v * root.dpr) / root.dpr
   }
 
-  readonly property real plateW: snap(iconSize * 1.00)
-  readonly property real plateH: snap(Math.max(4.5, iconSize * 0.38))
-  readonly property real plateX: snap((iconSize - plateW) / 2)
-  readonly property real plateY: snap(iconSize * 0.52)
-  readonly property real plateR: snap(Math.min(plateH * 0.26, plateW * 0.08))
+  readonly property real stroke: snap(Math.max(1.3, iconSize * 0.10))
 
-  readonly property real holeH: snap(Math.max(2.25, plateH * 0.44))
-  readonly property real holeW: snap(plateW * 0.80)
-  readonly property real holeX: snap(plateX + (plateW - holeW) / 2)
-  readonly property real holeY: snap(plateY + (plateH - holeH) / 2)
-  readonly property real holeR: snap(holeH / 2)
+  readonly property real lipW: snap(iconSize - stroke)
+  readonly property real lipH: snap(Math.max(2.2, iconSize * 0.16))
+  readonly property real lipX: snap((iconSize - lipW) / 2)
+  readonly property real lipY: snap(iconSize - lipH - stroke / 2)
+  readonly property real lipR: snap(lipH / 2)
 
-  readonly property real paperW: snap(Math.max(2.4, holeW * 0.32))
-  readonly property real paperH: snap(iconSize * 0.42)
+  readonly property real paperW: snap(iconSize * 0.62)
+  readonly property real paperH: snap(iconSize * 0.58)
   readonly property real paperX: snap((iconSize - paperW) / 2)
-  readonly property real paperR: snap(Math.max(0.8, paperW * 0.18))
-  readonly property real paperY: snap(holeY + holeH * 0.70 - paperH)
+  readonly property real paperY: snap(stroke / 2)
+  readonly property real fold: snap(Math.max(2.4, paperW * 0.34))
+  // Overlap the lip so the note is in the slot, not perched on a stand.
+  readonly property real air: snap(-lipH * 0.40)
 
   property real paperAmount: hasMail ? 1 : 0
   Behavior on paperAmount {
@@ -87,34 +84,48 @@ Item {
       ctx.reset()
       ctx.clearRect(0, 0, width, height)
       ctx.fillStyle = root.color
+      ctx.strokeStyle = root.color
+      ctx.lineWidth = root.stroke
+      ctx.lineJoin = "round"
+      ctx.lineCap = "round"
 
-      // Plate first, then punch the slit so it is real empty space.
       ctx.beginPath()
-      roundRect(ctx, root.plateX, root.plateY, root.plateW, root.plateH, root.plateR)
+      roundRect(ctx, root.lipX, root.lipY, root.lipW, root.lipH, root.lipR)
       ctx.fill()
 
-      ctx.globalCompositeOperation = "destination-out"
-      ctx.beginPath()
-      roundRect(ctx, root.holeX, root.holeY, root.holeW, root.holeH, root.holeR)
-      ctx.fill()
-
-      // Letter behind the plate: visible in the slit and in the air above.
       if (root.paperAmount > 0.01) {
-        ctx.globalCompositeOperation = "destination-over"
-        ctx.globalAlpha = root.paperAmount
-        ctx.beginPath()
-        roundRect(ctx, root.paperX, root.paperY, root.paperW, root.paperH, root.paperR)
-        ctx.fill()
-        ctx.globalAlpha = 1
+        var h = Math.min(root.paperH, root.lipY - root.air - root.paperY)
+        if (h < root.stroke * 3)
+          h = root.lipY + root.lipH * 0.4 - root.paperY
+        var w = root.paperW
+        var x = root.paperX
+        var y = root.paperY
+        var f = Math.min(root.fold, w * 0.45, h * 0.45)
+        if (h > root.stroke * 3 && w > root.stroke * 3) {
+          ctx.globalAlpha = root.paperAmount
+          ctx.beginPath()
+          ctx.moveTo(x, y + f * 0.15)
+          ctx.lineTo(x, y + h)
+          ctx.lineTo(x + w, y + h)
+          ctx.lineTo(x + w, y + f)
+          ctx.lineTo(x + w - f, y)
+          ctx.lineTo(x + f * 0.15, y)
+          ctx.closePath()
+          ctx.stroke()
+          ctx.beginPath()
+          ctx.moveTo(x + w - f, y)
+          ctx.lineTo(x + w - f, y + f)
+          ctx.lineTo(x + w, y + f)
+          ctx.stroke()
+          ctx.globalAlpha = 1
+        }
       }
-
-      ctx.globalCompositeOperation = "source-over"
     }
   }
 
   onColorChanged: canvas.requestPaint()
   onPaperAmountChanged: canvas.requestPaint()
-  onPlateWChanged: canvas.requestPaint()
+  onLipWChanged: canvas.requestPaint()
   onDprChanged: canvas.requestPaint()
   Component.onCompleted: canvas.requestPaint()
 }
