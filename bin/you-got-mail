@@ -4,11 +4,12 @@
 # The panel calls:
 #   you-got-mail list [--page OFFSET] [--limit N]
 #   you-got-mail read <id>
+#   you-got-mail read-all
 #
 # Accounts are added in a terminal:
 #   you-got-mail accounts add
 #
-# Output of list/read is always one JSON object. Failures print
+# Output of list/read/read-all is always one JSON object. Failures print
 # {"ok":false,...} and exit 0 so the widget never crashes on empty stdout.
 
 set -uo pipefail

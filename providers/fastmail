@@ -5,21 +5,24 @@ from __future__ import annotations
 
 import json
 import sys
+import time
 import urllib.error
 import urllib.request
 from email.utils import parseaddr
 
 import _bootstrap
-from common import die, emit, one_line
+from common import ResponseTooLargeError, die, emit, one_line, read_http_body
 
 SESSION_URL = "https://api.fastmail.com/jmap/session"
 USING = [
     "urn:ietf:params:jmap:core",
     "urn:ietf:params:jmap:mail",
 ]
+READ_ALL_BUDGET = 100
+QUERY_PAGE = 200
 
 
-def _request(url: str, token: str, payload: dict | None = None) -> dict:
+def _try_request(url: str, token: str, payload: dict | None = None) -> tuple[dict | None, str]:
     data = None if payload is None else json.dumps(payload).encode()
     req = urllib.request.Request(url, data=data, method="GET" if data is None else "POST")
     req.add_header("Authorization", f"Bearer {token}")
@@ -27,13 +30,23 @@ def _request(url: str, token: str, payload: dict | None = None) -> dict:
         req.add_header("Content-Type", "application/json")
     try:
         with urllib.request.urlopen(req, timeout=30) as resp:
-            return json.loads(resp.read().decode())
+            raw = read_http_body(resp).decode()
+            return json.loads(raw), ""
     except urllib.error.HTTPError as exc:
-        die(f"Fastmail HTTP {exc.code}")
+        return None, f"Fastmail HTTP {exc.code}"
     except urllib.error.URLError:
-                die("could not reach Fastmail")
-    except json.JSONDecodeError:
-        die("Fastmail returned invalid JSON")
+        return None, "could not reach Fastmail"
+    except ResponseTooLargeError:
+        return None, "response too large"
+    except (json.JSONDecodeError, UnicodeDecodeError):
+        return None, "Fastmail returned invalid JSON"
+
+
+def _request(url: str, token: str, payload: dict | None = None) -> dict:
+    data, err = _try_request(url, token, payload)
+    if err:
+        die(err)
+    return data or {}
 
 
 def _session(token: str) -> dict:
@@ -48,12 +61,45 @@ def _jmap(session: dict, token: str, calls: list) -> list:
     return body.get("methodResponses") or []
 
 
+def _try_jmap(session: dict, token: str, calls: list) -> tuple[list | None, str]:
+    api = session.get("apiUrl")
+    if not api:
+        return None, "Fastmail session had no apiUrl"
+    body, err = _try_request(api, token, {"using": USING, "methodCalls": calls})
+    if err:
+        return None, err
+    return (body or {}).get("methodResponses") or [], ""
+
+
 def _account_id(session: dict) -> str:
     primary = session.get("primaryAccounts") or {}
     acc = primary.get("urn:ietf:params:jmap:mail")
     if not acc:
         die("no Fastmail mail account on this token")
     return acc
+
+
+def _max_objects_in_set(session: dict) -> int:
+    caps = session.get("capabilities") or {}
+    core = caps.get("urn:ietf:params:jmap:core") or {}
+    try:
+        n = int(core.get("maxObjectsInSet") or 500)
+    except (TypeError, ValueError):
+        n = 500
+    return max(1, min(n, 500))
+
+
+def _unread_filter(skip: list[str]) -> dict:
+    filt: dict = {"notKeyword": "$seen"}
+    if skip:
+        filt["inMailboxOtherThan"] = skip
+    return filt
+
+
+def _chunked(items: list[str], size: int) -> list[list[str]]:
+    if size < 1:
+        size = 1
+    return [items[i : i + size] for i in range(0, len(items), size)]
 
 
 def _skip_mailboxes(session: dict, token: str, account_id: str) -> list[str]:
@@ -208,6 +254,118 @@ def cmd_read(token: str, email_id: str) -> None:
     emit({"ok": True})
 
 
+def _collect_unread_ids(session: dict, token: str, account_id: str, skip: list[str], deadline: float) -> list[str]:
+    collected: list[str] = []
+    seen: set[str] = set()
+    position = 0
+    filt = _unread_filter(skip)
+    for _ in range(500):
+        if time.monotonic() > deadline:
+            die("timed out collecting unread mail")
+        responses, err = _try_jmap(
+            session,
+            token,
+            [
+                [
+                    "Email/query",
+                    {
+                        "accountId": account_id,
+                        "filter": filt,
+                        "sort": [{"property": "receivedAt", "isAscending": False}],
+                        "limit": QUERY_PAGE,
+                        "position": position,
+                    },
+                    "q",
+                ]
+            ],
+        )
+        if err or responses is None:
+            die(err or "could not list unread mail")
+        ids: list[str] = []
+        total = None
+        for name, payload, tag in responses:
+            if name == "error":
+                die(str(payload.get("description") or "could not list unread mail"))
+            if tag == "q" and name == "Email/query":
+                ids = [str(x) for x in (payload.get("ids") or []) if x]
+                try:
+                    total = int(payload.get("total")) if payload.get("total") is not None else None
+                except (TypeError, ValueError):
+                    total = None
+        if not ids:
+            break
+        fresh = 0
+        for email_id in ids:
+            if email_id in seen:
+                continue
+            seen.add(email_id)
+            collected.append(email_id)
+            fresh += 1
+        if fresh == 0:
+            break
+        position += len(ids)
+        if total is not None and position >= total:
+            break
+        if len(ids) < QUERY_PAGE:
+            break
+    return collected
+
+
+def _set_seen_chunk(session: dict, token: str, account_id: str, chunk: list[str]) -> tuple[int, str]:
+    update = {email_id: {"keywords/$seen": True} for email_id in chunk}
+    responses, err = _try_jmap(
+        session,
+        token,
+        [["Email/set", {"accountId": account_id, "update": update}, "s"]],
+    )
+    if err or responses is None:
+        return 0, err or "could not mark as read"
+    found = False
+    marked = 0
+    for name, payload, tag in responses:
+        if name == "error":
+            return 0, str(payload.get("description") or "could not mark as read")
+        if tag != "s" or name != "Email/set":
+            continue
+        found = True
+        not_updated = payload.get("notUpdated") or {}
+        updated = payload.get("updated") or {}
+        failed = False
+        for email_id in chunk:
+            if email_id in not_updated:
+                failed = True
+                continue
+            if email_id not in updated:
+                failed = True
+                continue
+            marked += 1
+        if failed:
+            return marked, "could not mark as read"
+    if not found:
+        return 0, "could not mark as read"
+    return marked, ""
+
+
+def cmd_read_all(token: str) -> None:
+    session = _session(token)
+    account_id = _account_id(session)
+    skip = _skip_mailboxes(session, token, account_id)
+    deadline = time.monotonic() + READ_ALL_BUDGET
+    ids = _collect_unread_ids(session, token, account_id, skip, deadline)
+    marked = 0
+    size = _max_objects_in_set(session)
+    for chunk in _chunked(ids, size):
+        if time.monotonic() > deadline:
+            emit({"ok": False, "marked": marked, "error": "timed out marking mail as read"})
+            return
+        n, err = _set_seen_chunk(session, token, account_id, chunk)
+        marked += n
+        if err:
+            emit({"ok": False, "marked": marked, "error": err})
+            return
+    emit({"ok": True, "marked": marked})
+
+
 def main() -> None:
     acc = _bootstrap.account()
     sec = _bootstrap.secret()
@@ -223,6 +381,9 @@ def main() -> None:
         if not rest:
             die("usage: fastmail read <id>")
         cmd_read(token, rest[0])
+        return
+    if cmd == "read-all":
+        cmd_read_all(token)
         return
     die("unknown command")
 

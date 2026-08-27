@@ -6,6 +6,7 @@
 #
 #   gmail list [--page TOKEN]
 #   gmail read <id>
+#   gmail read-all
 #
 # gws owns the OAuth token. This script never sees a credential.
 
@@ -325,8 +326,58 @@ cmd_read() {
   printf '{"ok":true}\n'
 }
 
+fail_read_all() {
+  printf '{"ok":false,"marked":%s,"error":%s}\n' "$1" "$(printf '%s' "$2" | jq -Rs .)"
+  exit 0
+}
+
+cmd_read_all() {
+  local token="" page ids next all='[]' seen='|' marked=0 chunk n total i
+
+  while :; do
+    [ "${SECONDS:-0}" -gt 90 ] && fail_read_all 0 "timed out collecting unread mail"
+    page="$(gws_gmail users messages list --params "$(
+      jq -nc --arg q "$QUERY" --argjson n 500 --arg t "$token" \
+        '{userId:"me",q:$q,maxResults:$n} + (if $t == "" then {} else {pageToken:$t} end)')")"
+    if printf '%s' "$page" | jq -e '.error' >/dev/null 2>&1; then
+      die "$(printf '%s' "$page" | jq -r '.error.message // "could not read unread mail"')"
+    fi
+    ids="$(printf '%s' "$page" | jq -c '[.messages[]?.id | select(test("^[0-9a-f]{1,32}$"))]' 2>/dev/null)"
+    [ -n "$ids" ] || ids='[]'
+    all="$(jq -nc --argjson a "$all" --argjson b "$ids" \
+      'reduce $b[] as $id ($a; if index($id) then . else . + [$id] end)')"
+    next="$(printf '%s' "$page" | jq -r '.nextPageToken // empty' 2>/dev/null)"
+    case "$next" in *[!A-Za-z0-9_-]*) next="" ;; esac
+    [ -z "$next" ] && break
+    case "$seen" in
+      *"|$next|"*) die "gmail repeated a page token" ;;
+    esac
+    seen="${seen}${next}|"
+    token="$next"
+  done
+
+  total="$(printf '%s' "$all" | jq 'length')"
+  i=0
+  while [ "$i" -lt "$total" ]; do
+    [ "${SECONDS:-0}" -gt 100 ] && fail_read_all "$marked" "timed out marking mail as read"
+    chunk="$(printf '%s' "$all" | jq -c --argjson i "$i" '.[$i:$i+1000]')"
+    n="$(printf '%s' "$chunk" | jq 'length')"
+    if ! gws_gmail users messages batchModify \
+      --params '{"userId":"me"}' \
+      --json "$(jq -nc --argjson ids "$chunk" '{ids:$ids,removeLabelIds:["UNREAD"]}')" \
+      >/dev/null
+    then
+      fail_read_all "$marked" "could not mark as read"
+    fi
+    marked=$((marked + n))
+    i=$((i + 1000))
+  done
+  printf '{"ok":true,"marked":%s}\n' "$marked"
+}
+
 case "${1:-list}" in
   list) shift; cmd_list "$@" ;;
   read) cmd_read "${2:-}" ;;
+  read-all) cmd_read_all ;;
   *)    die "unknown command" ;;
 esac

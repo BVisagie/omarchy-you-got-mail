@@ -10,6 +10,7 @@ Supported names today: `gmail`, `outlook`, `fastmail`, `imap`, `hey`.
 ```text
 <provider> list [--limit N]
 <provider> read <local-id>
+<provider> read-all
 ```
 
 Always print **one JSON object** to stdout and exit 0, even on failure:
@@ -102,6 +103,27 @@ every inbox whose `unread` is greater than zero.
 Mark that message read on the server so the next poll does not bring it
 back (`gws` modify, Graph `isRead`, `hey seen`, IMAP `\Seen`, Fastmail
 `$seen`).
+
+## `read-all` success
+
+```json
+{"ok":true,"marked":12}
+```
+
+Mark **every** unread message that `list` would count, not just the
+current page. Snapshot and deduplicate matching ids **before** changing
+any message so pagination cannot skip mail. Skip trash, junk, drafts, and
+spam the same way `list` does. HEY still only marks the Imbox.
+
+If some messages were marked and a later batch fails, return that count:
+
+```json
+{"ok":false,"marked":8,"error":"could not mark as read"}
+```
+
+Do not fall back to thousands of per-message calls when a bulk API is
+missing. The orchestrator times this command out after 120 seconds; stop
+with a partial `marked` count rather than hanging.
 
 ## Adding the name to the CLI
 

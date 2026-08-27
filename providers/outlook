@@ -14,21 +14,23 @@ from datetime import datetime
 from pathlib import Path
 
 import _bootstrap
-from common import die, emit, one_line, save_secret
+from common import ResponseTooLargeError, die, emit, one_line, read_http_body, save_secret, write_private
 from outlook_auth import refresh_access_token
 
 GRAPH = "https://graph.microsoft.com/v1.0"
 SKIP_WELL_KNOWN = ("junkemail", "deleteditems", "drafts")
 CACHE_TTL = 6 * 3600
+READ_ALL_BUDGET = 100
+BATCH_SIZE = 20
 
 
-def _http(
+def _try_http(
     method: str,
     url: str,
     token: str,
     payload: dict | None = None,
     extra_headers: dict[str, str] | None = None,
-) -> dict:
+) -> tuple[dict | None, str]:
     data = None if payload is None else json.dumps(payload).encode()
     req = urllib.request.Request(url, data=data, method=method)
     req.add_header("Authorization", f"Bearer {token}")
@@ -38,14 +40,29 @@ def _http(
         req.add_header(key, value)
     try:
         with urllib.request.urlopen(req, timeout=30) as resp:
-            raw = resp.read().decode()
-            return json.loads(raw) if raw else {}
+            raw = read_http_body(resp).decode()
+            return (json.loads(raw) if raw else {}), ""
     except urllib.error.HTTPError as exc:
-        die(f"Outlook HTTP {exc.code}")
+        return None, f"Outlook HTTP {exc.code}"
     except urllib.error.URLError:
-        die("could not reach Microsoft Graph")
-    except json.JSONDecodeError:
-        die("Outlook returned invalid JSON")
+        return None, "could not reach Microsoft Graph"
+    except ResponseTooLargeError:
+        return None, "response too large"
+    except (json.JSONDecodeError, UnicodeDecodeError):
+        return None, "Outlook returned invalid JSON"
+
+
+def _http(
+    method: str,
+    url: str,
+    token: str,
+    payload: dict | None = None,
+    extra_headers: dict[str, str] | None = None,
+) -> dict:
+    data, err = _try_http(method, url, token, payload, extra_headers)
+    if err:
+        die(err)
+    return data or {}
 
 
 def _cache_dir(account_id: str) -> Path:
@@ -66,12 +83,7 @@ def _read_cache(account_id: str) -> dict:
 
 
 def _write_cache(account_id: str, data: dict) -> None:
-    path = _cache_dir(account_id) / "outlook.json"
-    tmp = path.with_name(path.name + ".tmp")
-    tmp.write_text(json.dumps(data), encoding="utf-8")
-    os.chmod(tmp, 0o600)
-    tmp.replace(path)
-    os.chmod(path, 0o600)
+    write_private(_cache_dir(account_id) / "outlook.json", json.dumps(data))
 
 
 def _access(sec: dict, account_id: str) -> str:
@@ -229,6 +241,117 @@ def cmd_read(acc: dict, sec: dict, item_id: str) -> None:
     emit({"ok": True})
 
 
+def _chunked(items: list[str], size: int) -> list[list[str]]:
+    if size < 1:
+        size = 1
+    return [items[i : i + size] for i in range(0, len(items), size)]
+
+
+def _unread_folder_ids(token: str, skip: set[str]) -> list[str]:
+    ids: list[str] = []
+
+    def walk(url: str) -> None:
+        while url:
+            data = _http("GET", url, token)
+            for folder in data.get("value") or []:
+                fid = str(folder.get("id") or "")
+                if not fid or fid in skip:
+                    continue
+                ids.append(fid)
+                child = (
+                    f"{GRAPH}/me/mailFolders/{urllib.parse.quote(fid)}"
+                    "/childFolders?$select=id,unreadItemCount&$top=100"
+                )
+                walk(child)
+            url = str(data.get("@odata.nextLink") or "")
+
+    walk(f"{GRAPH}/me/mailFolders?$select=id,unreadItemCount&$top=100")
+    return ids
+
+
+def _unread_message_ids(token: str, folder_id: str) -> list[str]:
+    ids: list[str] = []
+    seen: set[str] = set()
+    params = {
+        "$filter": "isRead eq false",
+        "$select": "id",
+        "$top": "100",
+    }
+    url = (
+        f"{GRAPH}/me/mailFolders/{urllib.parse.quote(folder_id, safe='')}/messages?"
+        + urllib.parse.urlencode(params)
+    )
+    while url:
+        data = _http("GET", url, token)
+        for item in data.get("value") or []:
+            mid = str(item.get("id") or "")
+            if not mid or mid in seen:
+                continue
+            seen.add(mid)
+            ids.append(mid)
+        url = str(data.get("@odata.nextLink") or "")
+    return ids
+
+
+def _batch_mark_read(token: str, ids: list[str], deadline: float) -> tuple[int, str]:
+    marked = 0
+    for chunk in _chunked(ids, BATCH_SIZE):
+        if time.monotonic() > deadline:
+            return marked, "timed out marking mail as read"
+        requests = []
+        for n, mid in enumerate(chunk):
+            requests.append(
+                {
+                    "id": str(n),
+                    "method": "PATCH",
+                    "url": "/me/messages/" + urllib.parse.quote(mid, safe=""),
+                    "headers": {"Content-Type": "application/json"},
+                    "body": {"isRead": True},
+                }
+            )
+        data, err = _try_http("POST", f"{GRAPH}/$batch", token, {"requests": requests})
+        if err or not data:
+            return marked, err or "could not mark as read"
+        by_id = {str(r.get("id")): r for r in (data.get("responses") or []) if isinstance(r, dict)}
+        failed = False
+        for n, _mid in enumerate(chunk):
+            resp = by_id.get(str(n)) or {}
+            try:
+                status = int(resp.get("status") or 0)
+            except (TypeError, ValueError):
+                status = 0
+            if 200 <= status < 300:
+                marked += 1
+            else:
+                failed = True
+        if failed:
+            return marked, "could not mark as read"
+    return marked, ""
+
+
+def cmd_read_all(acc: dict, sec: dict) -> None:
+    token = _access(sec, str(acc.get("id") or "outlook"))
+    cache = _read_cache(str(acc.get("id") or "outlook"))
+    skip, _cache = _skip_folders(token, str(acc.get("id") or "outlook"), cache)
+    deadline = time.monotonic() + READ_ALL_BUDGET
+    collected: list[str] = []
+    seen: set[str] = set()
+    for folder_id in _unread_folder_ids(token, skip):
+        if time.monotonic() > deadline:
+            emit({"ok": False, "marked": 0, "error": "timed out collecting unread mail"})
+            return
+        for mid in _unread_message_ids(token, folder_id):
+            if mid in seen:
+                continue
+            seen.add(mid)
+            collected.append(mid)
+    marked, err = _batch_mark_read(token, collected, deadline)
+    if err:
+        emit({"ok": False, "marked": marked, "error": err})
+        return
+    emit({"ok": True, "marked": marked})
+
+
 def main() -> None:
     acc = _bootstrap.account()
     sec = _bootstrap.secret()
@@ -241,6 +364,9 @@ def main() -> None:
         if not rest:
             die("usage: outlook read <id>")
         cmd_read(acc, sec, rest[0])
+        return
+    if cmd == "read-all":
+        cmd_read_all(acc, sec)
         return
     die("unknown command")
 

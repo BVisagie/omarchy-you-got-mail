@@ -87,6 +87,225 @@ class HeyUnreadTests(unittest.TestCase):
         self.assertEqual(len(out["messages"]), 3)
 
 
+class FastmailReadAllTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls) -> None:
+        cls.fm = load_provider("fastmail")
+
+    def test_queries_complete_before_sets_and_honours_chunk_size(self) -> None:
+        names: list[str] = []
+
+        def fake_jmap(session, token, calls):
+            name = calls[0][0]
+            names.append(name)
+            if name == "Mailbox/get":
+                return [["Mailbox/get", {"list": [{"id": "trash", "role": "trash"}]}, "mb"]]
+            if name == "Email/query":
+                pos = int(calls[0][1].get("position") or 0)
+                if pos == 0:
+                    return [["Email/query", {"ids": ["a", "b"], "total": 3}, "q"]]
+                return [["Email/query", {"ids": ["c"], "total": 3}, "q"]]
+            if name == "Email/set":
+                update = calls[0][1]["update"]
+                return [["Email/set", {"updated": {key: {} for key in update}}, "s"]]
+            return []
+
+        session = {
+            "primaryAccounts": {"urn:ietf:params:jmap:mail": "acc"},
+            "apiUrl": "https://api.fastmail.com/jmap/api",
+            "capabilities": {"urn:ietf:params:jmap:core": {"maxObjectsInSet": 2}},
+        }
+        with patch.object(self.fm, "_session", return_value=session), patch.object(
+            self.fm, "QUERY_PAGE", 2
+        ), patch.object(self.fm, "_jmap", side_effect=fake_jmap), patch.object(
+            self.fm, "_try_jmap", side_effect=lambda s, t, c: (fake_jmap(s, t, c), "")
+        ):
+            payload = capture_json(self.fm.cmd_read_all, "token")
+        self.assertEqual(payload, {"ok": True, "marked": 3})
+        self.assertLess(names.index("Email/query"), names.index("Email/set"))
+        self.assertEqual(names.count("Email/query"), 2)
+        self.assertEqual(names.count("Email/set"), 2)
+
+    def test_not_updated_is_partial_failure(self) -> None:
+        def fake_jmap(session, token, calls):
+            name = calls[0][0]
+            if name == "Mailbox/get":
+                return [["Mailbox/get", {"list": []}, "mb"]]
+            if name == "Email/query":
+                return [["Email/query", {"ids": ["a", "b"], "total": 2}, "q"]]
+            return [["Email/set", {"updated": {"a": {}}, "notUpdated": {"b": {"type": "notFound"}}}, "s"]]
+
+        session = {"primaryAccounts": {"urn:ietf:params:jmap:mail": "acc"}, "apiUrl": "https://x"}
+        with patch.object(self.fm, "_session", return_value=session), patch.object(
+            self.fm, "_jmap", side_effect=fake_jmap
+        ), patch.object(self.fm, "_try_jmap", side_effect=lambda s, t, c: (fake_jmap(s, t, c), "")):
+            payload = capture_json(self.fm.cmd_read_all, "token")
+        self.assertFalse(payload["ok"])
+        self.assertEqual(payload["marked"], 1)
+
+
+class OutlookReadAllTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls) -> None:
+        cls.out = load_provider("outlook")
+
+    def test_folder_ids_skip_junk(self) -> None:
+        inbox = "inbox-id"
+        junk = "junk-id"
+
+        def fake_http(method, url, token, payload=None, extra_headers=None):
+            if "childFolders" in url:
+                return {"value": []}
+            return {"value": [{"id": inbox}, {"id": junk}]}
+
+        with patch.object(self.out, "_http", side_effect=fake_http):
+            ids = self.out._unread_folder_ids("tok", {junk})
+        self.assertEqual(ids, [inbox])
+
+    def test_batch_partial_failure_counts_successes(self) -> None:
+        def fake_try_http(method, url, token, payload=None, extra_headers=None):
+            self.assertEqual(url, self.out.GRAPH + "/$batch")
+            self.assertEqual(len(payload["requests"]), 2)
+            return {
+                "responses": [
+                    {"id": "0", "status": 200},
+                    {"id": "1", "status": 500},
+                ]
+            }, ""
+
+        with patch.object(self.out, "_try_http", side_effect=fake_try_http), patch.object(
+            self.out, "BATCH_SIZE", 20
+        ):
+            marked, err = self.out._batch_mark_read("tok", ["m1", "m2"], deadline=1e18)
+        self.assertEqual(marked, 1)
+        self.assertEqual(err, "could not mark as read")
+
+    def test_chunked_respects_batch_size(self) -> None:
+        chunks = self.out._chunked([f"m{i}" for i in range(25)], 20)
+        self.assertEqual(len(chunks), 2)
+        self.assertEqual(len(chunks[0]), 20)
+        self.assertEqual(len(chunks[1]), 5)
+
+
+class ImapReadAllTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls) -> None:
+        cls.imap = load_provider("imap")
+
+    def test_snapshots_unseen_then_stores_in_chunks(self) -> None:
+        stored = []
+        searches = []
+
+        class FakeClient:
+            def list(self):
+                return "OK", [b'(\\HasNoChildren) "/" "INBOX"']
+
+            def select(self, folder, readonly=False):
+                return "OK", []
+
+            def uid(self, cmd, *args):
+                if cmd == "search":
+                    searches.append(args)
+                    return "OK", [b"1 2 3"]
+                if cmd == "store":
+                    stored.append(args)
+                    return "OK", []
+                raise AssertionError(cmd)
+
+            def logout(self):
+                return "OK", []
+
+        fake = FakeClient()
+        with patch.object(self.imap, "_connect", return_value=fake), patch.object(
+            self.imap, "UID_CHUNK", 2
+        ):
+            payload = capture_json(
+                self.imap.cmd_read_all, {"host": "h", "user": "u"}, "pw"
+            )
+        self.assertEqual(payload, {"ok": True, "marked": 3})
+        self.assertEqual(searches, [(None, "UNSEEN")])
+        self.assertEqual([row[0] for row in stored], ["1,2", "3"])
+        self.assertTrue(all(row[1] == "+FLAGS" for row in stored))
+
+
+class HeyReadAllTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls) -> None:
+        cls.hey = load_provider("hey")
+
+    def test_collects_pages_before_seen_and_dedupes(self) -> None:
+        boxes = [
+            {
+                "ok": True,
+                "data": {
+                    "next_page": "2",
+                    "postings": [
+                        {"id": "1", "account_id": "acc", "seen": False},
+                        {"id": "2", "account_id": "acc", "seen": False},
+                    ],
+                },
+            },
+            {
+                "ok": True,
+                "data": {
+                    "postings": [
+                        {"id": "2", "account_id": "acc", "seen": False},
+                        {"id": "3", "account_id": "acc", "seen": False},
+                    ],
+                },
+            },
+        ]
+        seen_calls = []
+
+        def fake_hey(acc, args, timeout=40):
+            if args[0] == "box":
+                return boxes.pop(0)
+            seen_calls.append(args[1])
+            return {"ok": True}
+
+        with patch.object(self.hey, "_hey", side_effect=fake_hey), patch.object(
+            self.hey, "_try_hey", side_effect=lambda acc, args, timeout=40: (fake_hey(acc, args, timeout), "")
+        ):
+            payload = capture_json(self.hey.cmd_read_all, {"id": "hey"})
+        self.assertEqual(payload, {"ok": True, "marked": 3})
+        self.assertEqual(seen_calls, ["1", "2", "3"])
+
+    def test_repeated_page_token_fails_before_seen(self) -> None:
+        def fake_hey(acc, args, timeout=40):
+            self.assertEqual(args[0], "box")
+            return {"ok": True, "data": {"next_page": "same", "postings": [{"id": "1", "seen": False}]}}
+
+        with patch.object(self.hey, "_hey", side_effect=fake_hey):
+            payload = capture_json(self.hey.cmd_read_all, {"id": "hey"})
+        self.assertFalse(payload["ok"])
+        self.assertIn("repeated a page token", payload["error"])
+
+
+class GmailScriptTests(unittest.TestCase):
+    def test_counts_matching_ids_not_size_estimate(self) -> None:
+        from support import ROOT
+
+        script = (ROOT / "providers" / "gmail").read_text(encoding="utf-8")
+        self.assertIn("unread_total", script)
+        self.assertNotIn("unread_estimate", script)
+        self.assertNotIn("resultSizeEstimate", script)
+        # Display pages stay small; a 500-wide list is only the count path.
+        self.assertIn('--argjson n 500', script)
+        self.assertIn("mkdir -p --", script)
+        self.assertNotIn("mkdir -p -m", script)
+
+    def test_read_all_uses_same_query_and_batch_modify(self) -> None:
+        from support import ROOT
+
+        script = (ROOT / "providers" / "gmail").read_text(encoding="utf-8")
+        self.assertIn("cmd_read_all()", script)
+        self.assertIn("users messages batchModify", script)
+        self.assertIn('read-all) cmd_read_all', script)
+        self.assertIn("$QUERY", script)
+        self.assertIn("fail_read_all", script)
+        self.assertNotIn("users messages modify", script.split("cmd_read_all()")[1].split("case ")[0])
+
+
 class OutlookUnreadTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls) -> None:
@@ -113,19 +332,82 @@ class OutlookUnreadTests(unittest.TestCase):
     def test_one_line_preview(self) -> None:
         self.assertEqual(self.out.one_line("Hi\r\nthere"), "Hi there")
 
-
-class GmailScriptTests(unittest.TestCase):
-    def test_counts_matching_ids_not_size_estimate(self) -> None:
+    def test_cache_uses_write_private(self) -> None:
         from support import ROOT
 
-        script = (ROOT / "providers" / "gmail").read_text(encoding="utf-8")
-        self.assertIn("unread_total", script)
-        self.assertNotIn("unread_estimate", script)
-        self.assertNotIn("resultSizeEstimate", script)
-        # Display pages stay small; a 500-wide list is only the count path.
-        self.assertIn('--argjson n 500', script)
-        self.assertIn("mkdir -p --", script)
-        self.assertNotIn("mkdir -p -m", script)
+        source = (ROOT / "providers" / "outlook").read_text(encoding="utf-8")
+        self.assertIn("write_private(_cache_dir(account_id)", source)
+        self.assertNotIn('path.name + ".tmp"', source)
+        self.assertNotIn("tmp.write_text", source)
+
+
+class BoundedHttpTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls) -> None:
+        cls.out = load_provider("outlook")
+        cls.fm = load_provider("fastmail")
+
+    def _resp(self, data: bytes, content_length: str | None = None):
+        import io
+
+        class Resp:
+            def __init__(self) -> None:
+                self._buf = io.BytesIO(data)
+                self.headers = {}
+                if content_length is not None:
+                    self.headers["Content-Length"] = content_length
+
+            def read(self, n: int = -1) -> bytes:
+                return self._buf.read(n)
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *args) -> bool:
+                return False
+
+        return Resp()
+
+    def test_outlook_rejects_oversized_body(self) -> None:
+        huge = b"{" + b"x" * (self.out.read_http_body.__defaults__[0] + 1)
+        with patch.object(self.out.urllib.request, "urlopen", return_value=self._resp(huge)):
+            data, err = self.out._try_http("GET", "https://graph.microsoft.com/v1.0/me", "tok")
+        self.assertIsNone(data)
+        self.assertEqual(err, "response too large")
+
+    def test_fastmail_rejects_oversized_body(self) -> None:
+        huge = b"{" + b"x" * (self.fm.read_http_body.__defaults__[0] + 1)
+        with patch.object(self.fm.urllib.request, "urlopen", return_value=self._resp(huge)):
+            data, err = self.fm._try_request("https://api.fastmail.com/jmap/session", "tok")
+        self.assertIsNone(data)
+        self.assertEqual(err, "response too large")
+
+    def test_outlook_auth_rejects_oversized_body(self) -> None:
+        import outlook_auth
+
+        huge = b"{" + b"x" * (outlook_auth.read_http_body.__defaults__[0] + 1)
+        with patch.object(outlook_auth.urllib.request, "urlopen", return_value=self._resp(huge)):
+            with self.assertRaises(RuntimeError) as caught:
+                outlook_auth._post("https://login.microsoftonline.com/common/oauth2/v2.0/token", {})
+        self.assertIn("too large", str(caught.exception))
+
+    def test_outlook_auth_rejects_oversized_error_body(self) -> None:
+        import io
+        import outlook_auth
+        import urllib.error
+
+        fp = io.BytesIO(b"x" * (outlook_auth.MAX_HTTP_ERROR + 1))
+        err = urllib.error.HTTPError(
+            "https://login.microsoftonline.com/common/oauth2/v2.0/token",
+            400,
+            "bad",
+            hdrs=None,
+            fp=fp,
+        )
+        with patch.object(outlook_auth.urllib.request, "urlopen", side_effect=err):
+            with self.assertRaises(RuntimeError) as caught:
+                outlook_auth._post("https://login.microsoftonline.com/common/oauth2/v2.0/token", {})
+        self.assertIn("too large", str(caught.exception))
 
 
 if __name__ == "__main__":

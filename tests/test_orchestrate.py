@@ -124,5 +124,69 @@ class PaginationTests(unittest.TestCase):
         self.assertEqual(len(payload["messages"]), 2)
 
 
+class ReadAllTests(unittest.TestCase):
+    def test_full_success_sums_marked(self) -> None:
+        accounts = [_account("a", "gmail", "Gmail"), _account("b", "hey", "HEY")]
+        seen = []
+
+        def run(acc: dict, args: list[str], timeout: int = 45) -> dict:
+            seen.append((acc["id"], args, timeout))
+            return {"ok": True, "marked": 3 if acc["id"] == "a" else 2}
+
+        with patch.object(orchestrate, "load_accounts", return_value=accounts), patch.object(
+            orchestrate, "_run_provider", side_effect=run
+        ):
+            payload = capture_json(orchestrate.cmd_read_all)
+        self.assertEqual(payload, {"ok": True, "marked": 5})
+        self.assertEqual({row[0] for row in seen}, {"a", "b"})
+        self.assertTrue(all(row[1] == ["read-all"] for row in seen))
+        self.assertTrue(all(row[2] == orchestrate.READ_ALL_TIMEOUT for row in seen))
+
+    def test_partial_account_failure_keeps_warning_and_marks(self) -> None:
+        accounts = [_account("a", "gmail", "Gmail"), _account("b", "hey", "HEY")]
+
+        def run(acc: dict, args: list[str], timeout: int = 45) -> dict:
+            if acc["id"] == "b":
+                return {"ok": False, "marked": 1, "error": "b failed"}
+            return {"ok": True, "marked": 4}
+
+        with patch.object(orchestrate, "load_accounts", return_value=accounts), patch.object(
+            orchestrate, "_run_provider", side_effect=run
+        ):
+            payload = capture_json(orchestrate.cmd_read_all)
+        self.assertTrue(payload["ok"])
+        self.assertEqual(payload["marked"], 5)
+        self.assertEqual(payload["warning"], "b failed")
+
+    def test_all_accounts_fail_includes_partial_marks(self) -> None:
+        accounts = [_account("a", "gmail", "Gmail"), _account("b", "hey", "HEY")]
+
+        def run(acc: dict, args: list[str], timeout: int = 45) -> dict:
+            return {"ok": False, "marked": 2 if acc["id"] == "a" else 0, "error": acc["id"] + " failed"}
+
+        with patch.object(orchestrate, "load_accounts", return_value=accounts), patch.object(
+            orchestrate, "_run_provider", side_effect=run
+        ):
+            payload = capture_json(orchestrate.cmd_read_all)
+        self.assertFalse(payload["ok"])
+        self.assertEqual(payload["marked"], 2)
+        self.assertIn("all accounts failed", payload["error"])
+
+    def test_timeout_uses_read_all_budget(self) -> None:
+        accounts = [_account("a", "gmail", "Gmail")]
+
+        def run(acc: dict, args: list[str], timeout: int = 45) -> dict:
+            self.assertEqual(timeout, 120)
+            return {"ok": False, "error": "a: timed out"}
+
+        with patch.object(orchestrate, "load_accounts", return_value=accounts), patch.object(
+            orchestrate, "_run_provider", side_effect=run
+        ):
+            payload = capture_json(orchestrate.cmd_read_all)
+        self.assertFalse(payload["ok"])
+        self.assertEqual(payload["marked"], 0)
+        self.assertEqual(payload["error"], "a: timed out")
+
+
 if __name__ == "__main__":
     unittest.main()

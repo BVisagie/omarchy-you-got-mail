@@ -39,6 +39,79 @@ class CommonHelpersTests(unittest.TestCase):
         self.assertEqual(common.decode_id(opaque), ("work", "INBOX/12"))
 
 
+class HttpBodyTests(unittest.TestCase):
+    def _body(self, data: bytes, content_length: object | None = ""):
+        class Body:
+            def __init__(self) -> None:
+                self._buf = __import__("io").BytesIO(data)
+                self.headers = {}
+                if content_length != "":
+                    self.headers["Content-Length"] = content_length
+
+            def read(self, n: int = -1) -> bytes:
+                return self._buf.read(n)
+
+        return Body()
+
+    def test_accepts_body_at_limit(self) -> None:
+        limit = 16
+        raw = common.read_http_body(self._body(b"a" * limit), limit)
+        self.assertEqual(raw, b"a" * limit)
+
+    def test_rejects_one_byte_over_limit(self) -> None:
+        limit = 16
+        with self.assertRaises(common.ResponseTooLargeError):
+            common.read_http_body(self._body(b"a" * (limit + 1)), limit)
+
+    def test_rejects_oversized_declared_length(self) -> None:
+        limit = 16
+        with self.assertRaises(common.ResponseTooLargeError):
+            common.read_http_body(self._body(b"ok", content_length=str(limit + 1)), limit)
+
+    def test_rejects_lying_undersized_length(self) -> None:
+        limit = 16
+        with self.assertRaises(common.ResponseTooLargeError):
+            common.read_http_body(
+                self._body(b"a" * (limit + 1), content_length="4"),
+                limit,
+            )
+
+    def test_malformed_or_negative_length_still_caps_stream(self) -> None:
+        limit = 8
+        raw = common.read_http_body(self._body(b"abcd", content_length="nope"), limit)
+        self.assertEqual(raw, b"abcd")
+        with self.assertRaises(common.ResponseTooLargeError):
+            common.read_http_body(self._body(b"a" * (limit + 1), content_length="-1"), limit)
+
+
+class PrivateWriteTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.tmp = _workdir()
+        self.addCleanup(lambda: shutil.rmtree(self.tmp, ignore_errors=True))
+        os.chmod(self.tmp, 0o700)
+        self.path = self.tmp / "secret.json"
+
+    def test_write_private_mode_600(self) -> None:
+        common.write_private(self.path, '{"token":"abc"}\n')
+        self.assertTrue(self.path.is_file())
+        self.assertFalse(self.path.is_symlink())
+        self.assertEqual(self.path.stat().st_mode & 0o777, 0o600)
+        self.assertEqual(self.path.read_text(encoding="utf-8"), '{"token":"abc"}\n')
+
+    def test_planted_tmp_symlink_is_not_followed(self) -> None:
+        target = self.tmp / "other-file"
+        target.write_text("keep\n", encoding="utf-8")
+        os.chmod(target, 0o600)
+        planted = self.tmp / "secret.json.tmp"
+        planted.symlink_to(target)
+        common.write_private(self.path, '{"ok":true}\n')
+        self.assertTrue(self.path.is_file())
+        self.assertFalse(self.path.is_symlink())
+        self.assertEqual(self.path.read_text(encoding="utf-8"), '{"ok":true}\n')
+        self.assertEqual(target.read_text(encoding="utf-8"), "keep\n")
+        self.assertTrue(planted.is_symlink())
+
+
 class SecretLoaderTests(unittest.TestCase):
     def setUp(self) -> None:
         self.tmp = _workdir()
@@ -108,7 +181,7 @@ class AccountsFileTests(unittest.TestCase):
 class ManifestAndHelpTests(unittest.TestCase):
     def test_manifest_widget_settings(self) -> None:
         data = json.loads((ROOT / "manifest.json").read_text(encoding="utf-8"))
-        self.assertEqual(data["version"], "2.3.0")
+        self.assertEqual(data["version"], "2.4.0")
         keys = {item["key"] for item in data["barWidget"]["schema"]}
         self.assertEqual(keys, {"max", "refreshIntervalSec"})
         self.assertEqual(data["barWidget"]["defaults"]["max"], 25)
@@ -128,6 +201,7 @@ class ManifestAndHelpTests(unittest.TestCase):
             finally:
                 __import__("sys").argv = old
         self.assertIn("--limit", buf.getvalue())
+        self.assertIn("read-all", buf.getvalue())
 
 
 if __name__ == "__main__":

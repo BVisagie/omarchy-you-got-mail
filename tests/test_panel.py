@@ -57,17 +57,36 @@ class PanelContractTests(unittest.TestCase):
             "color: button.active && button.useActiveColor ? button.activeColor : button.foreground",
             self.qml,
         )
-        self.assertIn(
+        self.assertIn("flagColor: button.foreground", self.qml)
+        self.assertIn("hasMail: root.hasUnread && root.reachable", self.qml)
+        self.assertIn("color: Qt.rgba(button.foreground.r, button.foreground.g,", self.qml)
+        self.assertIn("color: button.foreground", self.qml)
+        self.assertNotIn("color: button.activeColor", self.qml)
+        self.assertNotIn("color: Color.background", self.qml)
+        self.assertNotIn(
             "flagColor: (root.hasUnread && root.reachable) ? button.activeColor : button.foreground",
             self.qml,
         )
-        self.assertIn("hasMail: root.hasUnread && root.reachable", self.qml)
-        self.assertIn("color: button.activeColor", self.qml)
         self.assertNotIn("color: root.opened ? root.accent : root.foreground", self.qml)
         self.assertNotIn(
             "flagColor: (root.hasUnread && root.reachable) ? root.accent : root.foreground",
             self.qml,
         )
+
+    def test_mark_all_confirm_and_busy(self) -> None:
+        self.assertIn("Mark all unread as read (a)", self.qml)
+        self.assertIn("Click again to confirm", self.qml)
+        self.assertIn("Marking unread mail as read…", self.qml)
+        self.assertIn('t === "a"', self.qml)
+        self.assertIn("property bool markAllArmed", self.qml)
+        self.assertIn("property bool markAllBusy", self.qml)
+        self.assertIn("property string actionWarning", self.qml)
+        self.assertIn('readAllProc.command = [root.script, "read-all"]', self.qml)
+        self.assertIn("applyReadAllPayload", self.qml)
+        self.assertIn("root.actionWarning", self.qml)
+        self.assertIn("opacity: root.markAllBusy ? 0.4 : 1", self.qml)
+        self.assertNotIn("unread = 0", self.qml)
+        self.assertNotIn("messages = []", self.qml)
 
     def test_mailbox_is_stroked_and_contained(self) -> None:
         icon = (ROOT / "MailSlotIcon.qml").read_text(encoding="utf-8")

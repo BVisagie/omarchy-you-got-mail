@@ -7,6 +7,7 @@ import os
 import re
 import stat
 import sys
+import tempfile
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -18,6 +19,42 @@ ACCOUNT_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,31}$")
 PROVIDERS = ("gmail", "outlook", "fastmail", "imap", "hey")
 PAGE_SIZE_MAX = 50
 FETCH_CAP = 200
+MAX_HTTP_BODY = 2 * 1024 * 1024
+MAX_HTTP_ERROR = 64 * 1024
+
+
+class ResponseTooLargeError(ValueError):
+    def __init__(self, message: str = "response too large") -> None:
+        super().__init__(message)
+
+
+def _declared_length(fp: object) -> int | None:
+    headers = getattr(fp, "headers", None)
+    if headers is None or not hasattr(headers, "get"):
+        return None
+    raw = headers.get("Content-Length")
+    if raw is None:
+        return None
+    try:
+        n = int(str(raw).strip())
+    except (TypeError, ValueError):
+        return None
+    if n < 0:
+        return None
+    return n
+
+
+def read_http_body(fp: object, limit: int = MAX_HTTP_BODY) -> bytes:
+    declared = _declared_length(fp)
+    if declared is not None and declared > limit:
+        raise ResponseTooLargeError()
+    read = getattr(fp, "read")
+    data = read(limit + 1)
+    if not isinstance(data, (bytes, bytearray)):
+        data = bytes(data)
+    if len(data) > limit:
+        raise ResponseTooLargeError()
+    return bytes(data)
 
 
 def die(message: str, code: int = 0) -> None:
@@ -83,11 +120,37 @@ def ensure_config_dirs() -> None:
 
 def write_private(path: Path, text: str) -> None:
     path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
-    tmp = path.with_name(path.name + ".tmp")
-    tmp.write_text(text, encoding="utf-8")
-    os.chmod(tmp, 0o600)
-    tmp.replace(path)
-    os.chmod(path, 0o600)
+    fd, tmp = tempfile.mkstemp(prefix=path.name + ".", suffix=".tmp", dir=str(path.parent))
+    replaced = False
+    try:
+        os.fchmod(fd, 0o600)
+        with os.fdopen(fd, "w", encoding="utf-8") as fh:
+            fd = -1
+            fh.write(text)
+            fh.flush()
+            os.fsync(fh.fileno())
+        os.replace(tmp, path)
+        replaced = True
+        flags = os.O_RDONLY
+        if hasattr(os, "O_DIRECTORY"):
+            flags |= os.O_DIRECTORY
+        dirfd = os.open(str(path.parent), flags)
+        try:
+            os.fsync(dirfd)
+        finally:
+            os.close(dirfd)
+        os.chmod(path, 0o600)
+    finally:
+        if fd >= 0:
+            try:
+                os.close(fd)
+            except OSError:
+                pass
+        if not replaced:
+            try:
+                os.unlink(tmp)
+            except OSError:
+                pass
 
 
 def load_accounts() -> list[dict]:

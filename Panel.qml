@@ -23,6 +23,8 @@ Panel {
     Qt.resolvedUrl("bin/you-got-mail").toString().replace(/^file:\/\//, "")
 
   readonly property string iconExternal: "\uF08E"
+  readonly property string iconMarkAll: "\uF2B6"
+  readonly property string iconConfirm: "\uF00C"
   readonly property string iconPrev: "\uF053"
   readonly property string iconNext: "\uF054"
 
@@ -39,6 +41,9 @@ Panel {
   property string errorText: ""
   property string warningText: ""
   property string pendingId: ""
+  property bool markAllArmed: false
+  property bool markAllBusy: false
+  property string actionWarning: ""
   property int cursor: -1
 
   property string pageToken: ""
@@ -94,7 +99,7 @@ Panel {
   }
 
   function refresh() {
-    if (listProc.running) return
+    if (listProc.running || root.markAllBusy) return
     var argv = [root.script, "list", "--limit", String(root.pageSize)]
     if (pageToken !== "" && validToken(pageToken)) argv.push("--page", pageToken)
     listProc.command = argv
@@ -102,7 +107,7 @@ Panel {
   }
 
   function goNextPage() {
-    if (!hasNext || listProc.running) return
+    if (!hasNext || listProc.running || root.markAllBusy) return
     var stack = pageStack.slice()
     stack.push(pageToken)
     pageStack = stack
@@ -112,7 +117,7 @@ Panel {
   }
 
   function goPrevPage() {
-    if (!hasPrev || listProc.running) return
+    if (!hasPrev || listProc.running || root.markAllBusy) return
     var stack = pageStack.slice()
     pageToken = stack.pop()
     pageStack = stack
@@ -162,6 +167,7 @@ Panel {
   readonly property bool hasOpenableInbox: openableInboxUrls().length > 0
 
   function openMessage(message) {
+    if (root.markAllBusy) return
     if (!message || !validId(message.id)) return
     var url = message.url || ""
     if (url !== "") {
@@ -180,6 +186,47 @@ Panel {
     for (var i = 0; i < urls.length; i++)
       openBrowser(urls[i])
     close()
+  }
+
+  function cancelMarkAllConfirm() {
+    markAllArmed = false
+    if (markAllArmTimer.running) markAllArmTimer.stop()
+  }
+
+  function requestMarkAll() {
+    if (!root.hasUnread || !root.reachable || root.markAllBusy) return
+    if (!root.markAllArmed) {
+      root.markAllArmed = true
+      markAllArmTimer.restart()
+      return
+    }
+    root.cancelMarkAllConfirm()
+    root.markAllBusy = true
+    readAllProc.command = [root.script, "read-all"]
+    readAllProc.running = true
+  }
+
+  function applyReadAllPayload(text) {
+    root.markAllBusy = false
+    root.cancelMarkAllConfirm()
+    try {
+      var data = JSON.parse(text)
+      var marked = parseInt(data.marked, 10)
+      if (!(marked > 0)) marked = 0
+      if (data.ok === true) {
+        root.actionWarning = data.warning || ""
+        firstPage()
+        refresh()
+        return
+      }
+      root.actionWarning = data.error || "could not mark all as read"
+      if (marked > 0) {
+        firstPage()
+        refresh()
+      }
+    } catch (e) {
+      root.actionWarning = "unexpected output from you-got-mail"
+    }
   }
 
   function moveCursor(delta) {
@@ -217,6 +264,7 @@ Panel {
       reachable = data.ok === true
       errorText = data.error || ""
       warningText = reachable ? (data.warning || "") : ""
+      // Keep actionWarning across this refresh: a write can fail while list still works.
       if (!reachable) return
       messages = data.messages || []
       unread = data.unread || 0
@@ -239,6 +287,8 @@ Panel {
     } else {
       cursor = -1
       firstPage()
+      cancelMarkAllConfirm()
+      actionWarning = ""
     }
   }
 
@@ -259,6 +309,13 @@ Panel {
     }
   }
 
+  Process {
+    id: readAllProc
+    stdout: StdioCollector {
+      onStreamFinished: root.applyReadAllPayload(text)
+    }
+  }
+
   Timer {
     interval: root.refreshMs
     running: true
@@ -268,6 +325,13 @@ Panel {
       root.now = Date.now() / 1000
       root.refresh()
     }
+  }
+
+  Timer {
+    id: markAllArmTimer
+    interval: 4000
+    repeat: false
+    onTriggered: root.markAllArmed = false
   }
 
   BarIconButton {
@@ -292,7 +356,7 @@ Panel {
             anchors.verticalCenter: parent.verticalCenter
             iconSize: Style.bar.iconCanvas
             color: button.active && button.useActiveColor ? button.activeColor : button.foreground
-            flagColor: (root.hasUnread && root.reachable) ? button.activeColor : button.foreground
+            flagColor: button.foreground
             hasMail: root.hasUnread && root.reachable
           }
 
@@ -302,7 +366,8 @@ Panel {
             height: Style.space(12)
             width: root.badgeWidth
             radius: height / 2
-            color: button.activeColor
+            color: Qt.rgba(button.foreground.r, button.foreground.g,
+                           button.foreground.b, 0.14)
 
             Text {
               anchors.centerIn: parent
@@ -311,7 +376,7 @@ Panel {
               font.family: root.fontFamily
               font.pixelSize: Style.font.caption
               renderType: Text.NativeRendering
-              color: Color.background
+              color: button.foreground
             }
           }
         }
@@ -342,7 +407,13 @@ Panel {
     PanelKeyCatcher {
       id: keyCatcher
       anchors.fill: parent
-      onCloseRequested: root.close()
+      onCloseRequested: {
+        if (root.markAllArmed) {
+          root.cancelMarkAllConfirm()
+          return
+        }
+        root.close()
+      }
       onMoveRequested: function(dx, dy) { if (dy !== 0) root.moveCursor(dy) }
       onActivateRequested: root.activateCursor()
       onTabRequested: function(direction) { root.switchPanel(direction) }
@@ -352,6 +423,8 @@ Panel {
           root.openMessage(root.messages[root.cursor])
         else if (t === "i" && root.hasOpenableInbox)
           root.openSearch()
+        else if (t === "a")
+          root.requestMarkAll()
         else if (t === "n")
           root.goNextPage()
         else if (t === "p")
@@ -400,11 +473,30 @@ Panel {
             id: headerActions
             anchors.right: parent.right
             anchors.verticalCenter: parent.verticalCenter
+            spacing: Style.space(2)
+
+            PanelActionButton {
+              id: markAllButton
+              visible: root.hasUnread && root.reachable
+              enabled: root.hasUnread && root.reachable && !root.markAllBusy
+              iconText: root.markAllArmed || root.markAllBusy
+                ? root.iconConfirm : root.iconMarkAll
+              tooltipText: root.markAllBusy
+                ? "Marking unread mail as read…"
+                : (root.markAllArmed
+                  ? "Click again to confirm"
+                  : "Mark all unread as read (a)")
+              foreground: root.foreground
+              hoverColor: root.accent
+              fontFamily: root.fontFamily
+              fontSize: Style.font.iconSmall
+              onClicked: root.requestMarkAll()
+            }
 
             PanelActionButton {
               id: openMailButton
               visible: root.hasOpenableInbox
-              enabled: root.hasOpenableInbox
+              enabled: root.hasOpenableInbox && !root.markAllBusy
               iconText: root.iconExternal
               tooltipText: root.accountCount > 1
                 ? "Open each unread inbox in the browser (i)"
@@ -459,16 +551,55 @@ Panel {
           }
         }
 
+        Item {
+          width: parent.width
+          height: (root.actionWarning !== "" && !root.markAllBusy)
+            ? actionWarningLabel.implicitHeight + Style.space(6) : 0
+          visible: root.actionWarning !== "" && !root.markAllBusy
+
+          Text {
+            id: actionWarningLabel
+            anchors.verticalCenter: parent.verticalCenter
+            width: parent.width
+            text: root.actionWarning
+            textFormat: Text.PlainText
+            elide: Text.ElideRight
+            font.family: root.fontFamily
+            font.pixelSize: Style.font.caption
+            color: bar ? bar.urgent : Color.urgent
+          }
+        }
+
+        Item {
+          width: parent.width
+          height: root.markAllBusy ? markAllBusyLabel.implicitHeight + Style.space(6) : 0
+          visible: root.markAllBusy
+
+          Text {
+            id: markAllBusyLabel
+            anchors.verticalCenter: parent.verticalCenter
+            width: parent.width
+            text: "Marking unread mail as read…"
+            textFormat: Text.PlainText
+            elide: Text.ElideRight
+            font.family: root.fontFamily
+            font.pixelSize: Style.font.caption
+            color: Qt.darker(root.foreground, 1.6)
+          }
+        }
+
         ListView {
           id: list
           width: parent.width
           visible: root.messages.length > 0
           clip: true
+          opacity: root.markAllBusy ? 0.4 : 1
+          enabled: !root.markAllBusy
           model: root.messages
           spacing: Style.space(1)
           boundsBehavior: Flickable.StopAtBounds
           flickableDirection: Flickable.VerticalFlick
-          interactive: contentHeight > height
+          interactive: contentHeight > height && !root.markAllBusy
           ScrollBar.vertical: ScrollBar { policy: ScrollBar.AsNeeded }
 
           readonly property int cap: {
@@ -476,6 +607,8 @@ Panel {
             if (root.hasPrev || root.hasNext) chrome += Style.space(38)
             if (!root.reachable) chrome += Style.space(24)
             if (root.reachable && root.warningText !== "") chrome += Style.space(24)
+            if (root.actionWarning !== "" && !root.markAllBusy) chrome += Style.space(24)
+            if (root.markAllBusy) chrome += Style.space(24)
             return Math.max(Style.space(200),
                             panel.availableCardHeight - panel.verticalContentInset - chrome)
           }
@@ -504,7 +637,7 @@ Panel {
               hoverEnabled: true
               cursorShape: Qt.PointingHandCursor
               onContainsMouseChanged: if (containsMouse) root.cursor = row.index
-              onClicked: root.openMessage(row.modelData)
+              onClicked: if (!root.markAllBusy) root.openMessage(row.modelData)
             }
 
             Column {
@@ -650,7 +783,7 @@ Panel {
             PanelActionButton {
               iconText: root.iconPrev
               tooltipText: "Previous page"
-              enabled: root.hasPrev
+              enabled: root.hasPrev && !root.markAllBusy
               opacity: enabled ? 1 : 0.3
               foreground: root.foreground
               hoverColor: root.accent
@@ -671,7 +804,7 @@ Panel {
             PanelActionButton {
               iconText: root.iconNext
               tooltipText: "Next page"
-              enabled: root.hasNext
+              enabled: root.hasNext && !root.markAllBusy
               opacity: enabled ? 1 : 0.3
               foreground: root.foreground
               hoverColor: root.accent
