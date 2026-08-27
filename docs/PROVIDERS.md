@@ -27,16 +27,23 @@ Do not print secrets. Do not write secrets to stderr.
 | `YOU_GOT_MAIL_ACCOUNT_ID` | Short id from `accounts.json` |
 | `YOU_GOT_MAIL_ACCOUNT_JSON` | The account object as JSON (no secrets) |
 | `YOU_GOT_MAIL_SECRET_FILE` | Absolute path to `secrets/<id>.json` |
-| `YOU_GOT_MAIL_MAX` | Default page size |
+| `YOU_GOT_MAIL_MAX` | Default page size (1–50) |
+| `YOU_GOT_MAIL_FETCH` | Rows this call should return (1–200); the orchestrator sets this so merged pages stay complete |
+| `YOU_GOT_MAIL_IMAP_PASSWORD` | Optional IMAP password for tests; interactive setup writes `secrets/<id>.json` instead |
 
-Read the secret file yourself (`chmod 600`). The orchestrator never puts
-the secret in an argument. Gmail and HEY have no plugin secret: they
-shell out to `gws` / `hey`, which own the token.
+Read the secret file through `load_secret_file()` (`chmod 600`, owned by
+you, parent `chmod 700`, not a symlink). The orchestrator never puts the
+secret in an argument. Gmail and HEY have no plugin secret: they shell
+out to `gws` / `hey`, which own the token.
 
 The bar is not a login shell. If you wrap a CLI, search
-`~/.local/share/mise/shims` and `~/.local/bin` the way `bin/you-got-mail`
-and the Gmail/HEY providers already do. Set `HEY_NONINTERACTIVE=1` (or
-equivalent) so a missing login fails closed instead of prompting.
+`~/.local/share/mise/shims`, `~/.local/bin`, and `~/.bun/bin` the way
+`bin/you-got-mail` and the Gmail/HEY providers already do. Set
+`HEY_NONINTERACTIVE=1` (or equivalent) so a missing login fails closed
+instead of prompting.
+
+Catch protocol, network, and parse errors at the provider boundary and
+return one JSON object. `_bootstrap.run(main)` is the last-resort wrap.
 
 ## `list` success
 
@@ -66,11 +73,15 @@ equivalent) so a missing login fails closed instead of prompting.
 - `ts` is unix seconds, UTC.
 - `url` must be `https://…` or empty. The panel rejects anything else.
   Empty is allowed (IMAP without webmail).
-- `snippet` and `subject` must be **one line**. Collapse `\r` `\n` and
-  other whitespace. Graph `bodyPreview` includes carriage returns; if you
-  pass them through, Qt paints a multi-line preview under the subject.
-  Use `one_line()` in `lib/common.py`.
-- `unread` is the true unread count, not just `len(messages)`.
+- `unread` is the mailbox total (folder counts, JMAP `calculateTotal`,
+  Gmail `resultSizeEstimate`, HEY envelope `unseen_count`, or extra
+  unseen pages), not just `len(messages)`. If the API only offers an
+  estimate, document that. The merged pile pages at most 200 newest
+  messages even when `unread` is larger.
+- `subject`, `from`, and `snippet` must be **one line**. Call
+  `one_line()` in `lib/common.py` (or the Gmail `entity` filter) so
+  carriage returns from Graph `bodyPreview` and HTML entities do not
+  wrap the row.
 - Skip trash, junk, drafts, spam. Include skip-inbox / user folders when
   the provider has that concept (Gmail user labels, IMAP folders). HEY’s
   attention box is the Imbox; Feed, Paper Trail, and the Screener are not

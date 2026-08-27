@@ -16,6 +16,8 @@ SECRETS_DIR = CONFIG_DIR / "secrets"
 
 ACCOUNT_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,31}$")
 PROVIDERS = ("gmail", "outlook", "fastmail", "imap", "hey")
+PAGE_SIZE_MAX = 50
+FETCH_CAP = 200
 
 
 def die(message: str, code: int = 0) -> None:
@@ -45,13 +47,23 @@ def _config_max() -> str | None:
     return None
 
 
+def clamp_int(raw: object, default: int, lo: int, hi: int) -> int:
+    try:
+        n = int(str(raw).strip())
+    except (TypeError, ValueError):
+        return default
+    return max(lo, min(hi, n))
+
+
 def max_messages() -> int:
     raw = os.environ.get("YOU_GOT_MAIL_MAX") or _config_max() or "25"
-    try:
-        n = int(raw)
-    except ValueError:
-        return 25
-    return max(1, min(50, n))
+    return clamp_int(raw, 25, 1, PAGE_SIZE_MAX)
+
+
+def fetch_limit(raw: object | None = None) -> int:
+    if raw is None:
+        raw = os.environ.get("YOU_GOT_MAIL_FETCH") or os.environ.get("YOU_GOT_MAIL_MAX") or "25"
+    return clamp_int(raw, 25, 1, FETCH_CAP)
 
 
 def one_line(value: str, limit: int = 180) -> str:
@@ -109,18 +121,36 @@ def secret_path(account_id: str) -> Path:
     return SECRETS_DIR / f"{account_id}.json"
 
 
-def load_secret(account_id: str) -> dict:
-    path = secret_path(account_id)
+def load_secret_file(path: Path, account_id: str = "") -> dict:
+    label = account_id or path.name
     if not path.is_file() or path.is_symlink():
         return {}
-    mode = path.stat().st_mode
-    if mode & (stat.S_IRWXG | stat.S_IRWXO):
-        die(f"secret file for {account_id} is too open; chmod 600 it")
+    try:
+        st = path.stat()
+    except OSError:
+        die(f"secret file for {label} is not readable")
+    if st.st_uid != os.getuid():
+        die(f"secret file for {label} is not owned by you")
+    if st.st_mode & (stat.S_IRWXG | stat.S_IRWXO):
+        die(f"secret file for {label} is too open; chmod 600 it")
+    parent = path.parent
+    if parent.is_symlink():
+        die(f"secret directory for {label} is a symlink")
+    try:
+        pst = parent.stat()
+    except OSError:
+        die(f"secret directory for {label} is not readable")
+    if pst.st_uid != os.getuid() or pst.st_mode & (stat.S_IRWXG | stat.S_IRWXO):
+        die(f"secret directory for {label} is too open; chmod 700 it")
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError):
-        die(f"secret file for {account_id} is not valid JSON")
+        die(f"secret file for {label} is not valid JSON")
     return data if isinstance(data, dict) else {}
+
+
+def load_secret(account_id: str) -> dict:
+    return load_secret_file(secret_path(account_id), account_id)
 
 
 def save_secret(account_id: str, data: dict) -> None:

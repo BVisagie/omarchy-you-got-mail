@@ -15,7 +15,7 @@ from datetime import datetime, timezone
 from email.message import Message
 
 import _bootstrap
-from common import die, emit, max_messages
+from common import die, emit, one_line
 
 SKIP_FOLDER = re.compile(
     r"(^|/)(trash|junk|spam|drafts?|sent|bin|deleted|queue|outbox)(/|$)",
@@ -42,12 +42,18 @@ def _sender(msg: Message) -> str:
 
 
 def _timestamp(msg: Message) -> int:
-    parsed = email.utils.parsedate_to_datetime(msg.get("Date") or "")
+    try:
+        parsed = email.utils.parsedate_to_datetime(msg.get("Date") or "")
+    except (TypeError, ValueError, OverflowError):
+        return 0
     if parsed is None:
         return 0
     if parsed.tzinfo is None:
         parsed = parsed.replace(tzinfo=timezone.utc)
-    return int(parsed.timestamp())
+    try:
+        return int(parsed.timestamp())
+    except (OverflowError, OSError, ValueError):
+        return 0
 
 
 def _snippet(msg: Message) -> str:
@@ -105,12 +111,19 @@ def _connect(acc: dict, password: str) -> imaplib.IMAP4_SSL:
 
 
 def cmd_list(acc: dict, password: str, limit: int) -> None:
-    client = _connect(acc, password)
+    try:
+        client = _connect(acc, password)
+    except ssl.SSLError:
+        die("IMAP TLS handshake failed")
+    except imaplib.IMAP4.error as exc:
+        die(str(exc) or "IMAP login failed")
+    except OSError as exc:
+        die(str(exc) or "could not reach IMAP host")
     messages = []
     unread = 0
     try:
         for folder in _folders(client):
-            typ, _ = client.select(f'"{folder}"', readonly=True)
+            typ, _ = client.select(folder, readonly=True)
             if typ != "OK":
                 continue
             typ, data = client.uid("search", None, "UNSEEN")
@@ -139,8 +152,8 @@ def cmd_list(acc: dict, password: str, limit: int) -> None:
                     {
                         "id": local_id,
                         "threadId": uid,
-                        "subject": _decode_header(msg.get("Subject")) or "(no subject)",
-                        "from": _sender(msg),
+                "subject": one_line(_decode_header(msg.get("Subject"))) or "(no subject)",
+                "from": one_line(_sender(msg)),
                         "snippet": "",
                         "ts": _timestamp(msg),
                         "labels": [folder] if folder.upper() != "INBOX" else [],
@@ -170,9 +183,16 @@ def cmd_read(acc: dict, password: str, local_id: str) -> None:
     folder, uid = local_id.rsplit("/", 1)
     if not uid.isdigit():
         die("not a message id")
-    client = _connect(acc, password)
     try:
-        typ, _ = client.select(f'"{folder}"')
+        client = _connect(acc, password)
+    except ssl.SSLError:
+        die("IMAP TLS handshake failed")
+    except imaplib.IMAP4.error as exc:
+        die(str(exc) or "IMAP login failed")
+    except OSError as exc:
+        die(str(exc) or "could not reach IMAP host")
+    try:
+        typ, _ = client.select(folder)
         if typ != "OK":
             die("could not open folder")
         typ, _ = client.uid("store", uid, "+FLAGS", "(\\Seen)")
@@ -190,12 +210,7 @@ def main() -> None:
     acc = _bootstrap.account()
     sec = _bootstrap.secret()
     cmd, rest, flags = _bootstrap.parse_args(sys.argv[1:])
-    limit = max_messages()
-    if flags.get("limit"):
-        try:
-            limit = max(1, min(50, int(flags["limit"])))
-        except ValueError:
-            pass
+    limit = _bootstrap.list_limit(flags)
     password = str(sec.get("password") or os.environ.get("YOU_GOT_MAIL_IMAP_PASSWORD") or "")
     if cmd == "list":
         cmd_list(acc, password, limit)
@@ -209,4 +224,4 @@ def main() -> None:
 
 
 if __name__ == "__main__":
-    main()
+    _bootstrap.run(main)

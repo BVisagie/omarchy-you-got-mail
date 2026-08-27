@@ -37,6 +37,7 @@ Panel {
   property var inboxes: []
   property bool reachable: true
   property string errorText: ""
+  property string warningText: ""
   property string pendingId: ""
   property int cursor: -1
 
@@ -81,9 +82,20 @@ Panel {
     return true
   }
 
+  readonly property int pageSize: {
+    var n = parseInt(setting("max", 25), 10)
+    if (!(n > 0)) n = 25
+    return Math.max(1, Math.min(50, n))
+  }
+  readonly property int refreshMs: {
+    var n = parseInt(setting("refreshIntervalSec", 60), 10)
+    if (!(n > 0)) n = 60
+    return Math.max(15, Math.min(3600, n)) * 1000
+  }
+
   function refresh() {
     if (listProc.running) return
-    var argv = [root.script, "list"]
+    var argv = [root.script, "list", "--limit", String(root.pageSize)]
     if (pageToken !== "" && validToken(pageToken)) argv.push("--page", pageToken)
     listProc.command = argv
     listProc.running = true
@@ -204,6 +216,7 @@ Panel {
       var data = JSON.parse(text)
       reachable = data.ok === true
       errorText = data.error || ""
+      warningText = reachable ? (data.warning || "") : ""
       if (!reachable) return
       messages = data.messages || []
       unread = data.unread || 0
@@ -247,7 +260,7 @@ Panel {
   }
 
   Timer {
-    interval: 60000
+    interval: root.refreshMs
     running: true
     repeat: true
     triggeredOnStart: true
@@ -264,7 +277,9 @@ Panel {
     opacity: root.reachable ? 1 : 0.5
     slotSize: root.barSlot
     opticalSize: root.barContentWidth
-    tooltipText: ""
+    tooltipText: !root.reachable
+      ? (root.errorText !== "" ? root.errorText : "Mail unreachable")
+      : (root.hasUnread ? (root.unread === 1 ? "1 unread" : root.unread + " unread") : "No unread mail")
 
     iconComponent: Component {
       Item {
@@ -329,10 +344,13 @@ Panel {
       onCloseRequested: root.close()
       onMoveRequested: function(dx, dy) { if (dy !== 0) root.moveCursor(dy) }
       onActivateRequested: root.activateCursor()
+      onTabRequested: function(direction) { root.switchPanel(direction) }
       onTextKey: function(t) {
         var onCursor = root.cursor >= 0 && root.cursor < root.messages.length
         if (t === "o" && onCursor)
           root.openMessage(root.messages[root.cursor])
+        else if (t === "i" && root.hasOpenableInbox)
+          root.openSearch()
         else if (t === "n")
           root.goNextPage()
         else if (t === "p")
@@ -388,8 +406,8 @@ Panel {
               enabled: root.hasOpenableInbox
               iconText: root.iconExternal
               tooltipText: root.accountCount > 1
-                ? "Open each unread inbox in the browser"
-                : "Open unread in browser"
+                ? "Open each unread inbox in the browser (i)"
+                : "Open unread in browser (i)"
               foreground: root.foreground
               hoverColor: root.accent
               fontFamily: root.fontFamily
@@ -421,6 +439,25 @@ Panel {
           }
         }
 
+        Item {
+          width: parent.width
+          height: (root.reachable && root.warningText !== "")
+            ? partialWarning.implicitHeight + Style.space(6) : 0
+          visible: root.reachable && root.warningText !== ""
+
+          Text {
+            id: partialWarning
+            anchors.verticalCenter: parent.verticalCenter
+            width: parent.width
+            text: root.warningText
+            textFormat: Text.PlainText
+            elide: Text.ElideRight
+            font.family: root.fontFamily
+            font.pixelSize: Style.font.caption
+            color: bar ? bar.urgent : Color.urgent
+          }
+        }
+
         ListView {
           id: list
           width: parent.width
@@ -437,6 +474,7 @@ Panel {
             var chrome = Style.space(70)
             if (root.hasPrev || root.hasNext) chrome += Style.space(38)
             if (!root.reachable) chrome += Style.space(24)
+            if (root.reachable && root.warningText !== "") chrome += Style.space(24)
             return Math.max(Style.space(200),
                             panel.availableCardHeight - panel.verticalContentInset - chrome)
           }
@@ -511,7 +549,7 @@ Panel {
                         required property string modelData
                         anchors.verticalCenter: parent.verticalCenter
                         height: chipText.implicitHeight + Style.space(3)
-                        width: chipText.implicitWidth + Style.space(8)
+                        width: chipText.width + Style.space(8)
                         radius: Style.space(3)
                         color: Qt.rgba(root.foreground.r, root.foreground.g,
                                        root.foreground.b, 0.14)
@@ -521,6 +559,10 @@ Panel {
                           anchors.centerIn: parent
                           text: parent.modelData
                           textFormat: Text.PlainText
+                          elide: Text.ElideRight
+                          wrapMode: Text.NoWrap
+                          maximumLineCount: 1
+                          width: Math.min(implicitWidth, Style.space(64))
                           font.family: root.fontFamily
                           font.pixelSize: Style.font.caption
                           color: Qt.darker(root.foreground, 1.35)
@@ -532,7 +574,8 @@ Panel {
                   Text {
                     id: subject
                     anchors.verticalCenter: parent.verticalCenter
-                    width: line.width - (chips.visible ? chips.width + line.spacing : 0)
+                    width: Math.max(Style.space(40),
+                                    line.width - (chips.visible ? chips.width + line.spacing : 0))
                     text: root.oneLine(row.modelData.subject)
                     textFormat: Text.PlainText
                     wrapMode: Text.NoWrap

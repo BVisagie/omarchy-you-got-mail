@@ -10,7 +10,7 @@ import urllib.request
 from email.utils import parseaddr
 
 import _bootstrap
-from common import die, emit, max_messages
+from common import die, emit, one_line
 
 SESSION_URL = "https://api.fastmail.com/jmap/session"
 USING = [
@@ -31,7 +31,9 @@ def _request(url: str, token: str, payload: dict | None = None) -> dict:
     except urllib.error.HTTPError as exc:
         die(f"Fastmail HTTP {exc.code}")
     except urllib.error.URLError:
-        die("could not reach Fastmail")
+                die("could not reach Fastmail")
+    except json.JSONDecodeError:
+        die("Fastmail returned invalid JSON")
 
 
 def _session(token: str) -> dict:
@@ -148,9 +150,9 @@ def cmd_list(acc: dict, token: str, limit: int) -> None:
             {
                 "id": item["id"],
                 "threadId": thread,
-                "subject": item.get("subject") or "(no subject)",
-                "from": name,
-                "snippet": (item.get("preview") or "").strip(),
+                "subject": one_line(item.get("subject") or "") or "(no subject)",
+                "from": one_line(str(name)),
+                "snippet": one_line(item.get("preview") or ""),
                 "ts": ts,
                 "labels": [],
                 "url": f"https://app.fastmail.com/mail/Inbox/{item['id']}",
@@ -185,9 +187,24 @@ def cmd_read(token: str, email_id: str) -> None:
             ]
         ],
     )
-    for name, payload, _ in responses:
+    found = False
+    for name, payload, tag in responses:
         if name == "error":
-            die(payload.get("description") or "could not mark as read")
+            die(str(payload.get("description") or "could not mark as read"))
+        if tag != "s" or name != "Email/set":
+            continue
+        found = True
+        not_updated = payload.get("notUpdated") or {}
+        if email_id in not_updated:
+            detail = not_updated[email_id]
+            if isinstance(detail, dict):
+                die(str(detail.get("description") or detail.get("type") or "could not mark as read"))
+            die("could not mark as read")
+        updated = payload.get("updated") or {}
+        if email_id not in updated:
+            die("could not mark as read")
+    if not found:
+        die("could not mark as read")
     emit({"ok": True})
 
 
@@ -198,12 +215,7 @@ def main() -> None:
     if not token:
         die("Fastmail API token missing; run: you-got-mail accounts add fastmail")
     cmd, rest, flags = _bootstrap.parse_args(sys.argv[1:])
-    limit = max_messages()
-    if flags.get("limit"):
-        try:
-            limit = max(1, min(50, int(flags["limit"])))
-        except ValueError:
-            pass
+    limit = _bootstrap.list_limit(flags)
     if cmd == "list":
         cmd_list(acc, token, limit)
         return
@@ -216,4 +228,4 @@ def main() -> None:
 
 
 if __name__ == "__main__":
-    main()
+    _bootstrap.run(main)

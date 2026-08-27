@@ -59,7 +59,7 @@ max_messages() {
   [ "${#value}" -le 3 ] || { printf '25'; return 0; }
   local n=$((10#$value))
   [ "$n" -ge 1 ] || { printf '25'; return 0; }
-  [ "$n" -le 50 ] || { printf '50'; return 0; }
+  [ "$n" -le 200 ] || { printf '200'; return 0; }
   printf '%s' "$n"
 }
 
@@ -127,20 +127,19 @@ message_url() {
   fi
 }
 
-unread_count() {
-  local n=0 token="" rounds=0 page chunk
-  while [ "$rounds" -lt 20 ]; do
-    rounds=$((rounds + 1))
-    page="$(gws_gmail users messages list --params "$(
-      jq -nc --arg q "$QUERY" --arg t "$token" \
-        '{userId:"me",q:$q,maxResults:500} + (if $t == "" then {} else {pageToken:$t} end)')")"
-    chunk="$(printf '%s' "$page" | jq '[.messages[]?.id] | length' 2>/dev/null)"
-    case "$chunk" in ''|*[!0-9]*) break ;; esac
-    n=$((n + chunk))
-    token="$(printf '%s' "$page" | jq -r '.nextPageToken // empty' 2>/dev/null)"
-    [ -n "$token" ] || break
-  done
-  printf '%s' "$n"
+unread_estimate() {
+  local page="$1" listed="$2" estimate
+  estimate="$(printf '%s' "$page" | jq -r '.resultSizeEstimate // empty' 2>/dev/null)"
+  case "$estimate" in
+    ''|*[!0-9]*) printf '%s' "$listed" ;;
+    *)
+      if [ "$estimate" -ge "$listed" ]; then
+        printf '%s' "$estimate"
+      else
+        printf '%s' "$listed"
+      fi
+      ;;
+  esac
 }
 
 fill_labels_from_cache() {
@@ -224,7 +223,9 @@ render() {
     --arg authuser "$email" '
     def entity:
       gsub("&lt;";"<") | gsub("&gt;";">") | gsub("&quot;";"\"")
-      | gsub("&#39;";"'"'"'") | gsub("&nbsp;";" ") | gsub("&amp;";"&");
+      | gsub("&#39;";"'"'"'") | gsub("&nbsp;";" ") | gsub("&amp;";"&")
+      | gsub("[\\r\\n\\t]+"; " ") | gsub(" +"; " ")
+      | ltrimstr(" ") | rtrimstr(" ");
 
     def sender:
       . as $raw
@@ -272,7 +273,7 @@ render() {
 }
 
 cmd_list() {
-  local token="" max page ids next unread email
+  local token="" max page ids next unread email listed
 
   while [ $# -gt 0 ]; do
     case "$1" in
@@ -295,10 +296,11 @@ cmd_list() {
   next="$(printf '%s' "$page" | jq -r '.nextPageToken // empty' 2>/dev/null)"
   case "$next" in *[!A-Za-z0-9_-]*) next="" ;; esac
 
+  listed="$(printf '%s' "$ids" | jq 'length')"
   if [ -z "$token" ] && [ -z "$next" ]; then
-    unread="$(printf '%s' "$ids" | jq 'length')"
+    unread="$listed"
   else
-    unread="$(unread_count)"
+    unread="$(unread_estimate "$page" "$listed")"
   fi
   email="$(account_email)" || email=""
 

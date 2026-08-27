@@ -4,24 +4,38 @@
 from __future__ import annotations
 
 import json
+import os
 import sys
+import time
 import urllib.error
 import urllib.parse
 import urllib.request
+from datetime import datetime
+from pathlib import Path
 
 import _bootstrap
-from common import die, emit, max_messages, one_line, save_secret
+from common import die, emit, one_line, save_secret
 from outlook_auth import refresh_access_token
 
 GRAPH = "https://graph.microsoft.com/v1.0"
+SKIP_WELL_KNOWN = ("junkemail", "deleteditems", "drafts")
+CACHE_TTL = 6 * 3600
 
 
-def _http(method: str, url: str, token: str, payload: dict | None = None) -> dict:
+def _http(
+    method: str,
+    url: str,
+    token: str,
+    payload: dict | None = None,
+    extra_headers: dict[str, str] | None = None,
+) -> dict:
     data = None if payload is None else json.dumps(payload).encode()
     req = urllib.request.Request(url, data=data, method=method)
     req.add_header("Authorization", f"Bearer {token}")
     if data is not None:
         req.add_header("Content-Type", "application/json")
+    for key, value in (extra_headers or {}).items():
+        req.add_header(key, value)
     try:
         with urllib.request.urlopen(req, timeout=30) as resp:
             raw = resp.read().decode()
@@ -30,6 +44,34 @@ def _http(method: str, url: str, token: str, payload: dict | None = None) -> dic
         die(f"Outlook HTTP {exc.code}")
     except urllib.error.URLError:
         die("could not reach Microsoft Graph")
+    except json.JSONDecodeError:
+        die("Outlook returned invalid JSON")
+
+
+def _cache_dir(account_id: str) -> Path:
+    root = Path(os.environ.get("XDG_CACHE_HOME", Path.home() / ".cache")) / "omarchy-you-got-mail" / account_id
+    root.mkdir(mode=0o700, parents=True, exist_ok=True)
+    return root
+
+
+def _read_cache(account_id: str) -> dict:
+    path = _cache_dir(account_id) / "outlook.json"
+    if not path.is_file() or path.is_symlink():
+        return {}
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def _write_cache(account_id: str, data: dict) -> None:
+    path = _cache_dir(account_id) / "outlook.json"
+    tmp = path.with_name(path.name + ".tmp")
+    tmp.write_text(json.dumps(data), encoding="utf-8")
+    os.chmod(tmp, 0o600)
+    tmp.replace(path)
+    os.chmod(path, 0o600)
 
 
 def _access(sec: dict, account_id: str) -> str:
@@ -38,40 +80,92 @@ def _access(sec: dict, account_id: str) -> str:
     tenant = str(sec.get("tenant") or "common")
     if not client_id or not refresh:
         die("Outlook is not signed in; run: you-got-mail accounts add outlook")
+    now = time.time()
+    cached = str(sec.get("access_token") or "")
+    expires_at = float(sec.get("access_expires_at") or 0)
+    if cached and expires_at > now + 60:
+        return cached
     try:
         tokens = refresh_access_token(client_id, refresh, tenant)
     except RuntimeError as exc:
         die(str(exc))
-    if tokens.get("refresh_token") and tokens["refresh_token"] != refresh:
-        sec = dict(sec)
+    sec = dict(sec)
+    sec["access_token"] = str(tokens["access_token"])
+    sec["access_expires_at"] = now + int(tokens.get("expires_in") or 3600)
+    if tokens.get("refresh_token"):
         sec["refresh_token"] = tokens["refresh_token"]
-        save_secret(account_id, sec)
-    return str(tokens["access_token"])
+    save_secret(account_id, sec)
+    return str(sec["access_token"])
 
 
-def _skip_folders(token: str) -> set[str]:
+def _skip_folders(token: str, account_id: str, cache: dict) -> tuple[set[str], dict]:
+    cached_skip = cache.get("skip_ids")
+    cached_at = float(cache.get("skip_at") or 0)
+    if isinstance(cached_skip, list) and time.time() - cached_at < CACHE_TTL:
+        return set(str(x) for x in cached_skip), cache
     skip = set()
-    for well_known in ("junkemail", "deleteditems", "drafts"):
+    for well_known in SKIP_WELL_KNOWN:
         data = _http("GET", f"{GRAPH}/me/mailFolders/{well_known}", token)
         if data.get("id"):
-            skip.add(data["id"])
-    return skip
+            skip.add(str(data["id"]))
+    cache = dict(cache)
+    cache["skip_ids"] = sorted(skip)
+    cache["skip_at"] = time.time()
+    _write_cache(account_id, cache)
+    return skip, cache
+
+
+def _profile(token: str, account_id: str, cache: dict) -> tuple[str, dict]:
+    email = str(cache.get("email") or "")
+    cached_at = float(cache.get("email_at") or 0)
+    if email and time.time() - cached_at < CACHE_TTL:
+        return email, cache
+    me = _http("GET", f"{GRAPH}/me?$select=mail,userPrincipalName", token)
+    email = str(me.get("mail") or me.get("userPrincipalName") or "")
+    cache = dict(cache)
+    cache["email"] = email
+    cache["email_at"] = time.time()
+    _write_cache(account_id, cache)
+    return email, cache
+
+
+def _folder_unread_total(token: str, skip: set[str]) -> int:
+    total = 0
+
+    def walk(url: str) -> None:
+        nonlocal total
+        while url:
+            data = _http("GET", url, token)
+            for folder in data.get("value") or []:
+                fid = str(folder.get("id") or "")
+                if not fid or fid in skip:
+                    continue
+                total += int(folder.get("unreadItemCount") or 0)
+                child = (
+                    f"{GRAPH}/me/mailFolders/{urllib.parse.quote(fid)}"
+                    "/childFolders?$select=id,unreadItemCount&$top=100"
+                )
+                walk(child)
+            url = str(data.get("@odata.nextLink") or "")
+
+    walk(f"{GRAPH}/me/mailFolders?$select=id,unreadItemCount&$top=100")
+    return total
 
 
 def cmd_list(acc: dict, sec: dict, limit: int) -> None:
     account_id = str(acc.get("id") or "outlook")
     token = _access(sec, account_id)
-    skip = _skip_folders(token)
+    cache = _read_cache(account_id)
+    skip, cache = _skip_folders(token, account_id, cache)
+    email, cache = _profile(token, account_id, cache)
     params = {
         "$filter": "isRead eq false",
         "$select": "id,subject,from,bodyPreview,receivedDateTime,webLink,parentFolderId,conversationId",
         "$orderby": "receivedDateTime desc",
-        "$top": str(min(50, max(limit, 1))),
+        "$top": str(limit),
     }
     url = f"{GRAPH}/me/messages?" + urllib.parse.urlencode(params)
     data = _http("GET", url, token)
-    me = _http("GET", f"{GRAPH}/me?$select=mail,userPrincipalName", token)
-    email = str(me.get("mail") or me.get("userPrincipalName") or "")
     personal = email.lower().endswith(
         ("@outlook.com", "@hotmail.com", "@live.com", "@msn.com")
     )
@@ -86,18 +180,14 @@ def cmd_list(acc: dict, sec: dict, limit: int) -> None:
         else "https://outlook.office.com/mail/"
     )
     messages = []
-    unread = 0
     for item in data.get("value") or []:
         if item.get("parentFolderId") in skip:
             continue
-        unread += 1
         from_obj = (item.get("from") or {}).get("emailAddress") or {}
         name = from_obj.get("name") or from_obj.get("address") or ""
         received = item.get("receivedDateTime") or ""
         ts = 0
         if received:
-            from datetime import datetime
-
             try:
                 ts = int(datetime.fromisoformat(received.replace("Z", "+00:00")).timestamp())
             except ValueError:
@@ -106,8 +196,8 @@ def cmd_list(acc: dict, sec: dict, limit: int) -> None:
             {
                 "id": item["id"],
                 "threadId": item.get("conversationId") or item["id"],
-                "subject": item.get("subject") or "(no subject)",
-                "from": name,
+                "subject": one_line(item.get("subject") or "") or "(no subject)",
+                "from": one_line(str(name)),
                 "snippet": one_line(item.get("bodyPreview") or ""),
                 "ts": ts,
                 "labels": [],
@@ -116,8 +206,7 @@ def cmd_list(acc: dict, sec: dict, limit: int) -> None:
         )
         if len(messages) >= limit:
             break
-    # Graph $top is not a total; unread above is this page after skips.
-    # Use @odata.count if we asked for it — we didn't, so at least the page.
+    unread = _folder_unread_total(token, skip)
     emit(
         {
             "ok": True,
@@ -131,7 +220,12 @@ def cmd_list(acc: dict, sec: dict, limit: int) -> None:
 
 def cmd_read(acc: dict, sec: dict, item_id: str) -> None:
     token = _access(sec, str(acc.get("id") or "outlook"))
-    _http("PATCH", f"{GRAPH}/me/messages/{urllib.parse.quote(item_id)}", token, {"isRead": True})
+    _http(
+        "PATCH",
+        f"{GRAPH}/me/messages/{urllib.parse.quote(item_id, safe='')}",
+        token,
+        {"isRead": True},
+    )
     emit({"ok": True})
 
 
@@ -139,12 +233,7 @@ def main() -> None:
     acc = _bootstrap.account()
     sec = _bootstrap.secret()
     cmd, rest, flags = _bootstrap.parse_args(sys.argv[1:])
-    limit = max_messages()
-    if flags.get("limit"):
-        try:
-            limit = max(1, min(50, int(flags["limit"])))
-        except ValueError:
-            pass
+    limit = _bootstrap.list_limit(flags)
     if cmd == "list":
         cmd_list(acc, sec, limit)
         return
@@ -157,4 +246,4 @@ def main() -> None:
 
 
 if __name__ == "__main__":
-    main()
+    _bootstrap.run(main)

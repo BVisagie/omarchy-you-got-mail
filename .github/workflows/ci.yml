@@ -1,0 +1,33 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Contract tests
+        run: python3 -m unittest discover -s tests -v
+
+      - name: Compile Python
+        run: python3 -m compileall -q lib providers tests
+
+      - name: Manifest JSON
+        run: python3 -c "import json,sys; json.load(open('manifest.json')); print('ok')"
+
+      - name: Shell syntax
+        run: bash -n bin/you-got-mail && bash -n providers/gmail
+
+      - name: ShellCheck
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq shellcheck
+          shellcheck -x bin/you-got-mail providers/gmail

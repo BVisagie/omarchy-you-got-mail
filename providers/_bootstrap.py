@@ -10,7 +10,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "lib"))
 
-from common import die  # noqa: E402
+from common import die, fetch_limit, load_secret_file  # noqa: E402
 
 
 def account() -> dict:
@@ -26,14 +26,8 @@ def secret() -> dict:
     path = os.environ.get("YOU_GOT_MAIL_SECRET_FILE") or ""
     if not path:
         return {}
-    p = Path(path)
-    if not p.is_file() or p.is_symlink():
-        return {}
-    try:
-        data = json.loads(p.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
-        die("secret file is not valid JSON")
-    return data if isinstance(data, dict) else {}
+    acc_id = str(os.environ.get("YOU_GOT_MAIL_ACCOUNT_ID") or "")
+    return load_secret_file(Path(path), acc_id)
 
 
 def parse_args(argv: list[str]) -> tuple[str, list[str], dict[str, str]]:
@@ -51,3 +45,18 @@ def parse_args(argv: list[str]) -> tuple[str, list[str], dict[str, str]]:
         rest.append(argv[i])
         i += 1
     return cmd, rest, flags
+
+
+def list_limit(flags: dict[str, str]) -> int:
+    if flags.get("limit"):
+        return fetch_limit(flags["limit"])
+    return fetch_limit()
+
+
+def run(main_fn) -> None:
+    try:
+        main_fn()
+    except SystemExit:
+        raise
+    except Exception as exc:  # noqa: BLE001 — last-resort JSON contract
+        die(str(exc) or "provider failed")

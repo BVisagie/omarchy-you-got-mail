@@ -2,7 +2,7 @@
 # you-got-mail - data source and account CLI for the Omarchy widget.
 #
 # The panel calls:
-#   you-got-mail list [--page OFFSET]
+#   you-got-mail list [--page OFFSET] [--limit N]
 #   you-got-mail read <id>
 #
 # Accounts are added in a terminal:

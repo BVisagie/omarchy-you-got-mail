@@ -9,13 +9,9 @@ another provider is documented in [docs/PROVIDERS.md](docs/PROVIDERS.md).
 **Account setup lives in [docs/ACCOUNTS.md](docs/ACCOUNTS.md)** — start
 there for Outlook.com, Gmail OAuth, or HEY.
 
-This is not [jankeesvw/omarchy-gmail-inbox](https://github.com/jankeesvw/omarchy-gmail-inbox)
-and not [37signals.hey](https://github.com/basecamp/omarchy-hey-plugin).
-Those can sit on the bar next to this widget; they do not share its pile.
-
 ## Requirements
 
-- [Omarchy](https://omarchy.org/)
+- [Omarchy](https://omarchy.org/) 4.0 or later (plugin `schemaVersion` 1)
 - `python3` (and `jq` for the Gmail provider)
 - **Gmail:** [Google Workspace CLI][gws] — `gws auth login -s gmail`
 - **HEY:** [hey-cli][hey-cli] — `hey auth login`
@@ -26,14 +22,30 @@ Those can sit on the bar next to this widget; they do not share its pile.
 - **Fastmail / IMAP:** an API token or app password
 
 The bar is not a login shell. The plugin already looks in
-`~/.local/share/mise/shims` and `~/.local/bin` for `gws` and `hey`.
+`~/.local/share/mise/shims`, `~/.local/bin`, and `~/.bun/bin` for `gws`
+and `hey`.
 
 ## Install
 
 ```bash
-omarchy plugin add git@github.com:BVisagie/omarchy-you-got-mail.git --enable
+omarchy plugin add https://github.com/BVisagie/omarchy-you-got-mail.git --enable
 omarchy bar move bvisagie.you-got-mail --section right
 ```
+
+The GitHub repository must be public for that HTTPS URL to work for
+other people. Review the checkout before enabling if you did not pass
+`--enable`.
+
+## Update
+
+```bash
+omarchy plugin update bvisagie.you-got-mail
+```
+
+That fast-forwards the git checkout in
+`~/.config/omarchy/plugins/bvisagie.you-got-mail/`. It does not rewrite
+`~/.config/omarchy-you-got-mail/` (accounts and secrets). See
+[CHANGELOG.md](CHANGELOG.md) for what changed in each release.
 
 ## Accounts
 
@@ -62,27 +74,46 @@ If you never add an account, a single Gmail account is assumed. The first
 | Click the bar icon | open the panel |
 | Right-click the bar icon | open each inbox that currently has unread (one tab per account) |
 | Middle-click the bar icon | refresh now |
-| Header external-link | same as right-click |
+| Header external-link or `i` | same as right-click |
 | Click a message | open **that** thread in the browser and take it off the pile |
 | `↑` `↓` or `j` `k` | move through the list |
 | `Enter`, `Space` or `o` | open the message under the cursor |
 | `n` / `p` | next page, previous page |
+| `Tab` / `Shift+Tab` | switch to the next or previous bar panel |
 | `Esc` | close |
 
-The panel refreshes every minute, and again when you open it or click a
-row. With more than one account the badge is the sum of unread, rows are
-newest-first, and each row shows an account chip.
+The bar tooltip shows the unread count, or why mail is unreachable.
+
+The panel refreshes on the interval from widget settings (default one
+minute), and again when you open it or click a row. With more than one
+account the badge is the sum of unread, rows are newest-first, and each
+row shows an account chip. If one account fails, the others still show
+and the panel names the failure.
+
+The unread badge is the provider's mailbox total, not just the rows on
+this page. Merged paging walks a cap of 200 newest messages across
+accounts.
 
 ## Configuration
 
-`~/.config/omarchy-you-got-mail/config` (optional):
+Page size and refresh interval are **bar widget settings** on the
+`bvisagie.you-got-mail` entry in `~/.config/omarchy/shell.json` (Omarchy's
+widget settings UI writes the same keys):
 
-```ini
-max = 25
-```
+| Key | Default | Range |
+|---|---|---|
+| `max` | 25 | 1–50 (messages per panel page) |
+| `refreshIntervalSec` | 60 | 15–3600 |
 
-`max` is the page size (1–50). Accounts themselves are **not** in this
-file. See [docs/ACCOUNTS.md](docs/ACCOUNTS.md).
+Accounts, tokens, and passwords stay in
+`~/.config/omarchy-you-got-mail/` — they do not belong in `shell.json`.
+An optional leftover `~/.config/omarchy-you-got-mail/config` with
+`max = 25` is still honoured by the CLI when you run `list` without
+`--limit`; the panel always passes `--limit` from widget settings.
+
+CLI also honours `YOU_GOT_MAIL_MAX`. See [docs/ACCOUNTS.md](docs/ACCOUNTS.md)
+and [docs/PROVIDERS.md](docs/PROVIDERS.md) for `YOU_GOT_MAIL_IMAP_PASSWORD`
+and provider environment.
 
 ## Removing it
 

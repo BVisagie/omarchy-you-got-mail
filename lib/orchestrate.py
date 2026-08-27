@@ -8,6 +8,7 @@ import subprocess
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from common import (
+    FETCH_CAP,
     decode_id,
     die,
     emit,
@@ -26,6 +27,7 @@ def _run_provider(account: dict, args: list[str]) -> dict:
     env["YOU_GOT_MAIL_ACCOUNT_JSON"] = json.dumps(account, separators=(",", ":"))
     env["YOU_GOT_MAIL_SECRET_FILE"] = str(secret_path(account["id"]))
     env["YOU_GOT_MAIL_MAX"] = os.environ.get("YOU_GOT_MAIL_MAX", str(max_messages()))
+    env["YOU_GOT_MAIL_FETCH"] = os.environ.get("YOU_GOT_MAIL_FETCH", env["YOU_GOT_MAIL_MAX"])
     try:
         proc = subprocess.run(
             [str(provider_path(provider)), *args],
@@ -76,9 +78,10 @@ def cmd_list(page_token: str) -> None:
         if page < 0:
             page = 0
     per = max_messages()
-    # Each provider fetches one page-worth; we merge by time so mixed
-    # accounts still read as a single unread pile.
-    fetch = str(min(50, max(per, 25)))
+    start = page
+    needed = start + per
+    fetch = str(min(FETCH_CAP, max(per, needed)))
+    os.environ["YOU_GOT_MAIL_FETCH"] = fetch
 
     errors = []
     merged: list[dict] = []
@@ -106,9 +109,13 @@ def cmd_list(page_token: str) -> None:
         die(errors[0] if len(errors) == 1 else "all accounts failed: " + "; ".join(errors))
 
     merged.sort(key=lambda m: int(m.get("ts") or 0), reverse=True)
-    start = page
     chunk = merged[start : start + per]
-    next_page = str(start + per) if start + per < len(merged) else ""
+    # A message in the global top N must be in each account's top N, so
+    # fetching `start + per` from every provider is enough for this page.
+    # Do not offer a page past FETCH_CAP — that offset would be empty.
+    next_start = start + per
+    capped_total = min(max(len(merged), unread), FETCH_CAP)
+    next_page = str(next_start) if next_start < capped_total else ""
 
     inboxes = []
     for acc in accounts:

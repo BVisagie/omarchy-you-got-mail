@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "id": "bvisagie.you-got-mail",
   "name": "You've Got Mail",
-  "version": "2.2.4",
+  "version": "2.3.0",
   "author": "BVisagie",
   "description": "Unread mail only. Click a message to open it.",
   "homepage": "https://github.com/BVisagie/omarchy-you-got-mail",
@@ -18,6 +18,30 @@
     "description": "A mailbox whose flag raises for unread mail. Click a row to open it.",
     "category": "Apps",
     "allowMultiple": false,
-    "defaultSection": "right"
+    "defaultSection": "right",
+    "defaults": {
+      "max": 25,
+      "refreshIntervalSec": 60
+    },
+    "schema": [
+      {
+        "key": "max",
+        "type": "integer",
+        "label": "Page size",
+        "min": 1,
+        "max": 50,
+        "step": 1,
+        "defaultValue": 25
+      },
+      {
+        "key": "refreshIntervalSec",
+        "type": "integer",
+        "label": "Refresh interval (seconds)",
+        "min": 15,
+        "max": 3600,
+        "step": 15,
+        "defaultValue": 60
+      }
+    ]
   }
 }

@@ -49,8 +49,9 @@ PATH if you want the short command `you-got-mail`.
 |---|---|
 | `~/.config/omarchy-you-got-mail/accounts.json` | Account list. No secrets. |
 | `~/.config/omarchy-you-got-mail/secrets/<id>.json` | Tokens and passwords, mode `600`. |
-| `~/.config/omarchy-you-got-mail/config` | Optional `max = 25` (page size). |
-| `~/.cache/omarchy-you-got-mail/` | Gmail message cache. Safe to delete. |
+| `~/.config/omarchy/shell.json` | Widget settings: `max` (page size) and `refreshIntervalSec`. |
+| `~/.config/omarchy-you-got-mail/config` | Optional leftover CLI `max = 25`. The panel does not read this. |
+| `~/.cache/omarchy-you-got-mail/` | Gmail message cache and Outlook folder/profile cache. Safe to delete. |
 
 Gmail and HEY store **no** plugin secret: `gws` and `hey` own the login.
 Outlook Graph, Fastmail, and IMAP write a secret file.
@@ -222,6 +223,9 @@ Unread is every folder except trash, junk/spam, drafts, sent, and similar.
 There is no standard “open this IMAP message in the browser” URL; if you
 leave webmail empty, click still marks the message read.
 
+`YOU_GOT_MAIL_IMAP_PASSWORD` can supply the password for automated tests.
+Interactive `accounts add imap` still writes `secrets/<id>.json`.
+
 ## Editing the files yourself
 
 `accounts.json`:
@@ -302,12 +306,13 @@ zero unread, and IMAP accounts with no webmail URL, are skipped.
 | Entra: account does not exist in tenant `Microsoft Services` (app `74658136-…`) | Personal Microsoft account has no Azure directory | Private window → [azure.microsoft.com/free](https://azure.microsoft.com/free/) → then [portal.azure.com](https://portal.azure.com/). Do not use entra.microsoft.com first. |
 | Azure wants a credit card | Identity check for a free directory | Normal. App registration is free. Do not provision paid resources. |
 | Outlook IMAP login fails for `@outlook.com` | Password IMAP is retired | Use Graph. |
-| `hey-cli not found` / `gws: command not found` | Binary not on the bar’s PATH | Install into `~/.local/bin` or mise shims; middle-click the icon to retry. |
+| `hey-cli not found` / `gws: command not found` | Binary not on the bar’s PATH | Install into `~/.local/bin`, mise shims, or `~/.bun/bin`; middle-click the icon to retry. |
 | Google **Access blocked / access_denied** | Unverified OAuth client | Add yourself as a test user, or use `-s gmail` only. |
 | Badge in the hundreds, Gmail web shows 2 | The other Gmail bar plugin, or raw `UNREAD` | Disable `jankeesvw.gmail-inbox` if it is still on the bar. This plugin counts Inbox + your labels, not Trash. |
 | Added Outlook and Gmail disappeared | `accounts.json` created without Gmail | Current builds keep Gmail. If an older build already dropped it: `$PLUGIN accounts add gmail`. |
 | HEY lists nothing | Looking at Feed / Paper Trail | Only Imbox unseen is unread. Confirm `hey box imbox --json`. |
 | Outlook signed in but rows wrap into a wall of text | Old plugin build | Update: Graph `bodyPreview` has line breaks; current builds flatten them. |
+| Warning naming a mailbox at the top of the panel | That account failed; others still listed | Fix that provider (auth, PATH, token); middle-click to retry |
 | `accounts add` refuses to run | Needs a real terminal | Run `$PLUGIN accounts add …` in a terminal, not piped. |
 
 Test without the panel:

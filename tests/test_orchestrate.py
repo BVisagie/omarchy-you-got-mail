@@ -1,0 +1,128 @@
+from __future__ import annotations
+
+import os
+import unittest
+from unittest.mock import patch
+
+import orchestrate
+from support import capture_json, message
+
+
+def _account(acc_id: str, provider: str, label: str) -> dict:
+    return {"id": acc_id, "provider": provider, "label": label}
+
+
+class PaginationTests(unittest.TestCase):
+    def setUp(self) -> None:
+        os.environ["YOU_GOT_MAIL_MAX"] = "25"
+
+    def tearDown(self) -> None:
+        os.environ.pop("YOU_GOT_MAIL_MAX", None)
+        os.environ.pop("YOU_GOT_MAIL_FETCH", None)
+
+    def test_merged_next_page_follows_unread_total(self) -> None:
+        accounts = [_account("gmail", "gmail", "Gmail")]
+        rows = [message(f"m{i}", 1000 - i) for i in range(25)]
+
+        def run(acc: dict, args: list[str]) -> dict:
+            self.assertIn("--limit", args)
+            return {"ok": True, "unread": 100, "messages": rows, "searchUrl": "https://mail.google.com"}
+
+        with patch.object(orchestrate, "load_accounts", return_value=accounts), patch.object(
+            orchestrate, "_run_provider", side_effect=run
+        ):
+            payload = capture_json(orchestrate.cmd_list, "")
+        self.assertTrue(payload["ok"])
+        self.assertEqual(payload["unread"], 100)
+        self.assertEqual(len(payload["messages"]), 25)
+        self.assertEqual(payload["nextPage"], "25")
+
+    def test_second_page_fetches_offset_plus_page_size(self) -> None:
+        accounts = [_account("gmail", "gmail", "Gmail")]
+        seen = {}
+
+        def run(acc: dict, args: list[str]) -> dict:
+            limit = int(args[args.index("--limit") + 1])
+            seen["limit"] = limit
+            rows = [message(f"m{i}", 2000 - i) for i in range(limit)]
+            return {"ok": True, "unread": 80, "messages": rows}
+
+        with patch.object(orchestrate, "load_accounts", return_value=accounts), patch.object(
+            orchestrate, "_run_provider", side_effect=run
+        ):
+            payload = capture_json(orchestrate.cmd_list, "25")
+        self.assertEqual(seen["limit"], 50)
+        self.assertEqual(payload["thisPage"], "25")
+        self.assertEqual(payload["messages"][0]["id"].startswith("gmail:"), True)
+        self.assertEqual(len(payload["messages"]), 25)
+        self.assertEqual(payload["nextPage"], "50")
+
+    def test_multi_account_newest_first(self) -> None:
+        accounts = [
+            _account("a", "gmail", "Gmail"),
+            _account("b", "outlook", "Outlook"),
+        ]
+
+        def run(acc: dict, args: list[str]) -> dict:
+            limit = int(args[args.index("--limit") + 1])
+            if acc["id"] == "a":
+                rows = [message(f"a{i}", 100 - i) for i in range(limit)]
+                return {"ok": True, "unread": 40, "messages": rows}
+            rows = [message(f"b{i}", 500 - i) for i in range(limit)]
+            return {"ok": True, "unread": 40, "messages": rows}
+
+        with patch.object(orchestrate, "load_accounts", return_value=accounts), patch.object(
+            orchestrate, "_run_provider", side_effect=run
+        ):
+            payload = capture_json(orchestrate.cmd_list, "")
+        self.assertEqual(payload["unread"], 80)
+        self.assertEqual(payload["accountCount"], 2)
+        first_ids = [m["id"].split(":")[0] for m in payload["messages"]]
+        self.assertTrue(all(acc == "b" for acc in first_ids))
+        self.assertEqual(payload["nextPage"], "25")
+
+    def test_no_empty_page_past_fetch_cap(self) -> None:
+        os.environ["YOU_GOT_MAIL_MAX"] = "50"
+        accounts = [_account("gmail", "gmail", "Gmail")]
+
+        def run(acc: dict, args: list[str]) -> dict:
+            limit = int(args[args.index("--limit") + 1])
+            rows = [message(f"m{i}", 3000 - i) for i in range(limit)]
+            return {"ok": True, "unread": 1000, "messages": rows}
+
+        with patch.object(orchestrate, "load_accounts", return_value=accounts), patch.object(
+            orchestrate, "_run_provider", side_effect=run
+        ):
+            payload = capture_json(orchestrate.cmd_list, "150")
+        self.assertEqual(len(payload["messages"]), 50)
+        self.assertEqual(payload["nextPage"], "")
+
+    def test_partial_failure_sets_warning(self) -> None:
+        accounts = [
+            _account("a", "gmail", "Gmail"),
+            _account("b", "hey", "HEY"),
+        ]
+
+        def run(acc: dict, args: list[str]) -> dict:
+            if acc["id"] == "b":
+                return {"ok": False, "error": "b failed"}
+            return {
+                "ok": True,
+                "unread": 2,
+                "messages": [message("1", 1), message("2", 2)],
+                "searchUrl": "https://mail.google.com",
+            }
+
+        with patch.object(orchestrate, "load_accounts", return_value=accounts), patch.object(
+            orchestrate, "_run_provider", side_effect=run
+        ):
+            payload = capture_json(orchestrate.cmd_list, "")
+        self.assertTrue(payload["ok"])
+        self.assertEqual(payload["accountCount"], 2)
+        self.assertEqual(payload["unread"], 2)
+        self.assertEqual(payload["warning"], "b failed")
+        self.assertEqual(len(payload["messages"]), 2)
+
+
+if __name__ == "__main__":
+    unittest.main()

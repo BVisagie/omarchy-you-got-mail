@@ -16,13 +16,17 @@ from common import die
 from orchestrate import cmd_list, cmd_read
 
 HELP = """\
-you-got-mail list [--page OFFSET]
+you-got-mail list [--page OFFSET] [--limit N]
 you-got-mail read <id>
 you-got-mail accounts ...
 
 The panel calls list and read. Accounts are added in a terminal:
 
   you-got-mail accounts add
+
+--limit is the panel page size (1–50). The CLI also honours
+YOU_GOT_MAIL_MAX. Providers may be asked for more rows so merged
+pages stay complete.
 
 """ + ACCOUNTS_USAGE
 

@@ -19,7 +19,7 @@ import sys
 from datetime import datetime
 
 import _bootstrap
-from common import die, emit, max_messages
+from common import die, emit, one_line
 
 HEY_WEB = "https://app.hey.com"
 
@@ -167,44 +167,93 @@ def _split_local_id(local_id: str) -> tuple[str, str]:
     return local_id, ""
 
 
+def _next_page(payload: dict, box: dict) -> str:
+    meta = payload.get("meta") if isinstance(payload.get("meta"), dict) else {}
+    for source in (box, payload, meta):
+        if not isinstance(source, dict):
+            continue
+        for key in ("next_page", "nextPage"):
+            value = str(source.get(key) or "").strip()
+            if value:
+                return value
+    return ""
+
+
+def _envelope_unread(payload: dict, box: dict) -> int | None:
+    meta = payload.get("meta") if isinstance(payload.get("meta"), dict) else {}
+    for source in (box, payload, meta):
+        if not isinstance(source, dict):
+            continue
+        for key in ("unseen_count", "unseenCount", "new_count", "newCount"):
+            raw = source.get(key)
+            if raw is None:
+                continue
+            try:
+                return max(0, int(raw))
+            except (TypeError, ValueError):
+                continue
+    return None
+
+
 def cmd_list(acc: dict, limit: int) -> None:
-    args = ["box", "imbox", *_account_flag(acc), "--limit", str(limit)]
-    payload = _hey(acc, args)
-    box = _data(payload)
-    search_url = str(box.get("app_url") or HEY_WEB)
-    if search_url.startswith("/"):
-        search_url = HEY_WEB + search_url
-    unseen = []
-    for item in box.get("postings") or []:
-        if not isinstance(item, dict) or item.get("seen") is True:
-            continue
-        posting_id = _local_id(item)
-        if not posting_id:
-            continue
-        unseen.append(
-            {
-                "id": posting_id,
-                "threadId": str(item.get("topic_id") or item.get("id") or posting_id),
-                "subject": item.get("name") or "(no subject)",
-                "from": _from(item),
-                "snippet": (item.get("summary") or "").strip(),
-                "ts": _ts(
-                    str(
-                        item.get("active_at")
-                        or item.get("updated_at")
-                        or item.get("created_at")
-                        or ""
-                    )
-                ),
-                "labels": ["Imbox"],
-                "url": _url(item),
-            }
-        )
+    unseen: list[dict] = []
+    unread = 0
+    search_url = HEY_WEB
+    page = ""
+    counted_from_envelope = None
+    for _ in range(20):
+        args = ["box", "imbox", *_account_flag(acc), "--limit", str(max(limit, 50))]
+        if page:
+            args.extend(["--page", page])
+        payload = _hey(acc, args)
+        box = _data(payload)
+        raw_url = str(box.get("app_url") or search_url)
+        if raw_url.startswith("/"):
+            raw_url = HEY_WEB + raw_url
+        if raw_url.startswith("https://"):
+            search_url = raw_url
+        if counted_from_envelope is None:
+            counted_from_envelope = _envelope_unread(payload, box)
+        for item in box.get("postings") or []:
+            if not isinstance(item, dict) or item.get("seen") is True:
+                continue
+            posting_id = _local_id(item)
+            if not posting_id:
+                continue
+            unread += 1
+            if len(unseen) >= limit:
+                continue
+            unseen.append(
+                {
+                    "id": posting_id,
+                    "threadId": str(item.get("topic_id") or item.get("id") or posting_id),
+                    "subject": one_line(item.get("name") or "") or "(no subject)",
+                    "from": one_line(_from(item)),
+                    "snippet": one_line(item.get("summary") or ""),
+                    "ts": _ts(
+                        str(
+                            item.get("active_at")
+                            or item.get("updated_at")
+                            or item.get("created_at")
+                            or ""
+                        )
+                    ),
+                    "labels": ["Imbox"],
+                    "url": _url(item),
+                }
+            )
+        page = _next_page(payload, box)
+        if not page:
+            break
+        if counted_from_envelope is not None and len(unseen) >= limit:
+            break
+    if counted_from_envelope is not None:
+        unread = max(counted_from_envelope, unread)
     emit(
         {
             "ok": True,
             "email": str(acc.get("email") or acc.get("label") or "HEY"),
-            "unread": len(unseen),
+            "unread": unread,
             "searchUrl": search_url if search_url.startswith("https://") else HEY_WEB,
             "messages": unseen[:limit],
         }
@@ -223,12 +272,7 @@ def cmd_read(acc: dict, local_id: str) -> None:
 def main() -> None:
     acc = _bootstrap.account()
     cmd, rest, flags = _bootstrap.parse_args(sys.argv[1:])
-    limit = max_messages()
-    if flags.get("limit"):
-        try:
-            limit = max(1, min(50, int(flags["limit"])))
-        except ValueError:
-            pass
+    limit = _bootstrap.list_limit(flags)
     if cmd == "list":
         cmd_list(acc, limit)
         return
@@ -241,4 +285,4 @@ def main() -> None:
 
 
 if __name__ == "__main__":
-    main()
+    _bootstrap.run(main)
