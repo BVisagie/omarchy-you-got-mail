@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "id": "bvisagie.you-got-mail",
   "name": "You've Got Mail",
-  "version": "2.2.3",
+  "version": "2.2.4",
   "author": "BVisagie",
   "description": "Unread mail only. Click a message to open it.",
   "homepage": "https://github.com/BVisagie/omarchy-you-got-mail",

@@ -73,6 +73,14 @@ Panel {
     return /^https:\/\/[A-Za-z0-9.-]+(?::\d+)?(?:[/?#][^\s]*)?$/.test(String(url))
   }
 
+  function openBrowser(url) {
+    if (!validUrl(url)) return false
+    // The bar process is not a login shell; bare xdg-open is silent.
+    // omarchy-launch-browser runs the default browser via uwsm.
+    Util.execArgv(["omarchy-launch-browser", url])
+    return true
+  }
+
   function refresh() {
     if (listProc.running) return
     var argv = [root.script, "list"]
@@ -145,8 +153,7 @@ Panel {
     if (!message || !validId(message.id)) return
     var url = message.url || ""
     if (url !== "") {
-      if (!validUrl(url)) return
-      Quickshell.execDetached(["xdg-open", url])
+      if (!openBrowser(url)) return
     }
     dismissLocal(message.id)
     pendingId = message.id
@@ -159,7 +166,7 @@ Panel {
     var urls = openableInboxUrls()
     if (urls.length === 0) return
     for (var i = 0; i < urls.length; i++)
-      Quickshell.execDetached(["xdg-open", urls[i]])
+      openBrowser(urls[i])
     close()
   }
 
