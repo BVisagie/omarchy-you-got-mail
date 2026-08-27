@@ -74,10 +74,11 @@ return one JSON object. `_bootstrap.run(main)` is the last-resort wrap.
 - `url` must be `https://…` or empty. The panel rejects anything else.
   Empty is allowed (IMAP without webmail).
 - `unread` is the mailbox total (folder counts, JMAP `calculateTotal`,
-  Gmail `resultSizeEstimate`, HEY envelope `unseen_count`, or extra
-  unseen pages), not just `len(messages)`. If the API only offers an
-  estimate, document that. The merged pile pages at most 200 newest
-  messages even when `unread` is larger.
+  Gmail matching-id count, HEY envelope `unseen_count`, or extra unseen
+  pages), not just `len(messages)`. Do not use Gmail
+  `resultSizeEstimate` as the badge: it is a coarse bucket (often 201).
+  The merged pile pages at most 200 newest messages even when `unread`
+  is larger.
 - `subject`, `from`, and `snippet` must be **one line**. Call
   `one_line()` in `lib/common.py` (or the Gmail `entity` filter) so
   carriage returns from Graph `bodyPreview` and HTML entities do not

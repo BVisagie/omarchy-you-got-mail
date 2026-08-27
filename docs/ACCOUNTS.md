@@ -308,7 +308,7 @@ zero unread, and IMAP accounts with no webmail URL, are skipped.
 | Outlook IMAP login fails for `@outlook.com` | Password IMAP is retired | Use Graph. |
 | `hey-cli not found` / `gws: command not found` | Binary not on the bar’s PATH | Install into `~/.local/bin`, mise shims, or `~/.bun/bin`; middle-click the icon to retry. |
 | Google **Access blocked / access_denied** | Unverified OAuth client | Add yourself as a test user, or use `-s gmail` only. |
-| Badge in the hundreds, Gmail web shows 2 | The other Gmail bar plugin, or raw `UNREAD` | Disable `jankeesvw.gmail-inbox` if it is still on the bar. This plugin counts Inbox + your labels, not Trash. |
+| Badge in the hundreds, Gmail web shows 2 | The other Gmail bar plugin, raw `UNREAD`, or an old build using Gmail's `resultSizeEstimate` (often 201) | Disable `jankeesvw.gmail-inbox` if it is still on the bar. This plugin counts Inbox + your labels, not Trash. Update if the badge is stuck on 201. |
 | Added Outlook and Gmail disappeared | `accounts.json` created without Gmail | Current builds keep Gmail. If an older build already dropped it: `$PLUGIN accounts add gmail`. |
 | HEY lists nothing | Looking at Feed / Paper Trail | Only Imbox unseen is unread. Confirm `hey box imbox --json`. |
 | Outlook signed in but rows wrap into a wall of text | Old plugin build | Update: Graph `bodyPreview` has line breaks; current builds flatten them. |

@@ -127,18 +127,22 @@ message_url() {
   fi
 }
 
-unread_estimate() {
-  local page="$1" listed="$2" estimate
-  estimate="$(printf '%s' "$page" | jq -r '.resultSizeEstimate // empty' 2>/dev/null)"
-  case "$estimate" in
+# Gmail's size estimate is a coarse bucket (often 201) and is not a
+# mailbox total. When the display page already holds every match, `listed`
+# is exact. Otherwise count ids with one extra list (API max 500).
+unread_total() {
+  local listed="$1" next="$2" token="$3" page ids
+  if [ -z "$token" ] && [ -z "$next" ]; then
+    printf '%s' "$listed"
+    return 0
+  fi
+  page="$(gws_gmail users messages list --params "$(
+    jq -nc --arg q "$QUERY" --argjson n 500 \
+      '{userId:"me",q:$q,maxResults:$n}')")"
+  ids="$(printf '%s' "$page" | jq '[.messages[]?.id | select(test("^[0-9a-f]{1,32}$"))] | length' 2>/dev/null)"
+  case "$ids" in
     ''|*[!0-9]*) printf '%s' "$listed" ;;
-    *)
-      if [ "$estimate" -ge "$listed" ]; then
-        printf '%s' "$estimate"
-      else
-        printf '%s' "$listed"
-      fi
-      ;;
+    *) printf '%s' "$ids" ;;
   esac
 }
 
@@ -297,11 +301,7 @@ cmd_list() {
   case "$next" in *[!A-Za-z0-9_-]*) next="" ;; esac
 
   listed="$(printf '%s' "$ids" | jq 'length')"
-  if [ -z "$token" ] && [ -z "$next" ]; then
-    unread="$listed"
-  else
-    unread="$(unread_estimate "$page" "$listed")"
-  fi
+  unread="$(unread_total "$listed" "$next" "$token")"
   email="$(account_email)" || email=""
 
   ensure_json_object "$CACHE_FILE"

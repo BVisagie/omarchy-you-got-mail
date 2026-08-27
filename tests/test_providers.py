@@ -115,13 +115,15 @@ class OutlookUnreadTests(unittest.TestCase):
 
 
 class GmailScriptTests(unittest.TestCase):
-    def test_uses_estimate_not_full_scan(self) -> None:
+    def test_counts_matching_ids_not_size_estimate(self) -> None:
         from support import ROOT
 
         script = (ROOT / "providers" / "gmail").read_text(encoding="utf-8")
-        self.assertIn("resultSizeEstimate", script)
-        self.assertIn("unread_estimate", script)
-        self.assertNotIn("maxResults:500", script)
+        self.assertIn("unread_total", script)
+        self.assertNotIn("unread_estimate", script)
+        self.assertNotIn("resultSizeEstimate", script)
+        # Display pages stay small; a 500-wide list is only the count path.
+        self.assertIn('--argjson n 500', script)
 
 
 if __name__ == "__main__":

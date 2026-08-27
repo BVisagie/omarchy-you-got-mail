@@ -10,7 +10,8 @@ are no longer papered over by a single page of rows.
 - Fetch enough provider rows for the requested merged offset (capped at
   200) instead of truncating each account to one page.
 - Outlook unread uses folder `unreadItemCount`; HEY uses envelope
-  `unseen_count` or extra unseen pages; Gmail uses `resultSizeEstimate`.
+  `unseen_count` or extra unseen pages; Gmail counts matching message
+  ids (Gmail's `resultSizeEstimate` is a coarse bucket, often 201).
 - Surface a partial-failure warning when some accounts succeed.
 - Fastmail `read` fails unless the id is in `updated` and not in
   `notUpdated`.
