@@ -1,0 +1,244 @@
+#!/usr/bin/env python3
+"""HEY provider, via https://github.com/basecamp/hey-cli.
+
+Auth lives in hey-cli (`hey auth login`). Unseen Imbox threads are the
+unread pile — HEY's Feed, Paper Trail, and Screener are not treated as
+unread. Same command surface as the official Omarchy HEY plugin:
+
+  hey box imbox --account all --limit N --json
+  hey seen <posting-id> --json
+"""
+
+from __future__ import annotations
+
+import json
+import os
+import shutil
+import subprocess
+import sys
+from datetime import datetime
+
+import _bootstrap
+from common import die, emit, max_messages
+
+HEY_WEB = "https://app.hey.com"
+
+
+def _hey_env(acc: dict) -> dict:
+    env = os.environ.copy()
+    env["HEY_NONINTERACTIVE"] = "1"
+    env["NO_COLOR"] = "1"
+    extra = [
+        os.path.expanduser("~/.local/share/mise/shims"),
+        os.path.expanduser("~/.local/bin"),
+        os.path.expanduser("~/.bun/bin"),
+    ]
+    path = env.get("PATH", "")
+    for d in extra:
+        if os.path.isdir(d) and d not in path.split(":"):
+            path = f"{path}:{d}"
+    env["PATH"] = path
+    hey_acc = str(acc.get("hey_account") or os.environ.get("HEY_ACCOUNT_ID") or "")
+    if hey_acc:
+        env["HEY_ACCOUNT_ID"] = hey_acc
+    return env
+
+
+def _account_flag(acc: dict, extra: str = "") -> list[str]:
+    hey_acc = str(extra or acc.get("hey_account") or "").strip()
+    if hey_acc:
+        return ["--account", hey_acc]
+    return ["--account", "all"]
+
+
+def _hey(acc: dict, args: list[str], timeout: int = 40) -> dict:
+    env = _hey_env(acc)
+    if not shutil.which("hey", path=env.get("PATH")):
+        die(
+            "hey-cli not found. Install with: omarchy-mise-install github:basecamp/hey-cli hey"
+        )
+    cmd = ["hey", *args, "--json"]
+    try:
+        proc = subprocess.run(
+            cmd,
+            capture_output=True,
+            text=True,
+            env=env,
+            timeout=timeout,
+            check=False,
+        )
+    except subprocess.TimeoutExpired:
+        die("hey timed out")
+    stdout = (proc.stdout or "").strip()
+    stderr = (proc.stderr or "").strip()
+    payload = _parse_json(stdout) or _parse_json(stderr)
+    if isinstance(payload, dict) and payload.get("ok") is False:
+        _die_hey_error(payload, proc.returncode)
+    if proc.returncode != 0 or not isinstance(payload, dict):
+        _die_hey_failure(stdout, stderr, proc.returncode)
+    return payload
+
+
+def _parse_json(text: str) -> dict | None:
+    if not text:
+        return None
+    for candidate in (text, text.splitlines()[-1]):
+        try:
+            payload = json.loads(candidate)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(payload, dict):
+            return payload
+    return None
+
+
+def _die_hey_error(payload: dict, returncode: int) -> None:
+    code = str(payload.get("code") or "")
+    msg = str(payload.get("error") or payload.get("message") or "hey failed")
+    if (
+        returncode == 3
+        or code in ("auth", "auth_required")
+        or "not logged in" in msg.lower()
+    ):
+        die("HEY is not signed in; run: hey auth login")
+    die(msg)
+
+
+def _die_hey_failure(stdout: str, stderr: str, returncode: int) -> None:
+    err = stderr or stdout
+    if returncode == 3 or "not logged in" in err.lower():
+        die("HEY is not signed in; run: hey auth login")
+    die(err or "hey returned no output")
+
+
+def _data(payload: dict) -> dict:
+    data = payload.get("data")
+    return data if isinstance(data, dict) else payload
+
+
+def _ts(value: str) -> int:
+    if not value:
+        return 0
+    try:
+        return int(datetime.fromisoformat(value.replace("Z", "+00:00")).timestamp())
+    except ValueError:
+        return 0
+
+
+def _from(posting: dict) -> str:
+    alt = str(posting.get("alternative_sender_name") or "").strip()
+    if alt:
+        return alt
+    creator = posting.get("creator")
+    if isinstance(creator, dict):
+        name = str(creator.get("name") or creator.get("email_address") or "").strip()
+        if name:
+            return name
+    contacts = posting.get("contacts") or []
+    if contacts and isinstance(contacts[0], dict):
+        return str(contacts[0].get("name") or contacts[0].get("email") or "")
+    return ""
+
+
+def _url(posting: dict) -> str:
+    raw = str(posting.get("app_url") or posting.get("url") or "").strip()
+    if raw.startswith("https://app.hey.com"):
+        return raw
+    if raw.startswith("/"):
+        return HEY_WEB + raw
+    topic = posting.get("topic_id")
+    if topic:
+        return f"{HEY_WEB}/topics/{topic}"
+    return HEY_WEB
+
+
+def _local_id(posting: dict) -> str:
+    posting_id = str(posting.get("id") or "").strip()
+    account_id = str(posting.get("account_id") or "").strip()
+    if posting_id and account_id:
+        return f"{posting_id}+{account_id}"
+    return posting_id
+
+
+def _split_local_id(local_id: str) -> tuple[str, str]:
+    if "+" in local_id:
+        posting_id, account_id = local_id.split("+", 1)
+        return posting_id, account_id
+    return local_id, ""
+
+
+def cmd_list(acc: dict, limit: int) -> None:
+    args = ["box", "imbox", *_account_flag(acc), "--limit", str(limit)]
+    payload = _hey(acc, args)
+    box = _data(payload)
+    search_url = str(box.get("app_url") or HEY_WEB)
+    if search_url.startswith("/"):
+        search_url = HEY_WEB + search_url
+    unseen = []
+    for item in box.get("postings") or []:
+        if not isinstance(item, dict) or item.get("seen") is True:
+            continue
+        posting_id = _local_id(item)
+        if not posting_id:
+            continue
+        unseen.append(
+            {
+                "id": posting_id,
+                "threadId": str(item.get("topic_id") or item.get("id") or posting_id),
+                "subject": item.get("name") or "(no subject)",
+                "from": _from(item),
+                "snippet": (item.get("summary") or "").strip(),
+                "ts": _ts(
+                    str(
+                        item.get("active_at")
+                        or item.get("updated_at")
+                        or item.get("created_at")
+                        or ""
+                    )
+                ),
+                "labels": ["Imbox"],
+                "url": _url(item),
+            }
+        )
+    emit(
+        {
+            "ok": True,
+            "email": str(acc.get("email") or acc.get("label") or "HEY"),
+            "unread": len(unseen),
+            "searchUrl": search_url if search_url.startswith("https://") else HEY_WEB,
+            "messages": unseen[:limit],
+        }
+    )
+
+
+def cmd_read(acc: dict, local_id: str) -> None:
+    posting_id, account_id = _split_local_id(local_id)
+    if not posting_id:
+        die("usage: hey read <id>")
+    args = ["seen", posting_id, *_account_flag(acc, account_id)]
+    _hey(acc, args)
+    emit({"ok": True})
+
+
+def main() -> None:
+    acc = _bootstrap.account()
+    cmd, rest, flags = _bootstrap.parse_args(sys.argv[1:])
+    limit = max_messages()
+    if flags.get("limit"):
+        try:
+            limit = max(1, min(50, int(flags["limit"])))
+        except ValueError:
+            pass
+    if cmd == "list":
+        cmd_list(acc, limit)
+        return
+    if cmd == "read":
+        if not rest:
+            die("usage: hey read <id>")
+        cmd_read(acc, rest[0])
+        return
+    die("unknown command")
+
+
+if __name__ == "__main__":
+    main()

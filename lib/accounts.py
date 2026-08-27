@@ -24,7 +24,7 @@ def fail(message: str) -> None:
 USAGE = """\
 you-got-mail accounts
 you-got-mail accounts list
-you-got-mail accounts add [gmail|outlook|fastmail|imap]
+you-got-mail accounts add [gmail|outlook|fastmail|imap|hey]
 you-got-mail accounts remove <id>
 
 Accounts live in ~/.config/omarchy-you-got-mail/accounts.json.
@@ -90,6 +90,25 @@ def _add_gmail(accounts: list[dict], acc_id: str, label: str) -> dict:
         "  gws auth status\n"
     )
     return {"id": acc_id, "provider": "gmail", "label": label}
+
+
+def _add_hey(accounts: list[dict], acc_id: str, label: str) -> dict:
+    sys.stderr.write(
+        "HEY uses hey-cli (https://github.com/basecamp/hey-cli). Install and\n"
+        "sign in once; the plugin never sees a HEY token:\n"
+        "  omarchy-mise-install github:basecamp/hey-cli hey\n"
+        "  hey auth login\n"
+        "Unread is unseen mail in the Imbox. Feed, Paper Trail, and the\n"
+        "Screener are not part of this pile.\n"
+    )
+    email = _ask("HEY email (optional, shown in the panel)", "")
+    hey_acc = _ask("Linked account id (blank = all linked accounts)", "")
+    acc = {"id": acc_id, "provider": "hey", "label": label}
+    if email:
+        acc["email"] = email
+    if hey_acc:
+        acc["hey_account"] = hey_acc
+    return acc
 
 
 def _add_fastmail(accounts: list[dict], acc_id: str, label: str) -> dict:
@@ -181,7 +200,7 @@ def cmd_add(provider: str | None) -> None:
         fail("accounts add needs a terminal; or edit accounts.json as in docs/ACCOUNTS.md")
     accounts = load_accounts() if ACCOUNTS_FILE.is_file() else []
     if provider is None:
-        provider = _ask("Provider (gmail, outlook, fastmail, imap)").lower().strip()
+        provider = _ask("Provider (gmail, outlook, fastmail, imap, hey)").lower().strip()
     if provider not in PROVIDERS:
         fail(f"unknown provider '{provider}'. Choose: {', '.join(PROVIDERS)}")
     acc_id = _ask("Short id (letters, numbers, hyphen)", provider)
@@ -191,12 +210,16 @@ def cmd_add(provider: str | None) -> None:
     label = _ask("Label in the panel", acc_id)
     if provider == "gmail":
         acc = _add_gmail(accounts, acc_id, label)
+    elif provider == "hey":
+        acc = _add_hey(accounts, acc_id, label)
     elif provider == "fastmail":
         acc = _add_fastmail(accounts, acc_id, label)
     elif provider == "imap":
         acc = _add_imap(accounts, acc_id, label)
-    else:
+    elif provider == "outlook":
         acc = _add_outlook(accounts, acc_id, label)
+    else:
+        fail(f"unknown provider '{provider}'")
     accounts.append(acc)
     save_accounts(accounts)
     sys.stdout.write(f"Added {acc_id} ({provider}). The panel picks it up on the next refresh.\n")

@@ -3,7 +3,7 @@
 A provider is an executable in `providers/<name>`. The panel never talks to
 it directly. `bin/you-got-mail` calls it.
 
-Supported names today: `gmail`, `outlook`, `fastmail`, `imap`.
+Supported names today: `gmail`, `outlook`, `fastmail`, `imap`, `hey`.
 
 ## Commands
 

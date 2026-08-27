@@ -7,9 +7,9 @@ import qs.Ui
 
 // You've Got Mail: unread only. Click a row to open that message.
 //
-// Data comes from `bin/you-got-mail`. The script talks to a provider (Gmail
-// in v1); this file only draws the pile and opens the URL the provider
-// already built. No token is handled here.
+// Data comes from `bin/you-got-mail`. The script talks to a provider; this
+// file only draws the pile and opens the URL the provider already built.
+// No token is handled here.
 //
 // Every string below the header comes from a mail someone else wrote, so each
 // Text carries `textFormat: Text.PlainText`.

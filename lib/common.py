@@ -15,7 +15,7 @@ ACCOUNTS_FILE = CONFIG_DIR / "accounts.json"
 SECRETS_DIR = CONFIG_DIR / "secrets"
 
 ACCOUNT_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,31}$")
-PROVIDERS = ("gmail", "outlook", "fastmail", "imap")
+PROVIDERS = ("gmail", "outlook", "fastmail", "imap", "hey")
 
 
 def die(message: str, code: int = 0) -> None:

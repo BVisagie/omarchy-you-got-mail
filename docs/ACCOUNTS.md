@@ -7,6 +7,7 @@ The panel does not change: unread only, click to open.
 you-got-mail accounts           # list
 you-got-mail accounts add       # interactive
 you-got-mail accounts add gmail
+you-got-mail accounts add hey
 you-got-mail accounts add outlook
 you-got-mail accounts add fastmail
 you-got-mail accounts add imap
@@ -44,6 +45,29 @@ you-got-mail accounts add gmail
 
 Unread is Inbox plus your own labels (skip-inbox included), not Promotions
 sitting in All Mail or Trash.
+
+## HEY
+
+HEY has no IMAP and no public API. The plugin talks to it through
+[hey-cli](https://github.com/basecamp/hey-cli), the same engine the
+official Omarchy HEY bar plugin uses. The plugin never sees a HEY token.
+
+```bash
+omarchy-mise-install github:basecamp/hey-cli hey
+hey auth login
+you-got-mail accounts add hey
+```
+
+Leave **linked account id** blank unless you want one mailbox of a
+multi-account HEY login. Blank means every linked account.
+
+Unread is **unseen mail in the Imbox**. The Feed, Paper Trail, and the
+Screener are not part of this pile — they are not HEY's "needs your
+attention" box. Clicking a row opens the thread on
+[app.hey.com](https://app.hey.com) and marks that posting seen.
+
+This is not a replacement for [37signals.hey](https://github.com/basecamp/omarchy-hey-plugin).
+You can run both; they share hey-cli's login.
 
 ## Fastmail
 
@@ -109,6 +133,7 @@ leave webmail empty, click still marks the message read.
 {
   "accounts": [
     { "id": "gmail", "provider": "gmail", "label": "Gmail" },
+    { "id": "hey", "provider": "hey", "label": "HEY" },
     {
       "id": "fastmail",
       "provider": "fastmail",

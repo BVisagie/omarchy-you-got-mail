@@ -4,7 +4,7 @@ An Omarchy bar widget for **unread mail only**. One pile, across every
 account you add. Click a row to open that message in the browser. Read
 mail is never listed.
 
-Gmail, Outlook, Fastmail, and generic IMAP are built in. Adding another
+Gmail, Outlook, Fastmail, generic IMAP, and HEY are built in. Adding another
 provider is documented in [docs/PROVIDERS.md](docs/PROVIDERS.md).
 
 ## Requirements
@@ -12,6 +12,7 @@ provider is documented in [docs/PROVIDERS.md](docs/PROVIDERS.md).
 - [Omarchy](https://omarchy.org/)
 - `python3`, `jq`
 - For Gmail: [Google Workspace CLI][gws] (`gws auth login -s gmail`)
+- For HEY: [hey-cli][hey-cli] (`hey auth login`)
 
 ## Install
 
@@ -26,13 +27,14 @@ omarchy bar move bvisagie.you-got-mail --section right
 PLUGIN=~/.config/omarchy/plugins/bvisagie.you-got-mail/bin/you-got-mail
 
 $PLUGIN accounts add gmail
+$PLUGIN accounts add hey
 $PLUGIN accounts add fastmail
 $PLUGIN accounts add outlook
 $PLUGIN accounts add imap
 $PLUGIN accounts
 ```
 
-Full setup for each provider (Azure app, Fastmail token, IMAP app
+Full setup for each provider (Azure app, HEY CLI, Fastmail token, IMAP app
 password, file layout) is in [docs/ACCOUNTS.md](docs/ACCOUNTS.md).
 
 If you never add an account, a single Gmail account is assumed.
@@ -71,10 +73,12 @@ omarchy plugin remove bvisagie.you-got-mail
 
 That does not delete `~/.config/omarchy-you-got-mail/` (accounts and
 secrets) or `~/.cache/omarchy-you-got-mail/`. Remove those yourself if
-the machine is changing hands. Gmail sign-out is `gws auth logout`.
+the machine is changing hands. Gmail sign-out is `gws auth logout`. HEY
+sign-out is `hey auth logout`.
 
 ## License
 
 MIT
 
 [gws]: https://github.com/googleworkspace/cli
+[hey-cli]: https://github.com/basecamp/hey-cli
