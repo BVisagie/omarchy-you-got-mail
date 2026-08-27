@@ -86,7 +86,8 @@ def cmd_list() -> None:
 def _add_gmail(accounts: list[dict], acc_id: str, label: str) -> dict:
     sys.stderr.write(
         "Gmail uses the Google Workspace CLI. Authenticate once with:\n"
-        "  gws auth login -s gmail\n"
+        "  gws auth setup   # or save a Desktop OAuth client as ~/.config/gws/client_secret.json\n"
+        "  GOOGLE_WORKSPACE_CLI_KEYRING_BACKEND=file gws auth login -s gmail\n"
         "  gws auth status\n"
     )
     return {"id": acc_id, "provider": "gmail", "label": label}

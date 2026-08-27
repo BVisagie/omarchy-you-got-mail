@@ -27,7 +27,10 @@ Sample mail only — not a real inbox.
 
 - [Omarchy](https://omarchy.org/) 4.0 or later (plugin `schemaVersion` 1)
 - `python3` (and `jq` for the Gmail provider)
-- **Gmail:** [Google Workspace CLI][gws] — `gws auth login -s gmail`
+- **Gmail:** [Google Workspace CLI][gws] — `gws auth setup` (or a Desktop
+  OAuth client JSON), then
+  `GOOGLE_WORKSPACE_CLI_KEYRING_BACKEND=file gws auth login -s gmail`.
+  Full steps in [docs/ACCOUNTS.md](docs/ACCOUNTS.md#gmail).
 - **HEY:** [hey-cli][hey-cli] — `hey auth login`
 - **Outlook:** a Microsoft Graph app registration *you* own. Personal
   `outlook.com` mailboxes cannot use IMAP. Creating the Azure directory
@@ -46,9 +49,9 @@ omarchy plugin add https://github.com/BVisagie/omarchy-you-got-mail.git --enable
 omarchy bar move bvisagie.you-got-mail --section right
 ```
 
-The GitHub repository must be public for that HTTPS URL to work for
-other people. Review the checkout before enabling if you did not pass
-`--enable`.
+No sudo or pkexec is required. Omarchy clones the repo, validates the
+manifest, and enables the widget. Review the checkout before enabling if
+you did not pass `--enable`.
 
 ## Update
 

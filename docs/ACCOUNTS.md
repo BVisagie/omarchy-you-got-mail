@@ -75,10 +75,28 @@ $PLUGIN accounts remove gmail
 ## Gmail
 
 Uses the [Google Workspace CLI](https://github.com/googleworkspace/cli).
-The plugin never sees a Google token.
+The plugin never sees a Google token. Current `gws` will not log in until
+an OAuth client exists; this plugin does not ship one.
+
+Install `gws` somewhere the plugin already searches (`~/.local/bin`,
+mise shims, or `~/.bun/bin`):
 
 ```bash
-gws auth login -s gmail
+omarchy-mise-install npm:@googleworkspace/cli gws gws
+```
+
+**1. OAuth client** — pick one:
+
+- With [`gcloud`](https://cloud.google.com/sdk/docs/install): `gws auth setup`
+- Without gcloud: Google Cloud Console → create a project → OAuth consent
+  screen (External, testing is fine) → add yourself as a **test user** →
+  Credentials → **Desktop app** → save the JSON as
+  `~/.config/gws/client_secret.json`
+
+**2. Login** — `file` so the bar (not a login shell) can read the token:
+
+```bash
+GOOGLE_WORKSPACE_CLI_KEYRING_BACKEND=file gws auth login -s gmail
 gws auth status
 $PLUGIN accounts add gmail
 ```
@@ -90,13 +108,10 @@ scope set often fails Google’s unverified-app limit.
 not Gmail’s raw `UNREAD` dump: that also counts Trash and archived
 Promotions/Updates that the web UI does not show as unread.
 
-The bar is not a login shell. Install `gws` somewhere the plugin already
-searches (`~/.local/bin` or `~/.local/share/mise/shims`).
-
 If Google shows **Access blocked / 403 access_denied**, the OAuth client
-is in testing: add your Google account as a test user on that client, or
-finish Google’s verification. `gws` documents that flow; this plugin does
-not ship a Google client id.
+is in testing and your account is not a test user, or you requested too
+many scopes. Add yourself as a test user, or keep `-s gmail`. `gws`
+documents that flow.
 
 ## HEY
 
@@ -307,7 +322,8 @@ zero unread, and IMAP accounts with no webmail URL, are skipped.
 | Azure wants a credit card | Identity check for a free directory | Normal. App registration is free. Do not provision paid resources. |
 | Outlook IMAP login fails for `@outlook.com` | Password IMAP is retired | Use Graph. |
 | `hey-cli not found` / `gws: command not found` | Binary not on the bar’s PATH | Install into `~/.local/bin`, mise shims, or `~/.bun/bin`; middle-click the icon to retry. |
-| Google **Access blocked / access_denied** | Unverified OAuth client | Add yourself as a test user, or use `-s gmail` only. |
+| `No OAuth client configured` | Current `gws` needs a Desktop OAuth client | `gws auth setup` (needs gcloud) or save a Desktop client JSON as `~/.config/gws/client_secret.json`, then `GOOGLE_WORKSPACE_CLI_KEYRING_BACKEND=file gws auth login -s gmail`. |
+| Google **Access blocked / access_denied** | Unverified OAuth client, or missing test user | Add yourself as a test user, or use `-s gmail` only. |
 | Badge in the hundreds, Gmail web shows 2 | The other Gmail bar plugin, raw `UNREAD`, or an old build using Gmail's `resultSizeEstimate` (often 201) | Disable `jankeesvw.gmail-inbox` if it is still on the bar. This plugin counts Inbox + your labels, not Trash. Update if the badge is stuck on 201. |
 | Added Outlook and Gmail disappeared | `accounts.json` created without Gmail | Current builds keep Gmail. If an older build already dropped it: `$PLUGIN accounts add gmail`. |
 | HEY lists nothing | Looking at Feed / Paper Trail | Only Imbox unseen is unread. Confirm `hey box imbox --json`. |

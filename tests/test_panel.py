@@ -40,6 +40,10 @@ class PanelContractTests(unittest.TestCase):
         self.assertIn("omarchy plugin update bvisagie.you-got-mail", readme)
         self.assertIn("~/.bun/bin", readme)
         self.assertIn("YOU_GOT_MAIL_IMAP_PASSWORD", readme)
+        self.assertIn("gws auth setup", readme)
+        self.assertIn("GOOGLE_WORKSPACE_CLI_KEYRING_BACKEND=file", readme)
+        self.assertIn("No sudo or pkexec is required", readme)
+        self.assertNotIn("must be public", readme)
         self.assertTrue((ROOT / "preview.png").is_file(), "marketplace listing wants root preview.png")
         self.assertIn("preview.png", readme)
 
