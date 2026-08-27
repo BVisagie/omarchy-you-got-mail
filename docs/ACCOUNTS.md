@@ -88,12 +88,19 @@ password or app password**. Microsoft retired that path. Use Graph.
 ### Microsoft Graph (recommended)
 
 Needs an Azure app registration you own (Microsoft does not let a desktop
-app ship a shared client id for mail). Personal Microsoft accounts work.
+app ship a shared client id for mail). Personal Microsoft accounts work,
+but a personal Outlook.com login **cannot** register an app from
+[entra.microsoft.com](https://entra.microsoft.com/) until it has its own
+directory. That site otherwise dumps you into the `Microsoft Services`
+tenant (`AADSTS50020` / “account does not exist in tenant”).
 
-1. Open the [Entra admin center](https://entra.microsoft.com/) signed in as
-   the mailbox you are adding. If it asks you to create a tenant / Azure
-   subscription, the free one is enough.
-2. Identity → Applications → App registrations → **New registration**.
+1. In a private/incognito window, create a free Azure account with the
+   mailbox you want to add:
+   [azure.microsoft.com/free](https://azure.microsoft.com/free/).
+   That creates an Entra tenant you admin. A card is usually required;
+   app registration itself is free.
+2. After that, open the [Azure portal](https://portal.azure.com/) (not
+   entra.microsoft.com). Search **App registrations** → **New registration**.
 3. Name it e.g. `you-got-mail`. Supported accounts: **Personal Microsoft
    accounts only** (or **any org and personal** if you also have work mail).
 4. Authentication → Add a platform → **Mobile and desktop applications**.
@@ -101,12 +108,13 @@ app ship a shared client id for mail). Personal Microsoft accounts work.
    `https://login.microsoftonline.com/common/oauth2/nativeclient`.
    Under Advanced: **Allow public client flows** = Yes.
 5. API permissions → Microsoft Graph → Delegated: `User.Read`,
-   `Mail.ReadWrite`, `offline_access`. No admin consent is needed for a
-   personal mailbox you own.
+   `Mail.ReadWrite`, `offline_access`.
 6. Copy the **Application (client) ID** from Overview.
 7. `you-got-mail accounts add outlook`, choose `graph`, paste the client id.
    Tenant: `consumers` for outlook.com, `common` for work/school.
    A browser tab opens; sign in as that mailbox and accept mail access.
+   The Azure tenant is only where the app lives; `consumers` is still the
+   right login tenant for the personal mailbox.
 
 The first extra account also writes the implicit Gmail account into
 `accounts.json`, so Gmail stays on the pile.
