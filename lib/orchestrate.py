@@ -84,7 +84,7 @@ def cmd_list(page_token: str) -> None:
     merged: list[dict] = []
     unread = 0
     emails = []
-    search_url = ""
+    payloads: dict[str, dict] = {}
 
     def work(acc: dict) -> tuple[dict, dict]:
         return acc, _run_provider(acc, ["list", "--limit", fetch])
@@ -96,11 +96,10 @@ def cmd_list(page_token: str) -> None:
             if not payload.get("ok"):
                 errors.append(str(payload.get("error") or f"{acc['id']}: failed"))
                 continue
+            payloads[acc["id"]] = payload
             unread += int(payload.get("unread") or 0)
             if payload.get("email"):
                 emails.append(str(payload["email"]))
-            if not search_url and payload.get("searchUrl"):
-                search_url = str(payload["searchUrl"])
             merged.extend(_tag_messages(acc, payload))
 
     if not merged and errors and unread == 0:
@@ -111,16 +110,30 @@ def cmd_list(page_token: str) -> None:
     chunk = merged[start : start + per]
     next_page = str(start + per) if start + per < len(merged) else ""
 
+    inboxes = []
+    for acc in accounts:
+        payload = payloads.get(acc["id"])
+        if not payload:
+            continue
+        inboxes.append(
+            {
+                "account": str(acc.get("label") or acc["id"]),
+                "unread": int(payload.get("unread") or 0),
+                "searchUrl": str(payload.get("searchUrl") or ""),
+            }
+        )
+
     email = emails[0] if len(emails) == 1 else ""
-    if len(accounts) > 1:
-        # No single webmail search covers every provider.
-        search_url = search_url if len(accounts) == 1 else ""
+    search_url = ""
+    if len(accounts) == 1 and inboxes:
+        search_url = str(inboxes[0].get("searchUrl") or "")
 
     out = {
         "ok": True,
         "email": email,
         "unread": unread,
-        "searchUrl": search_url if len(accounts) == 1 else "",
+        "searchUrl": search_url,
+        "inboxes": inboxes,
         "nextPage": next_page,
         "thisPage": str(start),
         "accountCount": len(accounts),

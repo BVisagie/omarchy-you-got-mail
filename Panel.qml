@@ -34,6 +34,7 @@ Panel {
   property int unread: 0
   property string email: ""
   property string searchUrl: ""
+  property var inboxes: []
   property bool reachable: true
   property string errorText: ""
   property string pendingId: ""
@@ -120,11 +121,33 @@ Panel {
     if (cursor > messages.length - 1) cursor = messages.length - 1
   }
 
+  function openableInboxUrls() {
+    var urls = []
+    var seen = {}
+    var list = root.inboxes || []
+    if (list.length === 0 && validUrl(root.searchUrl))
+      list = [{ unread: root.unread, searchUrl: root.searchUrl }]
+    for (var i = 0; i < list.length; i++) {
+      var box = list[i] || {}
+      var n = parseInt(box.unread, 10)
+      if (!(n > 0)) continue
+      var url = box.searchUrl || ""
+      if (!validUrl(url) || seen[url]) continue
+      seen[url] = true
+      urls.push(url)
+    }
+    return urls
+  }
+
+  readonly property bool hasOpenableInbox: openableInboxUrls().length > 0
+
   function openMessage(message) {
     if (!message || !validId(message.id)) return
     var url = message.url || ""
-    if (url !== "" && validUrl(url))
+    if (url !== "") {
+      if (!validUrl(url)) return
       Quickshell.execDetached(["xdg-open", url])
+    }
     dismissLocal(message.id)
     pendingId = message.id
     readProc.command = [root.script, "read", message.id]
@@ -133,9 +156,10 @@ Panel {
   }
 
   function openSearch() {
-    var url = root.searchUrl
-    if (!validUrl(url)) return
-    Quickshell.execDetached(["xdg-open", url])
+    var urls = openableInboxUrls()
+    if (urls.length === 0) return
+    for (var i = 0; i < urls.length; i++)
+      Quickshell.execDetached(["xdg-open", urls[i]])
     close()
   }
 
@@ -178,6 +202,7 @@ Panel {
       unread = data.unread || 0
       email = data.email || ""
       searchUrl = data.searchUrl || ""
+      inboxes = data.inboxes || []
       accountCount = data.accountCount || 0
       nextPage = validToken(data.nextPage) ? data.nextPage : ""
       if (cursor > messages.length - 1) cursor = messages.length - 1
@@ -352,8 +377,12 @@ Panel {
 
             PanelActionButton {
               id: openMailButton
+              visible: root.hasOpenableInbox
+              enabled: root.hasOpenableInbox
               iconText: root.iconExternal
-              tooltipText: "Open unread in browser"
+              tooltipText: root.accountCount > 1
+                ? "Open each unread inbox in the browser"
+                : "Open unread in browser"
               foreground: root.foreground
               hoverColor: root.accent
               fontFamily: root.fontFamily

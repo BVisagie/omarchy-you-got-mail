@@ -60,9 +60,10 @@ If you never add an account, a single Gmail account is assumed. The first
 | | |
 |---|---|
 | Click the bar icon | open the panel |
-| Right-click the bar icon | open that account's webmail (one account only) |
+| Right-click the bar icon | open each inbox that currently has unread (one tab per account) |
 | Middle-click the bar icon | refresh now |
-| Click a message | open that thread and take it off the pile |
+| Header external-link | same as right-click |
+| Click a message | open **that** thread in the browser and take it off the pile |
 | `↑` `↓` or `j` `k` | move through the list |
 | `Enter`, `Space` or `o` | open the message under the cursor |
 | `n` / `p` | next page, previous page |

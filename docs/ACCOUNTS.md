@@ -288,8 +288,12 @@ you did not just receive from Microsoft.
 
 The badge is the sum of unread. The panel is newest-first across every
 account. When more than one account is configured, the account label is
-shown as a chip on each row. Right-click (open webmail search) is only
-wired when a single account is present — there is no combined search URL.
+shown as a chip on each row.
+
+Click a row to open **that** message and mark it read. The header
+external-link (and a right-click on the bar icon) opens **each inbox
+that currently has unread**, one browser tab per account. Accounts at
+zero unread, and IMAP accounts with no webmail URL, are skipped.
 
 ## Troubleshooting
 

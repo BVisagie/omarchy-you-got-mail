@@ -76,8 +76,10 @@ equivalent) so a missing login fails closed instead of prompting.
   attention box is the Imbox; Feed, Paper Trail, and the Screener are not
   unread.
 
-The orchestrator adds `account` (the label) and `accountCount` on the
-merged payload. You do not.
+The orchestrator adds `account` (the label), `accountCount`, and an
+`inboxes` array (`account`, `unread`, `searchUrl` per account) on the
+merged payload. You do not. With more than one account the panel opens
+every inbox whose `unread` is greater than zero.
 
 ## `read` success
 
