@@ -11,6 +11,7 @@ import os
 import re
 import ssl
 import sys
+import time
 from datetime import datetime, timezone
 from email.message import Message
 
@@ -21,6 +22,8 @@ SKIP_FOLDER = re.compile(
     r"(^|/)(trash|junk|spam|drafts?|sent|bin|deleted|queue|outbox)(/|$)",
     re.I,
 )
+READ_ALL_BUDGET = 100
+UID_CHUNK = 80
 
 
 def _decode_header(value: str | None) -> str:
@@ -206,6 +209,65 @@ def cmd_read(acc: dict, password: str, local_id: str) -> None:
     emit({"ok": True})
 
 
+def _chunked(items: list[str], size: int) -> list[list[str]]:
+    if size < 1:
+        size = 1
+    return [items[i : i + size] for i in range(0, len(items), size)]
+
+
+def _snapshot_unseen(client: imaplib.IMAP4) -> list[tuple[str, list[str]]]:
+    snapshots: list[tuple[str, list[str]]] = []
+    for folder in _folders(client):
+        typ, _ = client.select(folder, readonly=True)
+        if typ != "OK":
+            continue
+        typ, data = client.uid("search", None, "UNSEEN")
+        if typ != "OK" or not data or not data[0]:
+            continue
+        uids = [u for u in data[0].decode().split() if u]
+        if uids:
+            snapshots.append((folder, uids))
+    return snapshots
+
+
+def cmd_read_all(acc: dict, password: str) -> None:
+    try:
+        client = _connect(acc, password)
+    except ssl.SSLError:
+        die("IMAP TLS handshake failed")
+    except imaplib.IMAP4.error as exc:
+        die(str(exc) or "IMAP login failed")
+    except OSError as exc:
+        die(str(exc) or "could not reach IMAP host")
+    marked = 0
+    deadline = time.monotonic() + READ_ALL_BUDGET
+    try:
+        snapshots = _snapshot_unseen(client)
+        for folder, uids in snapshots:
+            if time.monotonic() > deadline:
+                emit({"ok": False, "marked": marked, "error": "timed out marking mail as read"})
+                return
+            typ, _ = client.select(folder)
+            if typ != "OK":
+                emit({"ok": False, "marked": marked, "error": "could not open folder"})
+                return
+            for chunk in _chunked(uids, UID_CHUNK):
+                if time.monotonic() > deadline:
+                    emit({"ok": False, "marked": marked, "error": "timed out marking mail as read"})
+                    return
+                typ, _ = client.uid("store", ",".join(chunk), "+FLAGS", "(\\Seen)")
+                if typ != "OK":
+                    emit({"ok": False, "marked": marked, "error": "could not mark as read"})
+                    return
+                marked += len(chunk)
+    finally:
+        try:
+            client.logout()
+        except Exception:
+            pass
+    emit({"ok": True, "marked": marked})
+
+
 def main() -> None:
     acc = _bootstrap.account()
     sec = _bootstrap.secret()
@@ -219,6 +281,9 @@ def main() -> None:
         if not rest:
             die("usage: imap read <id>")
         cmd_read(acc, password, rest[0])
+        return
+    if cmd == "read-all":
+        cmd_read_all(acc, password)
         return
     die("unknown command")
 

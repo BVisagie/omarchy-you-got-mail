@@ -13,14 +13,15 @@ sys.path.insert(0, str(LIB))
 from accounts import USAGE as ACCOUNTS_USAGE
 from accounts import main as accounts_main
 from common import die
-from orchestrate import cmd_list, cmd_read
+from orchestrate import cmd_list, cmd_read, cmd_read_all
 
 HELP = """\
 you-got-mail list [--page OFFSET] [--limit N]
 you-got-mail read <id>
+you-got-mail read-all
 you-got-mail accounts ...
 
-The panel calls list and read. Accounts are added in a terminal:
+The panel calls list, read, and read-all. Accounts are added in a terminal:
 
   you-got-mail accounts add
 
@@ -51,6 +52,9 @@ def main() -> None:
         if len(args) < 2:
             die("usage: you-got-mail read <id>")
         cmd_read(args[1])
+        return
+    if args[0] == "read-all":
+        cmd_read_all()
         return
     if args[0] == "accounts":
         accounts_main(args[1:])

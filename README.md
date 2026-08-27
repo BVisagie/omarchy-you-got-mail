@@ -91,13 +91,14 @@ If you never add an account, a single Gmail account is assumed. The first
 | Click the bar icon | open the panel |
 | Right-click the bar icon | open each inbox that currently has unread (one tab per account) |
 | Middle-click the bar icon | refresh now |
+| Header envelope-open or `a` | mark all unread as read (click or press twice to confirm) |
 | Header external-link or `i` | same as right-click |
 | Click a message | open **that** thread in the browser and take it off the pile |
 | `↑` `↓` or `j` `k` | move through the list |
 | `Enter`, `Space` or `o` | open the message under the cursor |
 | `n` / `p` | next page, previous page |
 | `Tab` / `Shift+Tab` | switch to the next or previous bar panel |
-| `Esc` | close |
+| `Esc` | cancel mark-all confirm, or close |
 
 The bar tooltip shows the unread count, or why mail is unreachable.
 
@@ -109,7 +110,8 @@ and the panel names the failure.
 
 The unread badge is the provider's mailbox total, not just the rows on
 this page. Merged paging walks a cap of 200 newest messages across
-accounts.
+accounts. Mark-all as read uses the same mailbox total: it is not limited
+to the current page.
 
 ## Configuration
 

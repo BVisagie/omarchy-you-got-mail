@@ -16,12 +16,15 @@ import os
 import shutil
 import subprocess
 import sys
+import time
 from datetime import datetime
 
 import _bootstrap
 from common import die, emit, one_line
 
 HEY_WEB = "https://app.hey.com"
+READ_ALL_BUDGET = 100
+HEY_PAGE_LIMIT = 50
 
 
 def _hey_env(acc: dict) -> dict:
@@ -52,9 +55,16 @@ def _account_flag(acc: dict, extra: str = "") -> list[str]:
 
 
 def _hey(acc: dict, args: list[str], timeout: int = 40) -> dict:
+    payload, err = _try_hey(acc, args, timeout=timeout)
+    if err:
+        die(err)
+    return payload or {}
+
+
+def _try_hey(acc: dict, args: list[str], timeout: int = 40) -> tuple[dict | None, str]:
     env = _hey_env(acc)
     if not shutil.which("hey", path=env.get("PATH")):
-        die(
+        return None, (
             "hey-cli not found. Install with: omarchy-mise-install github:basecamp/hey-cli hey"
         )
     cmd = ["hey", *args, "--json"]
@@ -68,15 +78,15 @@ def _hey(acc: dict, args: list[str], timeout: int = 40) -> dict:
             check=False,
         )
     except subprocess.TimeoutExpired:
-        die("hey timed out")
+        return None, "hey timed out"
     stdout = (proc.stdout or "").strip()
     stderr = (proc.stderr or "").strip()
     payload = _parse_json(stdout) or _parse_json(stderr)
     if isinstance(payload, dict) and payload.get("ok") is False:
-        _die_hey_error(payload, proc.returncode)
+        return None, _hey_error_message(payload, proc.returncode)
     if proc.returncode != 0 or not isinstance(payload, dict):
-        _die_hey_failure(stdout, stderr, proc.returncode)
-    return payload
+        return None, _hey_failure_message(stdout, stderr, proc.returncode)
+    return payload, ""
 
 
 def _parse_json(text: str) -> dict | None:
@@ -92,7 +102,7 @@ def _parse_json(text: str) -> dict | None:
     return None
 
 
-def _die_hey_error(payload: dict, returncode: int) -> None:
+def _hey_error_message(payload: dict, returncode: int) -> str:
     code = str(payload.get("code") or "")
     msg = str(payload.get("error") or payload.get("message") or "hey failed")
     if (
@@ -100,15 +110,23 @@ def _die_hey_error(payload: dict, returncode: int) -> None:
         or code in ("auth", "auth_required")
         or "not logged in" in msg.lower()
     ):
-        die("HEY is not signed in; run: hey auth login")
-    die(msg)
+        return "HEY is not signed in; run: hey auth login"
+    return msg
+
+
+def _hey_failure_message(stdout: str, stderr: str, returncode: int) -> str:
+    err = stderr or stdout
+    if returncode == 3 or "not logged in" in err.lower():
+        return "HEY is not signed in; run: hey auth login"
+    return err or "hey returned no output"
+
+
+def _die_hey_error(payload: dict, returncode: int) -> None:
+    die(_hey_error_message(payload, returncode))
 
 
 def _die_hey_failure(stdout: str, stderr: str, returncode: int) -> None:
-    err = stderr or stdout
-    if returncode == 3 or "not logged in" in err.lower():
-        die("HEY is not signed in; run: hey auth login")
-    die(err or "hey returned no output")
+    die(_hey_failure_message(stdout, stderr, returncode))
 
 
 def _data(payload: dict) -> dict:
@@ -269,6 +287,62 @@ def cmd_read(acc: dict, local_id: str) -> None:
     emit({"ok": True})
 
 
+def _collect_unseen(acc: dict, deadline: float) -> list[str]:
+    collected: list[str] = []
+    seen_ids: set[str] = set()
+    seen_pages: set[str] = set()
+    page = ""
+    for _ in range(1000):
+        if time.monotonic() > deadline:
+            die("timed out collecting unread mail")
+        args = ["box", "imbox", *_account_flag(acc), "--limit", str(HEY_PAGE_LIMIT)]
+        if page:
+            if page in seen_pages:
+                die("hey repeated a page token")
+            seen_pages.add(page)
+            args.extend(["--page", page])
+        payload = _hey(acc, args)
+        box = _data(payload)
+        for item in box.get("postings") or []:
+            if not isinstance(item, dict) or item.get("seen") is True:
+                continue
+            local_id = _local_id(item)
+            if not local_id or local_id in seen_ids:
+                continue
+            seen_ids.add(local_id)
+            collected.append(local_id)
+        next_page = _next_page(payload, box)
+        if not next_page:
+            break
+        if next_page == page:
+            die("hey repeated a page token")
+        page = next_page
+    return collected
+
+
+def cmd_read_all(acc: dict) -> None:
+    deadline = time.monotonic() + READ_ALL_BUDGET
+    collected = _collect_unseen(acc, deadline)
+    marked = 0
+    for local_id in collected:
+        if time.monotonic() > deadline:
+            emit({"ok": False, "marked": marked, "error": "timed out marking mail as read"})
+            return
+        posting_id, account_id = _split_local_id(local_id)
+        if not posting_id:
+            continue
+        payload, err = _try_hey(
+            acc,
+            ["seen", posting_id, *_account_flag(acc, account_id)],
+            timeout=15,
+        )
+        if err or payload is None:
+            emit({"ok": False, "marked": marked, "error": err or "could not mark as read"})
+            return
+        marked += 1
+    emit({"ok": True, "marked": marked})
+
+
 def main() -> None:
     acc = _bootstrap.account()
     cmd, rest, flags = _bootstrap.parse_args(sys.argv[1:])
@@ -280,6 +354,9 @@ def main() -> None:
         if not rest:
             die("usage: hey read <id>")
         cmd_read(acc, rest[0])
+        return
+    if cmd == "read-all":
+        cmd_read_all(acc)
         return
     die("unknown command")
 

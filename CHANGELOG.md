@@ -2,6 +2,25 @@
 
 Versions match `manifest.json`. Git tags are created at release time.
 
+## 2.4.0
+
+Unread mail is information, not an alarm. The bar count no longer uses
+the urgent/red active colour, and the panel can mark every unread
+message as read without opening each row.
+
+- Bar badge and mailbox flag use the bar foreground instead of
+  `activeColor` (theme red). The mailbox body still turns active only
+  while the panel is open.
+- `you-got-mail read-all` fans out to every account. Providers snapshot
+  matching unread ids first, then mark them with the same skip rules as
+  `list`.
+- Panel: envelope action and `a` arm a two-click confirm, then parse the
+  JSON result. Partial write failures stay visible after the following
+  refresh.
+- Bound remote HTTP bodies before decode, and write secrets/cache through
+  exclusive same-directory temp files with mode 600, fsync, and atomic
+  replace.
+
 ## 2.3.0
 
 Unread totals, merged paging, widget settings, and the provider contract

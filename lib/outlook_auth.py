@@ -20,6 +20,13 @@ import urllib.parse
 import urllib.request
 import webbrowser
 
+from common import (
+    MAX_HTTP_ERROR,
+    ResponseTooLargeError,
+    read_http_body,
+)
+
+
 SCOPE = "offline_access User.Read Mail.ReadWrite"
 AUTH = "https://login.microsoftonline.com/{tenant}/oauth2/v2.0"
 
@@ -30,15 +37,30 @@ def _post(url: str, data: dict) -> dict:
     req.add_header("Content-Type", "application/x-www-form-urlencoded")
     try:
         with urllib.request.urlopen(req, timeout=30) as resp:
-            return json.loads(resp.read().decode())
+            return json.loads(read_http_body(resp).decode())
+    except ResponseTooLargeError as exc:
+        raise RuntimeError(str(exc)) from None
+    except (json.JSONDecodeError, UnicodeDecodeError):
+        raise RuntimeError("Outlook returned invalid JSON") from None
     except urllib.error.HTTPError as exc:
-        detail = exc.read().decode("utf-8", "replace")
         try:
-            parsed = json.loads(detail)
-            msg = parsed.get("error_description") or parsed.get("error") or detail
-        except json.JSONDecodeError:
-            msg = detail or str(exc)
-        raise RuntimeError(msg) from None
+            try:
+                detail = read_http_body(exc, MAX_HTTP_ERROR).decode("utf-8")
+            except ResponseTooLargeError as err:
+                raise RuntimeError(str(err)) from None
+            except UnicodeDecodeError:
+                raise RuntimeError(str(exc)) from None
+            try:
+                parsed = json.loads(detail)
+                msg = parsed.get("error_description") or parsed.get("error") or detail
+            except json.JSONDecodeError:
+                msg = detail or str(exc)
+            raise RuntimeError(msg) from None
+        finally:
+            try:
+                exc.close()
+            except OSError:
+                pass
 
 
 def _pkce() -> tuple[str, str]:

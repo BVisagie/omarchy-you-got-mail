@@ -19,8 +19,11 @@ from common import (
     secret_path,
 )
 
+LIST_TIMEOUT = 45
+READ_ALL_TIMEOUT = 120
 
-def _run_provider(account: dict, args: list[str]) -> dict:
+
+def _run_provider(account: dict, args: list[str], timeout: int = LIST_TIMEOUT) -> dict:
     provider = account["provider"]
     env = os.environ.copy()
     env["YOU_GOT_MAIL_ACCOUNT_ID"] = account["id"]
@@ -34,7 +37,7 @@ def _run_provider(account: dict, args: list[str]) -> dict:
             capture_output=True,
             text=True,
             env=env,
-            timeout=45,
+            timeout=timeout,
             check=False,
         )
     except subprocess.TimeoutExpired:
@@ -161,3 +164,33 @@ def cmd_read(opaque: str) -> None:
     if not payload.get("ok"):
         die(str(payload.get("error") or "could not mark as read"))
     emit({"ok": True})
+
+
+def cmd_read_all() -> None:
+    accounts = load_accounts()
+    errors: list[str] = []
+    marked = 0
+    succeeded = 0
+
+    def work(acc: dict) -> tuple[dict, dict]:
+        return acc, _run_provider(acc, ["read-all"], timeout=READ_ALL_TIMEOUT)
+
+    with ThreadPoolExecutor(max_workers=min(8, len(accounts))) as pool:
+        futures = [pool.submit(work, acc) for acc in accounts]
+        for fut in as_completed(futures):
+            acc, payload = fut.result()
+            marked += int(payload.get("marked") or 0)
+            if payload.get("ok"):
+                succeeded += 1
+                continue
+            errors.append(str(payload.get("error") or f"{acc['id']}: failed"))
+
+    if succeeded == 0:
+        err = errors[0] if len(errors) == 1 else "all accounts failed: " + "; ".join(errors)
+        emit({"ok": False, "error": err, "marked": marked})
+        return
+
+    out: dict = {"ok": True, "marked": marked}
+    if errors:
+        out["warning"] = "; ".join(errors)
+    emit(out)
