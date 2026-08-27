@@ -40,6 +40,8 @@ class PanelContractTests(unittest.TestCase):
         self.assertIn("omarchy plugin update bvisagie.you-got-mail", readme)
         self.assertIn("~/.bun/bin", readme)
         self.assertIn("YOU_GOT_MAIL_IMAP_PASSWORD", readme)
+        self.assertTrue((ROOT / "preview.png").is_file(), "marketplace listing wants root preview.png")
+        self.assertIn("preview.png", readme)
 
     def test_changelog_matches_manifest(self) -> None:
         changelog = (ROOT / "CHANGELOG.md").read_text(encoding="utf-8")

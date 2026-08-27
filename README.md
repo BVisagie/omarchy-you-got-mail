@@ -9,6 +9,20 @@ another provider is documented in [docs/PROVIDERS.md](docs/PROVIDERS.md).
 **Account setup lives in [docs/ACCOUNTS.md](docs/ACCOUNTS.md)** — start
 there for Outlook.com, Gmail OAuth, or HEY.
 
+## Preview
+
+Sample mail only — not a real inbox.
+
+<p align="center">
+  <img src="preview.png" alt="You've Got Mail — unread pile across Gmail, Outlook, Fastmail, and HEY" width="720">
+</p>
+
+<p align="center">
+  <img src="docs/screenshots/paging.png" alt="Page 2 when the pile is longer than one screen" width="360">
+  &nbsp;&nbsp;
+  <img src="docs/screenshots/caught-up.png" alt="Empty panel when everything is read" width="360">
+</p>
+
 ## Requirements
 
 - [Omarchy](https://omarchy.org/) 4.0 or later (plugin `schemaVersion` 1)
