@@ -22,6 +22,8 @@ are no longer papered over by a single page of rows.
   Bar tooltip and capped chips.
 - HTTPS install URL, update command, and this changelog.
 - Contract tests and GitHub Actions CI (mocked; no live mailboxes).
+- Bar mailbox uses Omarchy's adaptive bar colors and a stroked rural
+  silhouette so it stays visible on transparent bars and mixed wallpapers.
 
 ## 2.2.4
 

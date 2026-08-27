@@ -2,7 +2,10 @@ import QtQuick
 import QtQuick.Window
 import qs.Commons
 
-// Rural mailbox with a pivoting flag. Flag up (theme accent) means mail.
+// Rural mailbox: arched outline, post, and a pivoting flag. Flag up means mail.
+// Stroke, not a filled blob, so the silhouette keeps contrast on a transparent
+// bar and on light, dark, or mixed wallpapers. Every flag pose stays inside
+// the optical canvas.
 Item {
   id: root
 
@@ -25,31 +28,52 @@ Item {
     return Math.round(v * root.dpr) / root.dpr
   }
 
-  readonly property real boxW: snap(iconSize * 0.76)
-  readonly property real boxH: snap(iconSize * 0.50)
-  readonly property real boxX: snap(iconSize * 0.02)
-  readonly property real boxY: snap(iconSize * 0.40)
-  readonly property real boxR: snap(Math.max(1.1, iconSize * 0.08))
+  function snapStroke(v) {
+    return Math.max(1, Math.round(v * root.dpr)) / root.dpr
+  }
 
-  readonly property real stemLen: snap(iconSize * 0.46)
-  readonly property real stemThick: snap(Math.max(1.7, iconSize * 0.11))
-  readonly property real clothLen: snap(iconSize * 0.42)
-  readonly property real clothThick: snap(Math.max(2.2, iconSize * 0.16))
-  readonly property real pivotX: snap(boxX + boxW - stemThick * 0.20)
-  readonly property real pivotY: snap(boxY + boxH * 0.16)
+  readonly property real stroke: snapStroke(Math.max(1.5, iconSize * 0.12))
+  readonly property real pad: snap(Math.max(stroke / 2, 0.5))
+
+  readonly property real bodyW: {
+    var minFlag = stroke * 1.8
+    return snap(Math.min(iconSize * 0.66, iconSize - pad * 2 - minFlag))
+  }
+  readonly property real archR: snap(bodyW / 2)
+  readonly property real postH: snap(Math.max(stroke * 1.2, iconSize * 0.14))
+  readonly property real bodyRectH: {
+    var maxH = iconSize - pad * 2 - postH - archR
+    return snap(Math.max(stroke * 2, Math.min(iconSize * 0.26, maxH)))
+  }
+  readonly property real bodyH: snap(archR + bodyRectH)
+  readonly property real bodyX: snap(pad)
+  readonly property real bodyY: snap(Math.max(pad, iconSize - pad - postH - bodyH))
+
+  readonly property real postX: snap(bodyX + archR)
+  readonly property real postY: snap(bodyY + bodyH)
+
+  readonly property real pivotX: snap(bodyX + bodyW - stroke * 0.2)
+  readonly property real pivotY: snap(bodyY + archR * 0.42)
+
+  // 1.42 ≈ √2 so the cloth corner stays inside the canvas at 45°.
+  readonly property real flagLen: {
+    var up = Math.max(0, pivotY - pad)
+    var right = Math.max(0, iconSize - pad - pivotX)
+    var left = Math.max(0, pivotX - pad)
+    return snap(Math.max(0, Math.min(iconSize * 0.30, up / 1.42, right, left)))
+  }
+  readonly property real stemLen: flagLen
+  readonly property real clothLen: flagLen
+  readonly property real stemThick: snap(Math.min(stemLen, Math.max(1.6, Math.min(iconSize * 0.14, stemLen * 0.46))))
+  readonly property real clothThick: snap(Math.min(stemLen, Math.max(2.0, Math.min(iconSize * 0.18, stemLen * 0.58))))
+
+  readonly property real doorW: snap(bodyW * 0.42)
+  readonly property real doorY: snap(bodyY + archR + bodyRectH * 0.38)
 
   property real flagAmount: hasMail ? 1 : 0
   Behavior on flagAmount {
     NumberAnimation { duration: 180; easing.type: Easing.InOutQuad }
   }
-
-  layer.enabled: true
-  layer.smooth: true
-  layer.samples: 8
-  layer.textureSize: Qt.size(
-    Math.max(1, Math.round(width * dpr)),
-    Math.max(1, Math.round(height * dpr))
-  )
 
   Canvas {
     id: canvas
@@ -80,10 +104,12 @@ Item {
       var ctx = getContext("2d")
       ctx.reset()
       ctx.clearRect(0, 0, width, height)
+      ctx.lineCap = "round"
+      ctx.lineJoin = "round"
 
-      // Flag first so the box covers the pivot. Local +x is "along the stem";
-      // rotate -90° for flag-up. Cloth hangs +y (down when the flag is down,
-      // back over the box when the flag is up).
+      // Flag first so the body stroke covers the pivot. Local +x is along the
+      // stem; rotate -90° for flag-up. Cloth sits in local -y so a raise puts
+      // it over the box instead of out to the right.
       ctx.fillStyle = root.flagColor
       ctx.save()
       ctx.translate(root.pivotX, root.pivotY)
@@ -92,8 +118,6 @@ Item {
       roundRect(ctx, 0, -root.stemThick / 2, root.stemLen, root.stemThick, root.stemThick / 2)
       ctx.fill()
       ctx.beginPath()
-      // Cloth in local -y so a -90° raise puts it over the box, not out
-      // to the right (which reads as a musical note).
       roundRect(
         ctx,
         root.stemLen - root.clothThick,
@@ -105,17 +129,43 @@ Item {
       ctx.fill()
       ctx.restore()
 
+      ctx.strokeStyle = root.color
       ctx.fillStyle = root.color
+      ctx.lineWidth = root.stroke
+
+      var r = root.archR
+      var x = root.bodyX
+      var y = root.bodyY
+      var w = root.bodyW
+      var h = root.bodyH
       ctx.beginPath()
-      roundRect(ctx, root.boxX, root.boxY, root.boxW, root.boxH, root.boxR)
-      ctx.fill()
+      ctx.arc(x + r, y + r, r, Math.PI, 0, false)
+      ctx.lineTo(x + w, y + h)
+      ctx.lineTo(x, y + h)
+      ctx.closePath()
+      ctx.stroke()
+
+      ctx.lineWidth = root.stroke
+      ctx.beginPath()
+      ctx.moveTo(root.postX, root.postY)
+      ctx.lineTo(root.postX, root.postY + root.postH)
+      ctx.stroke()
+
+      ctx.lineWidth = root.snapStroke(Math.max(1.2, root.stroke * 0.85))
+      var doorX = root.snap(x + (w - root.doorW) / 2)
+      ctx.beginPath()
+      ctx.moveTo(doorX, root.doorY)
+      ctx.lineTo(doorX + root.doorW, root.doorY)
+      ctx.stroke()
     }
   }
 
   onColorChanged: canvas.requestPaint()
   onFlagColorChanged: canvas.requestPaint()
   onFlagAmountChanged: canvas.requestPaint()
-  onBoxWChanged: canvas.requestPaint()
+  onIconSizeChanged: canvas.requestPaint()
+  onBodyWChanged: canvas.requestPaint()
+  onFlagLenChanged: canvas.requestPaint()
   onDprChanged: canvas.requestPaint()
   Component.onCompleted: canvas.requestPaint()
 }

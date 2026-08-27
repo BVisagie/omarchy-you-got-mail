@@ -274,6 +274,7 @@ Panel {
     id: button
     anchors.fill: parent
     bar: root.bar
+    active: root.opened
     opacity: root.reachable ? 1 : 0.5
     slotSize: root.barSlot
     opticalSize: root.barContentWidth
@@ -290,8 +291,8 @@ Panel {
           MailSlotIcon {
             anchors.verticalCenter: parent.verticalCenter
             iconSize: Style.bar.iconCanvas
-            color: root.opened ? root.accent : root.foreground
-            flagColor: (root.hasUnread && root.reachable) ? root.accent : root.foreground
+            color: button.active && button.useActiveColor ? button.activeColor : button.foreground
+            flagColor: (root.hasUnread && root.reachable) ? button.activeColor : button.foreground
             hasMail: root.hasUnread && root.reachable
           }
 
@@ -301,7 +302,7 @@ Panel {
             height: Style.space(12)
             width: root.badgeWidth
             radius: height / 2
-            color: root.accent
+            color: button.activeColor
 
             Text {
               anchors.centerIn: parent
