@@ -69,7 +69,8 @@ valid_id() {
 
 private_dir() {
   local dir="$1" owner
-  mkdir -p -m 700 -- "$dir" 2>/dev/null
+  # umask 077 already makes new parents 700; -m with -p would not.
+  mkdir -p -- "$dir" 2>/dev/null
   [[ -d "$dir" && ! -L "$dir" ]] || return 1
   owner="$(stat -c '%u' -- "$dir" 2>/dev/null)" || return 1
   [[ "$owner" == "$(id -u)" ]] || return 1
@@ -172,10 +173,9 @@ fill_cache() {
 
   tmp="$(mktemp -d "${TMPDIR:-/tmp}/omarchy-you-got-mail.XXXXXX")" || return 0
 
-  while IFS= read -r id; do
-    valid_id "$id" || continue
-    printf '%s\n' "$id"
-  done <<<"$missing" | xargs -r -P 6 -I {} bash -c '
+  # Single-quoted so this shell does not expand $1/$id; xargs passes them in.
+  # shellcheck disable=SC2016
+  local fetch_one='
       id="$1"
       out="$2"
       params=$(jq -nc --arg id "$id" \
@@ -189,7 +189,12 @@ fill_cache() {
               threadId: (.threadId // .id),
               lab: [(.labelIds // [])[] | select(startswith(\"Label_\"))]
             }}" > "$out/$id.json" 2>/dev/null
-    ' _ {} "$tmp"
+    '
+
+  while IFS= read -r id; do
+    valid_id "$id" || continue
+    printf '%s\n' "$id"
+  done <<<"$missing" | xargs -r -P 6 -I {} bash -c "$fetch_one" _ {} "$tmp"
 
   shopt -s nullglob
   local parts=("$tmp"/*.json)

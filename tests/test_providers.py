@@ -124,6 +124,8 @@ class GmailScriptTests(unittest.TestCase):
         self.assertNotIn("resultSizeEstimate", script)
         # Display pages stay small; a 500-wide list is only the count path.
         self.assertIn('--argjson n 500', script)
+        self.assertIn("mkdir -p --", script)
+        self.assertNotIn("mkdir -p -m", script)
 
 
 if __name__ == "__main__":
