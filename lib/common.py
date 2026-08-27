@@ -27,8 +27,26 @@ def emit(payload: dict) -> None:
     sys.stdout.write(json.dumps(payload, ensure_ascii=False) + "\n")
 
 
+def _config_max() -> str | None:
+    path = CONFIG_DIR / "config"
+    if not path.is_file() or path.is_symlink():
+        return None
+    try:
+        lines = path.read_text(encoding="utf-8").splitlines()
+    except OSError:
+        return None
+    for line in lines:
+        stripped = line.strip()
+        if not stripped or stripped.startswith("#") or "=" not in stripped:
+            continue
+        key, _, rest = stripped.partition("=")
+        if key.strip().lower() == "max":
+            return rest.strip().strip("\"'")
+    return None
+
+
 def max_messages() -> int:
-    raw = os.environ.get("YOU_GOT_MAIL_MAX", "25")
+    raw = os.environ.get("YOU_GOT_MAIL_MAX") or _config_max() or "25"
     try:
         n = int(raw)
     except ValueError:

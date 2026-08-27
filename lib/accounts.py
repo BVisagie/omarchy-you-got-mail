@@ -31,7 +31,7 @@ Accounts live in ~/.config/omarchy-you-got-mail/accounts.json.
 Secrets (tokens, passwords) live in ~/.config/omarchy-you-got-mail/secrets/<id>.json
 (mode 600) and are never written next to the account list.
 
-See docs/ACCOUNTS.md for the full setup for each provider.
+Full setup for each provider is in docs/ACCOUNTS.md next to this plugin.
 """
 
 
@@ -155,8 +155,11 @@ def _add_imap(accounts: list[dict], acc_id: str, label: str) -> dict:
 def _add_outlook(accounts: list[dict], acc_id: str, label: str) -> dict:
     sys.stderr.write(
         "Outlook uses Microsoft Graph. Personal outlook.com / live.com\n"
-        "mailboxes cannot use IMAP passwords anymore — see docs/ACCOUNTS.md.\n"
-        "You need an Azure app registration you own (client id only).\n"
+        "cannot use IMAP. You need an Azure app registration you own.\n"
+        "Do not start at entra.microsoft.com — that hits the Microsoft\n"
+        "Services tenant. Create a directory in a private window at\n"
+        "https://azure.microsoft.com/free/ then register the app in\n"
+        "https://portal.azure.com/  (full steps: docs/ACCOUNTS.md).\n"
     )
     kind = _ask("Auth method: graph or imap", "graph").lower()
     if kind == "imap":
