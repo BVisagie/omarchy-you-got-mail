@@ -1,0 +1,147 @@
+#!/usr/bin/env python3
+"""Outlook via Microsoft Graph. IMAP is a separate account with provider=imap."""
+
+from __future__ import annotations
+
+import json
+import sys
+import urllib.error
+import urllib.parse
+import urllib.request
+
+import _bootstrap
+from common import die, emit, max_messages, save_secret
+from outlook_auth import refresh_access_token
+
+GRAPH = "https://graph.microsoft.com/v1.0"
+
+
+def _http(method: str, url: str, token: str, payload: dict | None = None) -> dict:
+    data = None if payload is None else json.dumps(payload).encode()
+    req = urllib.request.Request(url, data=data, method=method)
+    req.add_header("Authorization", f"Bearer {token}")
+    if data is not None:
+        req.add_header("Content-Type", "application/json")
+    try:
+        with urllib.request.urlopen(req, timeout=30) as resp:
+            raw = resp.read().decode()
+            return json.loads(raw) if raw else {}
+    except urllib.error.HTTPError as exc:
+        die(f"Outlook HTTP {exc.code}")
+    except urllib.error.URLError:
+        die("could not reach Microsoft Graph")
+
+
+def _access(sec: dict, account_id: str) -> str:
+    client_id = str(sec.get("client_id") or "")
+    refresh = str(sec.get("refresh_token") or "")
+    tenant = str(sec.get("tenant") or "common")
+    if not client_id or not refresh:
+        die("Outlook is not signed in; run: you-got-mail accounts add outlook")
+    try:
+        tokens = refresh_access_token(client_id, refresh, tenant)
+    except RuntimeError as exc:
+        die(str(exc))
+    if tokens.get("refresh_token") and tokens["refresh_token"] != refresh:
+        sec = dict(sec)
+        sec["refresh_token"] = tokens["refresh_token"]
+        save_secret(account_id, sec)
+    return str(tokens["access_token"])
+
+
+def _skip_folders(token: str) -> set[str]:
+    skip = set()
+    for well_known in ("junkemail", "deleteditems", "drafts"):
+        data = _http("GET", f"{GRAPH}/me/mailFolders/{well_known}", token)
+        if data.get("id"):
+            skip.add(data["id"])
+    return skip
+
+
+def cmd_list(acc: dict, sec: dict, limit: int) -> None:
+    account_id = str(acc.get("id") or "outlook")
+    token = _access(sec, account_id)
+    skip = _skip_folders(token)
+    params = {
+        "$filter": "isRead eq false",
+        "$select": "id,subject,from,bodyPreview,receivedDateTime,webLink,parentFolderId,conversationId",
+        "$orderby": "receivedDateTime desc",
+        "$top": str(min(50, max(limit, 1))),
+    }
+    url = f"{GRAPH}/me/messages?" + urllib.parse.urlencode(params)
+    data = _http("GET", url, token)
+    me = _http("GET", f"{GRAPH}/me?$select=mail,userPrincipalName", token)
+    email = str(me.get("mail") or me.get("userPrincipalName") or "")
+    messages = []
+    unread = 0
+    for item in data.get("value") or []:
+        if item.get("parentFolderId") in skip:
+            continue
+        unread += 1
+        from_obj = (item.get("from") or {}).get("emailAddress") or {}
+        name = from_obj.get("name") or from_obj.get("address") or ""
+        received = item.get("receivedDateTime") or ""
+        ts = 0
+        if received:
+            from datetime import datetime
+
+            try:
+                ts = int(datetime.fromisoformat(received.replace("Z", "+00:00")).timestamp())
+            except ValueError:
+                ts = 0
+        messages.append(
+            {
+                "id": item["id"],
+                "threadId": item.get("conversationId") or item["id"],
+                "subject": item.get("subject") or "(no subject)",
+                "from": name,
+                "snippet": (item.get("bodyPreview") or "").strip(),
+                "ts": ts,
+                "labels": [],
+                "url": item.get("webLink") or "https://outlook.office.com/mail/",
+            }
+        )
+        if len(messages) >= limit:
+            break
+    # Graph $top is not a total; unread above is this page after skips.
+    # Use @odata.count if we asked for it — we didn't, so at least the page.
+    emit(
+        {
+            "ok": True,
+            "email": email,
+            "unread": max(unread, len(messages)),
+            "searchUrl": "https://outlook.office.com/mail/inbox",
+            "messages": messages,
+        }
+    )
+
+
+def cmd_read(acc: dict, sec: dict, item_id: str) -> None:
+    token = _access(sec, str(acc.get("id") or "outlook"))
+    _http("PATCH", f"{GRAPH}/me/messages/{urllib.parse.quote(item_id)}", token, {"isRead": True})
+    emit({"ok": True})
+
+
+def main() -> None:
+    acc = _bootstrap.account()
+    sec = _bootstrap.secret()
+    cmd, rest, flags = _bootstrap.parse_args(sys.argv[1:])
+    limit = max_messages()
+    if flags.get("limit"):
+        try:
+            limit = max(1, min(50, int(flags["limit"])))
+        except ValueError:
+            pass
+    if cmd == "list":
+        cmd_list(acc, sec, limit)
+        return
+    if cmd == "read":
+        if not rest:
+            die("usage: outlook read <id>")
+        cmd_read(acc, sec, rest[0])
+        return
+    die("unknown command")
+
+
+if __name__ == "__main__":
+    main()

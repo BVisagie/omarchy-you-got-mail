@@ -64,11 +64,11 @@ Panel {
   }
 
   function validId(id) {
-    return /^[A-Za-z0-9._-]{1,128}$/.test(String(id))
+    return /^[A-Za-z0-9][A-Za-z0-9._-]{0,32}:[A-Za-z0-9_-]{1,512}$/.test(String(id))
   }
 
   function validUrl(url) {
-    return /^https:\/\/mail\.google\.com\//.test(String(url))
+    return /^https:\/\/[A-Za-z0-9.-]+(?::\d+)?(?:[/?#][^\s]*)?$/.test(String(url))
   }
 
   function refresh() {
@@ -122,8 +122,8 @@ Panel {
   function openMessage(message) {
     if (!message || !validId(message.id)) return
     var url = message.url || ""
-    if (!validUrl(url)) return
-    Quickshell.execDetached(["xdg-open", url])
+    if (url !== "" && validUrl(url))
+      Quickshell.execDetached(["xdg-open", url])
     dismissLocal(message.id)
     pendingId = message.id
     readProc.command = [root.script, "read", message.id]
@@ -454,7 +454,12 @@ Panel {
                     visible: (row.modelData.labels || []).length > 0
 
                     Repeater {
-                      model: (row.modelData.labels || []).slice(0, 2)
+                      model: {
+                        var labs = (row.modelData.labels || []).slice()
+                        var acc = row.modelData.account || ""
+                        if (acc) labs.unshift(acc)
+                        return labs.slice(0, 2)
+                      }
 
                       Rectangle {
                         required property string modelData

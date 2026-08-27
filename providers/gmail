@@ -28,7 +28,8 @@ export PATH
 # unread in Inbox or the label list — that is not part of this pile.
 QUERY="is:unread -in:spam -in:trash -in:drafts -in:chats (in:inbox OR has:userlabels)"
 
-CACHE_DIR="${XDG_CACHE_HOME:-$HOME/.cache}/omarchy-you-got-mail"
+ACCOUNT_ID="${YOU_GOT_MAIL_ACCOUNT_ID:-gmail}"
+CACHE_DIR="${XDG_CACHE_HOME:-$HOME/.cache}/omarchy-you-got-mail/${ACCOUNT_ID}"
 CACHE_FILE="$CACHE_DIR/messages.json"
 PROFILE_FILE="$CACHE_DIR/profile.json"
 LABEL_FILE="$CACHE_DIR/labels.json"
@@ -276,6 +277,7 @@ cmd_list() {
   while [ $# -gt 0 ]; do
     case "$1" in
       --page) shift; token="${1:-}" ;;
+      --limit) shift; export YOU_GOT_MAIL_MAX="${1:-25}" ;;
     esac
     shift
   done

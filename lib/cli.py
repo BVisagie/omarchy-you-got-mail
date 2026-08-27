@@ -1,0 +1,61 @@
+#!/usr/bin/env python3
+"""CLI entry for You've Got Mail."""
+
+from __future__ import annotations
+
+import os
+import sys
+from pathlib import Path
+
+LIB = Path(__file__).resolve().parent
+sys.path.insert(0, str(LIB))
+
+from accounts import USAGE as ACCOUNTS_USAGE
+from accounts import main as accounts_main
+from common import die
+from orchestrate import cmd_list, cmd_read
+
+HELP = """\
+you-got-mail list [--page OFFSET]
+you-got-mail read <id>
+you-got-mail accounts ...
+
+The panel calls list and read. Accounts are added in a terminal:
+
+  you-got-mail accounts add
+
+""" + ACCOUNTS_USAGE
+
+
+def main() -> None:
+    args = sys.argv[1:]
+    if not args or args[0] in ("list",):
+        page = ""
+        rest = args[1:] if args else []
+        while rest:
+            if rest[0] == "--page" and len(rest) > 1:
+                page = rest[1]
+                rest = rest[2:]
+            elif rest[0] == "--limit" and len(rest) > 1:
+                os.environ["YOU_GOT_MAIL_MAX"] = rest[1]
+                rest = rest[2:]
+            else:
+                rest = rest[1:]
+        cmd_list(page)
+        return
+    if args[0] == "read":
+        if len(args) < 2:
+            die("usage: you-got-mail read <id>")
+        cmd_read(args[1])
+        return
+    if args[0] == "accounts":
+        accounts_main(args[1:])
+        return
+    if args[0] in ("-h", "--help", "help"):
+        sys.stdout.write(HELP)
+        return
+    die("unknown command; try: you-got-mail --help")
+
+
+if __name__ == "__main__":
+    main()

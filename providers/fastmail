@@ -1,0 +1,219 @@
+#!/usr/bin/env python3
+"""Fastmail JMAP provider."""
+
+from __future__ import annotations
+
+import json
+import sys
+import urllib.error
+import urllib.request
+from email.utils import parseaddr
+
+import _bootstrap
+from common import die, emit, max_messages
+
+SESSION_URL = "https://api.fastmail.com/jmap/session"
+USING = [
+    "urn:ietf:params:jmap:core",
+    "urn:ietf:params:jmap:mail",
+]
+
+
+def _request(url: str, token: str, payload: dict | None = None) -> dict:
+    data = None if payload is None else json.dumps(payload).encode()
+    req = urllib.request.Request(url, data=data, method="GET" if data is None else "POST")
+    req.add_header("Authorization", f"Bearer {token}")
+    if data is not None:
+        req.add_header("Content-Type", "application/json")
+    try:
+        with urllib.request.urlopen(req, timeout=30) as resp:
+            return json.loads(resp.read().decode())
+    except urllib.error.HTTPError as exc:
+        die(f"Fastmail HTTP {exc.code}")
+    except urllib.error.URLError:
+        die("could not reach Fastmail")
+
+
+def _session(token: str) -> dict:
+    return _request(SESSION_URL, token)
+
+
+def _jmap(session: dict, token: str, calls: list) -> list:
+    api = session.get("apiUrl")
+    if not api:
+        die("Fastmail session had no apiUrl")
+    body = _request(api, token, {"using": USING, "methodCalls": calls})
+    return body.get("methodResponses") or []
+
+
+def _account_id(session: dict) -> str:
+    primary = session.get("primaryAccounts") or {}
+    acc = primary.get("urn:ietf:params:jmap:mail")
+    if not acc:
+        die("no Fastmail mail account on this token")
+    return acc
+
+
+def _skip_mailboxes(session: dict, token: str, account_id: str) -> list[str]:
+    responses = _jmap(
+        session,
+        token,
+        [
+            [
+                "Mailbox/get",
+                {"accountId": account_id, "ids": None},
+                "mb",
+            ]
+        ],
+    )
+    skip = []
+    for name, payload, _ in responses:
+        if name != "Mailbox/get":
+            continue
+        for box in payload.get("list") or []:
+            role = (box.get("role") or "").lower()
+            if role in ("trash", "junk", "drafts", "sent"):
+                skip.append(box["id"])
+    return skip
+
+
+def cmd_list(acc: dict, token: str, limit: int) -> None:
+    session = _session(token)
+    account_id = _account_id(session)
+    skip = _skip_mailboxes(session, token, account_id)
+    filt: dict = {"notKeyword": "$seen"}
+    if skip:
+        filt["inMailboxOtherThan"] = skip
+    responses = _jmap(
+        session,
+        token,
+        [
+            [
+                "Email/query",
+                {
+                    "accountId": account_id,
+                    "filter": filt,
+                    "sort": [{"property": "receivedAt", "isAscending": False}],
+                    "limit": limit,
+                    "calculateTotal": True,
+                },
+                "q",
+            ],
+            [
+                "Email/get",
+                {
+                    "accountId": account_id,
+                    "#ids": {"resultOf": "q", "name": "Email/query", "path": "/ids"},
+                    "properties": [
+                        "id",
+                        "threadId",
+                        "subject",
+                        "from",
+                        "preview",
+                        "receivedAt",
+                        "mailboxIds",
+                    ],
+                },
+                "g",
+            ],
+        ],
+    )
+    total = 0
+    emails = []
+    for name, payload, tag in responses:
+        if tag == "q" and name == "Email/query":
+            total = int(payload.get("total") or 0)
+        if tag == "g" and name == "Email/get":
+            emails = payload.get("list") or []
+    messages = []
+    for item in emails:
+        from_list = item.get("from") or []
+        name = ""
+        if from_list:
+            name = from_list[0].get("name") or from_list[0].get("email") or ""
+            if not from_list[0].get("name") and from_list[0].get("email"):
+                _, addr = parseaddr(from_list[0]["email"])
+                name = addr or from_list[0]["email"]
+        received = item.get("receivedAt") or ""
+        ts = 0
+        if received:
+            from datetime import datetime
+
+            try:
+                ts = int(datetime.fromisoformat(received.replace("Z", "+00:00")).timestamp())
+            except ValueError:
+                ts = 0
+        thread = item.get("threadId") or item["id"]
+        messages.append(
+            {
+                "id": item["id"],
+                "threadId": thread,
+                "subject": item.get("subject") or "(no subject)",
+                "from": name,
+                "snippet": (item.get("preview") or "").strip(),
+                "ts": ts,
+                "labels": [],
+                "url": f"https://app.fastmail.com/mail/Inbox/{item['id']}",
+            }
+        )
+    email = str(acc.get("email") or session.get("username") or "")
+    emit(
+        {
+            "ok": True,
+            "email": email,
+            "unread": total or len(messages),
+            "searchUrl": "https://app.fastmail.com/mail/Inbox/?search=is%3Aunread",
+            "messages": messages,
+        }
+    )
+
+
+def cmd_read(token: str, email_id: str) -> None:
+    session = _session(token)
+    account_id = _account_id(session)
+    responses = _jmap(
+        session,
+        token,
+        [
+            [
+                "Email/set",
+                {
+                    "accountId": account_id,
+                    "update": {email_id: {"keywords/$seen": True}},
+                },
+                "s",
+            ]
+        ],
+    )
+    for name, payload, _ in responses:
+        if name == "error":
+            die(payload.get("description") or "could not mark as read")
+    emit({"ok": True})
+
+
+def main() -> None:
+    acc = _bootstrap.account()
+    sec = _bootstrap.secret()
+    token = str(sec.get("token") or "")
+    if not token:
+        die("Fastmail API token missing; run: you-got-mail accounts add fastmail")
+    cmd, rest, flags = _bootstrap.parse_args(sys.argv[1:])
+    limit = max_messages()
+    if flags.get("limit"):
+        try:
+            limit = max(1, min(50, int(flags["limit"])))
+        except ValueError:
+            pass
+    if cmd == "list":
+        cmd_list(acc, token, limit)
+        return
+    if cmd == "read":
+        if not rest:
+            die("usage: fastmail read <id>")
+        cmd_read(token, rest[0])
+        return
+    die("unknown command")
+
+
+if __name__ == "__main__":
+    main()

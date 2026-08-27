@@ -1,0 +1,212 @@
+#!/usr/bin/env python3
+"""IMAP provider: unread in every folder except trash/junk/drafts/sent."""
+
+from __future__ import annotations
+
+import email
+import email.header
+import email.utils
+import imaplib
+import os
+import re
+import ssl
+import sys
+from datetime import datetime, timezone
+from email.message import Message
+
+import _bootstrap
+from common import die, emit, max_messages
+
+SKIP_FOLDER = re.compile(
+    r"(^|/)(trash|junk|spam|drafts?|sent|bin|deleted|queue|outbox)(/|$)",
+    re.I,
+)
+
+
+def _decode_header(value: str | None) -> str:
+    if not value:
+        return ""
+    parts = []
+    for chunk, charset in email.header.decode_header(value):
+        if isinstance(chunk, bytes):
+            parts.append(chunk.decode(charset or "utf-8", "replace"))
+        else:
+            parts.append(chunk)
+    return " ".join(parts).replace("\n", " ").strip()
+
+
+def _sender(msg: Message) -> str:
+    raw = _decode_header(msg.get("From"))
+    name, addr = email.utils.parseaddr(raw)
+    return name or addr or raw
+
+
+def _timestamp(msg: Message) -> int:
+    parsed = email.utils.parsedate_to_datetime(msg.get("Date") or "")
+    if parsed is None:
+        return 0
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return int(parsed.timestamp())
+
+
+def _snippet(msg: Message) -> str:
+    text = ""
+    if msg.is_multipart():
+        for part in msg.walk():
+            ctype = part.get_content_type()
+            disp = str(part.get("Content-Disposition") or "")
+            if ctype == "text/plain" and "attachment" not in disp.lower():
+                payload = part.get_payload(decode=True) or b""
+                charset = part.get_content_charset() or "utf-8"
+                text = payload.decode(charset, "replace")
+                break
+    else:
+        payload = msg.get_payload(decode=True) or b""
+        charset = msg.get_content_charset() or "utf-8"
+        text = payload.decode(charset, "replace")
+    text = re.sub(r"\s+", " ", text).strip()
+    return text[:180]
+
+
+def _folders(client: imaplib.IMAP4) -> list[str]:
+    typ, rows = client.list()
+    if typ != "OK" or not rows:
+        return ["INBOX"]
+    names = []
+    for raw in rows:
+        if not raw:
+            continue
+        line = raw.decode("utf-8", "replace") if isinstance(raw, bytes) else str(raw)
+        if "\\Noselect" in line:
+            continue
+        # The mailbox name is the last quoted token, or the last word.
+        m = re.search(r' "((?:\\.|[^"\\])*)"$', line)
+        if m:
+            name = m.group(1).replace('\\"', '"')
+        else:
+            name = line.split(" ")[-1].strip('"')
+        if not name or SKIP_FOLDER.search(name):
+            continue
+        names.append(name)
+    return names or ["INBOX"]
+
+
+def _connect(acc: dict, password: str) -> imaplib.IMAP4_SSL:
+    host = str(acc.get("host") or "")
+    port = int(acc.get("port") or 993)
+    user = str(acc.get("user") or "")
+    if not host or not user or not password:
+        die("IMAP host, username and password are required")
+    ctx = ssl.create_default_context()
+    client = imaplib.IMAP4_SSL(host, port, ssl_context=ctx)
+    client.login(user, password)
+    return client
+
+
+def cmd_list(acc: dict, password: str, limit: int) -> None:
+    client = _connect(acc, password)
+    messages = []
+    unread = 0
+    try:
+        for folder in _folders(client):
+            typ, _ = client.select(f'"{folder}"', readonly=True)
+            if typ != "OK":
+                continue
+            typ, data = client.uid("search", None, "UNSEEN")
+            if typ != "OK" or not data or not data[0]:
+                continue
+            uids = [u for u in data[0].decode().split() if u]
+            unread += len(uids)
+            for uid in reversed(uids):
+                if len(messages) >= limit:
+                    continue
+                typ, fetched = client.uid(
+                    "fetch",
+                    uid,
+                    "(BODY.PEEK[HEADER.FIELDS (FROM SUBJECT DATE)])",
+                )
+                if typ != "OK" or not fetched:
+                    continue
+                blob = b""
+                for item in fetched:
+                    if isinstance(item, tuple):
+                        blob += item[1]
+                msg = email.message_from_bytes(blob)
+                local_id = f"{folder}/{uid}"
+                web = str(acc.get("webmail") or "")
+                messages.append(
+                    {
+                        "id": local_id,
+                        "threadId": uid,
+                        "subject": _decode_header(msg.get("Subject")) or "(no subject)",
+                        "from": _sender(msg),
+                        "snippet": "",
+                        "ts": _timestamp(msg),
+                        "labels": [folder] if folder.upper() != "INBOX" else [],
+                        "url": web,
+                    }
+                )
+    finally:
+        try:
+            client.logout()
+        except Exception:
+            pass
+    messages.sort(key=lambda m: m["ts"], reverse=True)
+    emit(
+        {
+            "ok": True,
+            "email": str(acc.get("user") or acc.get("email") or ""),
+            "unread": unread,
+            "searchUrl": str(acc.get("webmail") or ""),
+            "messages": messages[:limit],
+        }
+    )
+
+
+def cmd_read(acc: dict, password: str, local_id: str) -> None:
+    if "/" not in local_id:
+        die("not a message id")
+    folder, uid = local_id.rsplit("/", 1)
+    if not uid.isdigit():
+        die("not a message id")
+    client = _connect(acc, password)
+    try:
+        typ, _ = client.select(f'"{folder}"')
+        if typ != "OK":
+            die("could not open folder")
+        typ, _ = client.uid("store", uid, "+FLAGS", "(\\Seen)")
+        if typ != "OK":
+            die("could not mark as read")
+    finally:
+        try:
+            client.logout()
+        except Exception:
+            pass
+    emit({"ok": True})
+
+
+def main() -> None:
+    acc = _bootstrap.account()
+    sec = _bootstrap.secret()
+    cmd, rest, flags = _bootstrap.parse_args(sys.argv[1:])
+    limit = max_messages()
+    if flags.get("limit"):
+        try:
+            limit = max(1, min(50, int(flags["limit"])))
+        except ValueError:
+            pass
+    password = str(sec.get("password") or os.environ.get("YOU_GOT_MAIL_IMAP_PASSWORD") or "")
+    if cmd == "list":
+        cmd_list(acc, password, limit)
+        return
+    if cmd == "read":
+        if not rest:
+            die("usage: imap read <id>")
+        cmd_read(acc, password, rest[0])
+        return
+    die("unknown command")
+
+
+if __name__ == "__main__":
+    main()
