@@ -81,28 +81,40 @@ Clicking a message opens it in Fastmail’s web app.
 
 ## Outlook
 
-Two ways.
+Personal `outlook.com` / `live.com` / `hotmail.com` mailboxes (including
+[outlook.live.com](https://outlook.live.com/)) **cannot use IMAP with a
+password or app password**. Microsoft retired that path. Use Graph.
 
 ### Microsoft Graph (recommended)
 
 Needs an Azure app registration you own (Microsoft does not let a desktop
 app ship a shared client id for mail). Personal Microsoft accounts work.
 
-1. [Azure portal](https://portal.azure.com/) → Microsoft Entra ID → App registrations → New.
-2. Name it e.g. `you-got-mail`. Accounts: **personal Microsoft accounts** or
-   **any org and personal**.
-3. Authentication → Add a platform → **Mobile and desktop**. Redirect
-   `https://login.microsoftonline.com/common/oauth2/nativeclient` is fine.
-   Treat the app as a public client.
-4. API permissions → Microsoft Graph delegated: `User.Read`, `Mail.ReadWrite`,
-   `offline_access`. Grant admin consent if the portal asks.
-5. Copy the **Application (client) ID**.
-6. `you-got-mail accounts add outlook`, choose `graph`, paste the client id.
-   A device-login code is printed; open the URL, enter the code, approve mail.
+1. Open the [Entra admin center](https://entra.microsoft.com/) signed in as
+   the mailbox you are adding. If it asks you to create a tenant / Azure
+   subscription, the free one is enough.
+2. Identity → Applications → App registrations → **New registration**.
+3. Name it e.g. `you-got-mail`. Supported accounts: **Personal Microsoft
+   accounts only** (or **any org and personal** if you also have work mail).
+4. Authentication → Add a platform → **Mobile and desktop applications**.
+   Tick `http://localhost` and
+   `https://login.microsoftonline.com/common/oauth2/nativeclient`.
+   Under Advanced: **Allow public client flows** = Yes.
+5. API permissions → Microsoft Graph → Delegated: `User.Read`,
+   `Mail.ReadWrite`, `offline_access`. No admin consent is needed for a
+   personal mailbox you own.
+6. Copy the **Application (client) ID** from Overview.
+7. `you-got-mail accounts add outlook`, choose `graph`, paste the client id.
+   Tenant: `consumers` for outlook.com, `common` for work/school.
+   A browser tab opens; sign in as that mailbox and accept mail access.
+
+The first extra account also writes the implicit Gmail account into
+`accounts.json`, so Gmail stays on the pile.
 
 ### IMAP
 
-If your tenant still allows app passwords:
+Only for leftover hosts that still accept an app password — **not**
+personal Outlook.com.
 
 ```text
 host: outlook.office365.com

@@ -154,17 +154,26 @@ def _add_imap(accounts: list[dict], acc_id: str, label: str) -> dict:
 
 def _add_outlook(accounts: list[dict], acc_id: str, label: str) -> dict:
     sys.stderr.write(
-        "Outlook can use Microsoft Graph (recommended) or IMAP.\n"
-        "Graph needs an Azure app registration: see docs/ACCOUNTS.md.\n"
-        "IMAP uses outlook.office365.com and an app password.\n"
+        "Outlook uses Microsoft Graph. Personal outlook.com / live.com\n"
+        "mailboxes cannot use IMAP passwords anymore — see docs/ACCOUNTS.md.\n"
+        "You need an Azure app registration you own (client id only).\n"
     )
     kind = _ask("Auth method: graph or imap", "graph").lower()
     if kind == "imap":
+        sys.stderr.write(
+            "IMAP with a password almost never works for @outlook.com;\n"
+            "prefer graph unless this is a leftover tenant that still allows it.\n"
+        )
         user = _ask("Email address")
         password = _ask_secret("App password")
         if not user or not password:
             fail("email and app password are required")
         save_secret(acc_id, {"password": password})
+        webmail = (
+            "https://outlook.live.com/mail/"
+            if user.lower().endswith(("@outlook.com", "@hotmail.com", "@live.com", "@msn.com"))
+            else "https://outlook.office.com/mail/"
+        )
         return {
             "id": acc_id,
             "provider": "imap",
@@ -172,16 +181,16 @@ def _add_outlook(accounts: list[dict], acc_id: str, label: str) -> dict:
             "host": "outlook.office365.com",
             "port": 993,
             "user": user,
-            "webmail": "https://outlook.office.com/mail/",
+            "webmail": webmail,
         }
     client_id = _ask("Azure application (client) ID")
-    tenant = _ask("Tenant", "common")
+    tenant = _ask("Tenant (consumers for outlook.com, common for work)", "consumers")
     if not client_id:
         fail("client id is required")
-    from outlook_auth import device_login
+    from outlook_auth import graph_login
 
     try:
-        tokens = device_login(client_id, tenant)
+        tokens = graph_login(client_id, tenant)
     except RuntimeError as exc:
         fail(str(exc))
     save_secret(
@@ -198,7 +207,8 @@ def _add_outlook(accounts: list[dict], acc_id: str, label: str) -> dict:
 def cmd_add(provider: str | None) -> None:
     if not _tty():
         fail("accounts add needs a terminal; or edit accounts.json as in docs/ACCOUNTS.md")
-    accounts = load_accounts() if ACCOUNTS_FILE.is_file() else []
+    existing = ACCOUNTS_FILE.is_file()
+    accounts = load_accounts() if existing else []
     if provider is None:
         provider = _ask("Provider (gmail, outlook, fastmail, imap, hey)").lower().strip()
     if provider not in PROVIDERS:
@@ -220,6 +230,9 @@ def cmd_add(provider: str | None) -> None:
         acc = _add_outlook(accounts, acc_id, label)
     else:
         fail(f"unknown provider '{provider}'")
+    if not existing and acc["id"] != "gmail":
+        # Implicit v1 Gmail would vanish the moment accounts.json appears.
+        accounts.insert(0, {"id": "gmail", "provider": "gmail", "label": "Gmail"})
     accounts.append(acc)
     save_accounts(accounts)
     sys.stdout.write(f"Added {acc_id} ({provider}). The panel picks it up on the next refresh.\n")
