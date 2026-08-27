@@ -123,6 +123,7 @@ def cmd_list(page_token: str) -> None:
         "searchUrl": search_url if len(accounts) == 1 else "",
         "nextPage": next_page,
         "thisPage": str(start),
+        "accountCount": len(accounts),
         "messages": chunk,
     }
     if errors:

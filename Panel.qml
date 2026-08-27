@@ -42,6 +42,7 @@ Panel {
   property string pageToken: ""
   property var pageStack: []
   property string nextPage: ""
+  property int accountCount: 0
   readonly property bool hasPrev: pageStack.length > 0
   readonly property bool hasNext: nextPage !== ""
 
@@ -163,6 +164,10 @@ Panel {
     return Qt.formatDate(new Date(ts * 1000), "d MMM")
   }
 
+  function oneLine(value) {
+    return String(value || "").replace(/\s+/g, " ").trim()
+  }
+
   function applyPayload(text) {
     try {
       var data = JSON.parse(text)
@@ -173,6 +178,7 @@ Panel {
       unread = data.unread || 0
       email = data.email || ""
       searchUrl = data.searchUrl || ""
+      accountCount = data.accountCount || 0
       nextPage = validToken(data.nextPage) ? data.nextPage : ""
       if (cursor > messages.length - 1) cursor = messages.length - 1
     } catch (e) {
@@ -451,13 +457,17 @@ Panel {
                     id: chips
                     anchors.verticalCenter: parent.verticalCenter
                     spacing: Style.space(3)
-                    visible: (row.modelData.labels || []).length > 0
+                    visible: {
+                      var labs = row.modelData.labels || []
+                      var acc = row.modelData.account || ""
+                      return labs.length > 0 || (root.accountCount > 1 && acc !== "")
+                    }
 
                     Repeater {
                       model: {
                         var labs = (row.modelData.labels || []).slice()
                         var acc = row.modelData.account || ""
-                        if (acc) labs.unshift(acc)
+                        if (acc && root.accountCount > 1) labs.unshift(acc)
                         return labs.slice(0, 2)
                       }
 
@@ -487,8 +497,10 @@ Panel {
                     id: subject
                     anchors.verticalCenter: parent.verticalCenter
                     width: line.width - (chips.visible ? chips.width + line.spacing : 0)
-                    text: row.modelData.subject
+                    text: root.oneLine(row.modelData.subject)
                     textFormat: Text.PlainText
+                    wrapMode: Text.NoWrap
+                    maximumLineCount: 1
                     elide: Text.ElideRight
                     font.family: root.fontFamily
                     font.pixelSize: Style.font.body
@@ -527,11 +539,13 @@ Panel {
 
                 Text {
                   text: {
-                    var body = row.modelData.snippet || ""
+                    var body = root.oneLine(row.modelData.snippet)
                     if (body === "") return ""
                     return (fromLabel.text !== "" ? "  -  " : "") + body
                   }
                   textFormat: Text.PlainText
+                  wrapMode: Text.NoWrap
+                  maximumLineCount: 1
                   elide: Text.ElideRight
                   width: parent.width - fromLabel.width
                   font.family: root.fontFamily

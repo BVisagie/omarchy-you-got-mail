@@ -36,6 +36,14 @@ def max_messages() -> int:
     return max(1, min(50, n))
 
 
+def one_line(value: str, limit: int = 180) -> str:
+    text = re.sub(r"[\u00ad\u034f\u200b-\u200f\u202a-\u202e\u2060-\u206f\ufeff]+", "", value or "")
+    text = re.sub(r"\s+", " ", text).strip()
+    if len(text) <= limit:
+        return text
+    return text[: limit - 1].rstrip() + "…"
+
+
 def ensure_config_dirs() -> None:
     CONFIG_DIR.mkdir(mode=0o700, parents=True, exist_ok=True)
     os.chmod(CONFIG_DIR, 0o700)

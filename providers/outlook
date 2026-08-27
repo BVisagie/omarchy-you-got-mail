@@ -10,7 +10,7 @@ import urllib.parse
 import urllib.request
 
 import _bootstrap
-from common import die, emit, max_messages, save_secret
+from common import die, emit, max_messages, one_line, save_secret
 from outlook_auth import refresh_access_token
 
 GRAPH = "https://graph.microsoft.com/v1.0"
@@ -108,7 +108,7 @@ def cmd_list(acc: dict, sec: dict, limit: int) -> None:
                 "threadId": item.get("conversationId") or item["id"],
                 "subject": item.get("subject") or "(no subject)",
                 "from": name,
-                "snippet": (item.get("bodyPreview") or "").strip(),
+                "snippet": one_line(item.get("bodyPreview") or ""),
                 "ts": ts,
                 "labels": [],
                 "url": item.get("webLink") or fallback_url,
