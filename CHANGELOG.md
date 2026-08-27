@@ -2,6 +2,12 @@
 
 Versions match `manifest.json`. Git tags are created at release time.
 
+## 2.4.1
+
+- Opening the panel no longer paints the mailbox with `activeColor`
+  (theme urgent/red). The icon stays on the bar foreground like other
+  widgets; the shell still marks which panel is open.
+
 ## 2.4.0
 
 Unread mail is information, not an alarm. The bar count no longer uses
