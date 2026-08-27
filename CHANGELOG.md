@@ -2,6 +2,12 @@
 
 Versions match `manifest.json`. Git tags are created at release time.
 
+## 2.4.2
+
+- Local config, account, secret, and Outlook-cache reads open the file
+  once with `O_NOFOLLOW|O_NONBLOCK`, validate a user-owned regular file
+  on that descriptor, and cap the read at 64KiB before decoding.
+
 ## 2.4.1
 
 - Opening the panel no longer paints the mailbox with `activeColor`

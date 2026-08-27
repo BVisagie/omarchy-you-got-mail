@@ -145,12 +145,25 @@ class SecretLoaderTests(unittest.TestCase):
 
     def test_rejects_symlink(self) -> None:
         target = self.tmp / "real.json"
-        target.write_text("{}\n", encoding="utf-8")
+        target.write_text('{"token":"secret"}\n', encoding="utf-8")
         os.chmod(target, 0o600)
         link = self.tmp / "link.json"
         link.symlink_to(target)
         data = common.load_secret_file(link, "fastmail")
         self.assertEqual(data, {})
+        self.assertEqual(target.read_text(encoding="utf-8"), '{"token":"secret"}\n')
+
+    def test_rejects_fifo_without_blocking(self) -> None:
+        os.mkfifo(self.path)
+        data = common.load_secret_file(self.path, "fastmail")
+        self.assertEqual(data, {})
+
+    def test_rejects_oversized_file(self) -> None:
+        self.path.write_bytes(b"{" + b"x" * (common.MAX_LOCAL_FILE + 1) + b"}")
+        os.chmod(self.path, 0o600)
+        payload = capture_json(common.load_secret_file, self.path, "fastmail")
+        self.assertFalse(payload["ok"])
+        self.assertIn("too large", payload["error"])
 
 
 class AccountsFileTests(unittest.TestCase):
@@ -177,11 +190,45 @@ class AccountsFileTests(unittest.TestCase):
         accounts = common.load_accounts()
         self.assertEqual(accounts[0]["provider"], "gmail")
 
+    def test_reads_valid_accounts(self) -> None:
+        common.ACCOUNTS_FILE.write_text(
+            json.dumps({"accounts": [{"id": "work", "provider": "imap", "label": "Work"}]}),
+            encoding="utf-8",
+        )
+        os.chmod(common.ACCOUNTS_FILE, 0o600)
+        accounts = common.load_accounts()
+        self.assertEqual(accounts[0]["id"], "work")
+        self.assertEqual(accounts[0]["provider"], "imap")
+
+    def test_symlink_is_implicit_gmail(self) -> None:
+        target = self.tmp / "real.json"
+        target.write_text(
+            json.dumps({"accounts": [{"id": "work", "provider": "imap", "label": "Work"}]}),
+            encoding="utf-8",
+        )
+        os.chmod(target, 0o600)
+        common.ACCOUNTS_FILE.symlink_to(target)
+        accounts = common.load_accounts()
+        self.assertEqual(accounts[0]["provider"], "gmail")
+        self.assertEqual(json.loads(target.read_text(encoding="utf-8"))["accounts"][0]["id"], "work")
+
+    def test_fifo_is_implicit_gmail(self) -> None:
+        os.mkfifo(common.ACCOUNTS_FILE)
+        accounts = common.load_accounts()
+        self.assertEqual(accounts[0]["provider"], "gmail")
+
+    def test_oversized_file_dies(self) -> None:
+        common.ACCOUNTS_FILE.write_bytes(b"{" + b"x" * (common.MAX_LOCAL_FILE + 1) + b"}")
+        os.chmod(common.ACCOUNTS_FILE, 0o600)
+        payload = capture_json(common.load_accounts)
+        self.assertFalse(payload["ok"])
+        self.assertIn("too large", payload["error"])
+
 
 class ManifestAndHelpTests(unittest.TestCase):
     def test_manifest_widget_settings(self) -> None:
         data = json.loads((ROOT / "manifest.json").read_text(encoding="utf-8"))
-        self.assertEqual(data["version"], "2.4.1")
+        self.assertEqual(data["version"], "2.4.2")
         keys = {item["key"] for item in data["barWidget"]["schema"]}
         self.assertEqual(keys, {"max", "refreshIntervalSec"})
         self.assertEqual(data["barWidget"]["defaults"]["max"], 25)
@@ -202,6 +249,99 @@ class ManifestAndHelpTests(unittest.TestCase):
                 __import__("sys").argv = old
         self.assertIn("--limit", buf.getvalue())
         self.assertIn("read-all", buf.getvalue())
+
+
+class OwnedFileReadTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.tmp = _workdir()
+        self.addCleanup(lambda: shutil.rmtree(self.tmp, ignore_errors=True))
+        os.chmod(self.tmp, 0o700)
+        self.path = self.tmp / "owned.json"
+
+    def test_reads_regular_owned_file(self) -> None:
+        self.path.write_bytes(b'{"ok":true}')
+        os.chmod(self.path, 0o600)
+        self.assertEqual(common.read_owned_file(self.path), b'{"ok":true}')
+
+    def test_missing_path_returns_none(self) -> None:
+        self.assertIsNone(common.read_owned_file(self.path))
+
+    def test_symlink_returns_none(self) -> None:
+        target = self.tmp / "real.json"
+        target.write_bytes(b'{"token":"abc"}')
+        os.chmod(target, 0o600)
+        self.path.symlink_to(target)
+        self.assertIsNone(common.read_owned_file(self.path))
+        self.assertEqual(target.read_bytes(), b'{"token":"abc"}')
+
+    def test_fifo_returns_none_without_blocking(self) -> None:
+        os.mkfifo(self.path)
+        self.assertIsNone(common.read_owned_file(self.path))
+
+    def test_rejects_oversize_without_loading_all(self) -> None:
+        self.path.write_bytes(b"x" * (common.MAX_LOCAL_FILE + 1))
+        os.chmod(self.path, 0o600)
+        with self.assertRaises(common.FileTooLargeError):
+            common.read_owned_file(self.path)
+
+    def test_accepts_file_at_limit(self) -> None:
+        payload = b"x" * common.MAX_LOCAL_FILE
+        self.path.write_bytes(payload)
+        os.chmod(self.path, 0o600)
+        self.assertEqual(common.read_owned_file(self.path), payload)
+
+    def test_require_private_rejects_group_readable(self) -> None:
+        self.path.write_bytes(b"{}")
+        os.chmod(self.path, 0o644)
+        with self.assertRaises(PermissionError) as caught:
+            common.read_owned_file(self.path, require_private=True)
+        self.assertIn("too open", str(caught.exception))
+
+    def test_common_readers_do_not_use_path_read_text(self) -> None:
+        source = (ROOT / "lib" / "common.py").read_text(encoding="utf-8")
+        self.assertIn("O_NOFOLLOW", source)
+        self.assertIn("O_NONBLOCK", source)
+        self.assertNotIn(".read_text(", source)
+
+
+class ConfigFileTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.tmp = _workdir()
+        self.addCleanup(lambda: shutil.rmtree(self.tmp, ignore_errors=True))
+        os.chmod(self.tmp, 0o700)
+        self._old_dir = common.CONFIG_DIR
+        self._old_max = os.environ.pop("YOU_GOT_MAIL_MAX", None)
+        common.CONFIG_DIR = self.tmp
+
+    def tearDown(self) -> None:
+        common.CONFIG_DIR = self._old_dir
+        if self._old_max is None:
+            os.environ.pop("YOU_GOT_MAIL_MAX", None)
+        else:
+            os.environ["YOU_GOT_MAIL_MAX"] = self._old_max
+
+    def test_reads_max(self) -> None:
+        path = self.tmp / "config"
+        path.write_text("max = 12\n", encoding="utf-8")
+        os.chmod(path, 0o600)
+        self.assertEqual(common.max_messages(), 12)
+
+    def test_symlink_falls_back_to_default(self) -> None:
+        target = self.tmp / "real"
+        target.write_text("max = 7\n", encoding="utf-8")
+        os.chmod(target, 0o600)
+        (self.tmp / "config").symlink_to(target)
+        self.assertEqual(common.max_messages(), 25)
+
+    def test_fifo_falls_back_to_default(self) -> None:
+        os.mkfifo(self.tmp / "config")
+        self.assertEqual(common.max_messages(), 25)
+
+    def test_oversize_falls_back_to_default(self) -> None:
+        path = self.tmp / "config"
+        path.write_bytes(b"max = 9\n" + b"x" * (common.MAX_LOCAL_FILE + 1))
+        os.chmod(path, 0o600)
+        self.assertEqual(common.max_messages(), 25)
 
 
 if __name__ == "__main__":

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import errno
 import json
 import os
 import re
@@ -21,10 +22,16 @@ PAGE_SIZE_MAX = 50
 FETCH_CAP = 200
 MAX_HTTP_BODY = 2 * 1024 * 1024
 MAX_HTTP_ERROR = 64 * 1024
+MAX_LOCAL_FILE = 64 * 1024
 
 
 class ResponseTooLargeError(ValueError):
     def __init__(self, message: str = "response too large") -> None:
+        super().__init__(message)
+
+
+class FileTooLargeError(ValueError):
+    def __init__(self, message: str = "file too large") -> None:
         super().__init__(message)
 
 
@@ -66,13 +73,59 @@ def emit(payload: dict) -> None:
     sys.stdout.write(json.dumps(payload, ensure_ascii=False) + "\n")
 
 
+def read_owned_file(
+    path: Path,
+    limit: int = MAX_LOCAL_FILE,
+    *,
+    require_private: bool = False,
+) -> bytes | None:
+    """Open path once, validate the fd, and read at most *limit* bytes.
+
+    Uses O_NOFOLLOW|O_NONBLOCK so a swapped symlink or FIFO cannot redirect
+    or block the read. Missing paths, dangling/final-component symlinks, and
+    non-regular files return None. Wrong owner is None unless require_private
+    is set, in which case PermissionError is raised (and too-open mode too).
+    """
+    flags = os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK
+    try:
+        fd = os.open(path, flags)
+    except FileNotFoundError:
+        return None
+    except OSError as exc:
+        if exc.errno in (errno.ELOOP, errno.ENXIO, errno.EAGAIN, errno.EWOULDBLOCK, errno.ENOTDIR):
+            return None
+        raise
+    try:
+        st = os.fstat(fd)
+        if not stat.S_ISREG(st.st_mode):
+            return None
+        if st.st_uid != os.getuid():
+            if require_private:
+                raise PermissionError("not owned")
+            return None
+        if require_private and st.st_mode & (stat.S_IRWXG | stat.S_IRWXO):
+            raise PermissionError("too open")
+        if st.st_size > limit:
+            raise FileTooLargeError()
+        data = os.read(fd, limit + 1)
+        if len(data) > limit:
+            raise FileTooLargeError()
+        return data
+    finally:
+        os.close(fd)
+
+
 def _config_max() -> str | None:
     path = CONFIG_DIR / "config"
-    if not path.is_file() or path.is_symlink():
+    try:
+        raw = read_owned_file(path)
+    except (OSError, FileTooLargeError, PermissionError):
+        return None
+    if raw is None:
         return None
     try:
-        lines = path.read_text(encoding="utf-8").splitlines()
-    except OSError:
+        lines = raw.decode("utf-8").splitlines()
+    except UnicodeDecodeError:
         return None
     for line in lines:
         stripped = line.strip()
@@ -154,15 +207,22 @@ def write_private(path: Path, text: str) -> None:
 
 
 def load_accounts() -> list[dict]:
-    if not ACCOUNTS_FILE.is_file() or ACCOUNTS_FILE.is_symlink():
-        return [{"id": "gmail", "provider": "gmail", "label": "Gmail"}]
+    implicit = [{"id": "gmail", "provider": "gmail", "label": "Gmail"}]
     try:
-        data = json.loads(ACCOUNTS_FILE.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
+        raw = read_owned_file(ACCOUNTS_FILE)
+    except FileTooLargeError:
+        die("accounts.json is too large")
+    except OSError:
+        die("accounts.json is not valid JSON")
+    if raw is None:
+        return implicit
+    try:
+        data = json.loads(raw.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError):
         die("accounts.json is not valid JSON")
     accounts = data.get("accounts") if isinstance(data, dict) else None
     if not isinstance(accounts, list) or not accounts:
-        return [{"id": "gmail", "provider": "gmail", "label": "Gmail"}]
+        return implicit
     out = []
     for item in accounts:
         if not isinstance(item, dict):
@@ -172,7 +232,7 @@ def load_accounts() -> list[dict]:
         if not ACCOUNT_ID_RE.match(acc_id) or provider not in PROVIDERS:
             continue
         out.append(item)
-    return out or [{"id": "gmail", "provider": "gmail", "label": "Gmail"}]
+    return out or implicit
 
 
 def save_accounts(accounts: list[dict]) -> None:
@@ -186,16 +246,21 @@ def secret_path(account_id: str) -> Path:
 
 def load_secret_file(path: Path, account_id: str = "") -> dict:
     label = account_id or path.name
-    if not path.is_file() or path.is_symlink():
-        return {}
     try:
-        st = path.stat()
+        raw = read_owned_file(path, require_private=True)
+    except FileTooLargeError:
+        die(f"secret file for {label} is too large")
+    except PermissionError as exc:
+        reason = str(exc)
+        if "too open" in reason:
+            die(f"secret file for {label} is too open; chmod 600 it")
+        if "not owned" in reason:
+            die(f"secret file for {label} is not owned by you")
+        die(f"secret file for {label} is not readable")
     except OSError:
         die(f"secret file for {label} is not readable")
-    if st.st_uid != os.getuid():
-        die(f"secret file for {label} is not owned by you")
-    if st.st_mode & (stat.S_IRWXG | stat.S_IRWXO):
-        die(f"secret file for {label} is too open; chmod 600 it")
+    if raw is None:
+        return {}
     parent = path.parent
     if parent.is_symlink():
         die(f"secret directory for {label} is a symlink")
@@ -206,8 +271,8 @@ def load_secret_file(path: Path, account_id: str = "") -> dict:
     if pst.st_uid != os.getuid() or pst.st_mode & (stat.S_IRWXG | stat.S_IRWXO):
         die(f"secret directory for {label} is too open; chmod 700 it")
     try:
-        data = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
+        data = json.loads(raw.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError):
         die(f"secret file for {label} is not valid JSON")
     return data if isinstance(data, dict) else {}
 
