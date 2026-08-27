@@ -14,7 +14,17 @@ from datetime import datetime
 from pathlib import Path
 
 import _bootstrap
-from common import ResponseTooLargeError, die, emit, one_line, read_http_body, save_secret, write_private
+from common import (
+    FileTooLargeError,
+    ResponseTooLargeError,
+    die,
+    emit,
+    one_line,
+    read_http_body,
+    read_owned_file,
+    save_secret,
+    write_private,
+)
 from outlook_auth import refresh_access_token
 
 GRAPH = "https://graph.microsoft.com/v1.0"
@@ -73,11 +83,15 @@ def _cache_dir(account_id: str) -> Path:
 
 def _read_cache(account_id: str) -> dict:
     path = _cache_dir(account_id) / "outlook.json"
-    if not path.is_file() or path.is_symlink():
+    try:
+        raw = read_owned_file(path)
+    except (OSError, FileTooLargeError, PermissionError):
+        return {}
+    if raw is None:
         return {}
     try:
-        data = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
+        data = json.loads(raw.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError):
         return {}
     return data if isinstance(data, dict) else {}
 

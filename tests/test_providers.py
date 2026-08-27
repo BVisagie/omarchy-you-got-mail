@@ -340,6 +340,51 @@ class OutlookUnreadTests(unittest.TestCase):
         self.assertNotIn('path.name + ".tmp"', source)
         self.assertNotIn("tmp.write_text", source)
 
+    def test_cache_uses_read_owned_file(self) -> None:
+        from support import ROOT
+
+        source = (ROOT / "providers" / "outlook").read_text(encoding="utf-8")
+        self.assertIn("read_owned_file(path)", source)
+        self.assertIn("O_NOFOLLOW", (ROOT / "lib" / "common.py").read_text(encoding="utf-8"))
+        self.assertNotIn("path.read_text", source)
+
+    def test_read_cache_skips_symlink_fifo_and_oversize(self) -> None:
+        import json
+        import os
+        import shutil
+        import tempfile
+        from pathlib import Path
+
+        from support import ROOT
+
+        root = ROOT / ".test-tmp"
+        root.mkdir(exist_ok=True)
+        tmp = Path(tempfile.mkdtemp(dir=root))
+        self.addCleanup(lambda: shutil.rmtree(tmp, ignore_errors=True))
+        limit = self.out.read_owned_file.__defaults__[0]
+        with patch.dict(os.environ, {"XDG_CACHE_HOME": str(tmp / "cache")}):
+            real = self.out._cache_dir("work") / "outlook.json"
+            payload = {"email": "a@b.test", "email_at": 1}
+            real.write_text(json.dumps(payload), encoding="utf-8")
+            os.chmod(real, 0o600)
+            self.assertEqual(self.out._read_cache("work")["email"], "a@b.test")
+
+            real.unlink()
+            target = real.parent / "other.json"
+            target.write_text(json.dumps(payload), encoding="utf-8")
+            os.chmod(target, 0o600)
+            real.symlink_to(target)
+            self.assertEqual(self.out._read_cache("work"), {})
+            real.unlink()
+
+            os.mkfifo(real)
+            self.assertEqual(self.out._read_cache("work"), {})
+            real.unlink()
+
+            real.write_bytes(b"{" + b"x" * (limit + 1) + b"}")
+            os.chmod(real, 0o600)
+            self.assertEqual(self.out._read_cache("work"), {})
+
 
 class BoundedHttpTests(unittest.TestCase):
     @classmethod
