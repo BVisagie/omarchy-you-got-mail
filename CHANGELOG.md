@@ -2,6 +2,13 @@
 
 Versions match `manifest.json`. Git tags are created at release time.
 
+## 2.5.1
+
+- README: `omarchy plugin update` shows a diff (page, then `q` to leave
+  the pager) before confirming; `--yes` skips that review.
+- Marketplace and widget copy name Gmail, Outlook, Fastmail, IMAP, and
+  HEY.
+
 ## 2.5.0
 
 IMAP folder discovery follows SPECIAL-USE attributes, not only English

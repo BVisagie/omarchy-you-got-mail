@@ -59,6 +59,16 @@ you did not pass `--enable`.
 omarchy plugin update bvisagie.you-got-mail
 ```
 
+Omarchy fetches the latest commit and prints a diff of what would
+change. If that opens a pager, space pages through the diff and `q`
+leaves it. After the diff, confirm the update.
+
+To skip the diff and confirmation:
+
+```bash
+omarchy plugin update bvisagie.you-got-mail --yes
+```
+
 That fast-forwards the git checkout in
 `~/.config/omarchy/plugins/bvisagie.you-got-mail/`. It does not rewrite
 `~/.config/omarchy-you-got-mail/` (accounts and secrets). See

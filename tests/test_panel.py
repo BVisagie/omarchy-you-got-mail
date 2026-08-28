@@ -38,6 +38,8 @@ class PanelContractTests(unittest.TestCase):
         readme = (ROOT / "README.md").read_text(encoding="utf-8")
         self.assertIn("https://github.com/BVisagie/omarchy-you-got-mail.git", readme)
         self.assertIn("omarchy plugin update bvisagie.you-got-mail", readme)
+        self.assertIn("omarchy plugin update bvisagie.you-got-mail --yes", readme)
+        self.assertIn("`q`", readme)
         self.assertIn("~/.bun/bin", readme)
         self.assertIn("YOU_GOT_MAIL_IMAP_PASSWORD", readme)
         self.assertIn("gws auth setup", readme)
