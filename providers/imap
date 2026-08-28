@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""IMAP provider: unread in every folder except trash/junk/drafts/sent."""
+"""IMAP provider: unread in selectable folders, minus special-use and junk."""
 
 from __future__ import annotations
 
@@ -22,7 +22,16 @@ SKIP_FOLDER = re.compile(
     r"(^|/)(trash|junk|spam|drafts?|sent|bin|deleted|queue|outbox)(/|$)",
     re.I,
 )
+# RFC 6154 SPECIAL-USE, plus Gmail \Important. Search the flag list only;
+# mailbox names are localized and SKIP_FOLDER is English-only. Do not skip \Inbox.
+SKIP_ATTR = re.compile(
+    r"\\(All|Archive|Sent|Trash|Drafts|Junk|Flagged|Important)\b",
+    re.I,
+)
 READ_ALL_BUDGET = 100
+# Must stay below orchestrate.LIST_TIMEOUT (45) so a hung handshake fails
+# here as OSError instead of a generic provider kill.
+SOCKET_TIMEOUT = 30
 UID_CHUNK = 80
 
 
@@ -78,7 +87,12 @@ def _snippet(msg: Message) -> str:
     return text[:180]
 
 
-def _folders(client: imaplib.IMAP4) -> list[str]:
+def _folders(client: imaplib.IMAP4, acc: dict | None = None) -> list[str]:
+    configured = (acc or {}).get("folders")
+    if isinstance(configured, list):
+        chosen = [str(folder).strip() for folder in configured if str(folder).strip()]
+        if chosen:
+            return chosen
     typ, rows = client.list()
     if typ != "OK" or not rows:
         return ["INBOX"]
@@ -88,6 +102,8 @@ def _folders(client: imaplib.IMAP4) -> list[str]:
             continue
         line = raw.decode("utf-8", "replace") if isinstance(raw, bytes) else str(raw)
         if "\\Noselect" in line:
+            continue
+        if SKIP_ATTR.search(line[: line.find(")") + 1]):
             continue
         # The mailbox name is the last quoted token, or the last word.
         m = re.search(r' "((?:\\.|[^"\\])*)"$', line)
@@ -108,7 +124,7 @@ def _connect(acc: dict, password: str) -> imaplib.IMAP4_SSL:
     if not host or not user or not password:
         die("IMAP host, username and password are required")
     ctx = ssl.create_default_context()
-    client = imaplib.IMAP4_SSL(host, port, ssl_context=ctx)
+    client = imaplib.IMAP4_SSL(host, port, ssl_context=ctx, timeout=SOCKET_TIMEOUT)
     client.login(user, password)
     return client
 
@@ -125,7 +141,7 @@ def cmd_list(acc: dict, password: str, limit: int) -> None:
     messages = []
     unread = 0
     try:
-        for folder in _folders(client):
+        for folder in _folders(client, acc):
             typ, _ = client.select(folder, readonly=True)
             if typ != "OK":
                 continue
@@ -215,9 +231,9 @@ def _chunked(items: list[str], size: int) -> list[list[str]]:
     return [items[i : i + size] for i in range(0, len(items), size)]
 
 
-def _snapshot_unseen(client: imaplib.IMAP4) -> list[tuple[str, list[str]]]:
+def _snapshot_unseen(client: imaplib.IMAP4, acc: dict | None = None) -> list[tuple[str, list[str]]]:
     snapshots: list[tuple[str, list[str]]] = []
-    for folder in _folders(client):
+    for folder in _folders(client, acc):
         typ, _ = client.select(folder, readonly=True)
         if typ != "OK":
             continue
@@ -242,7 +258,7 @@ def cmd_read_all(acc: dict, password: str) -> None:
     marked = 0
     deadline = time.monotonic() + READ_ALL_BUDGET
     try:
-        snapshots = _snapshot_unseen(client)
+        snapshots = _snapshot_unseen(client, acc)
         for folder, uids in snapshots:
             if time.monotonic() > deadline:
                 emit({"ok": False, "marked": marked, "error": "timed out marking mail as read"})

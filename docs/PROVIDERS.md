@@ -84,10 +84,11 @@ return one JSON object. `_bootstrap.run(main)` is the last-resort wrap.
   `one_line()` in `lib/common.py` (or the Gmail `entity` filter) so
   carriage returns from Graph `bodyPreview` and HTML entities do not
   wrap the row.
-- Skip trash, junk, drafts, spam. Include skip-inbox / user folders when
-  the provider has that concept (Gmail user labels, IMAP folders). HEY’s
-  attention box is the Imbox; Feed, Paper Trail, and the Screener are not
-  unread.
+- Skip trash, junk, drafts, spam. IMAP uses SPECIAL-USE attributes
+  (RFC 6154, plus Gmail `\Important`) and then English folder names.
+  Include skip-inbox / user folders when the provider has that concept
+  (Gmail user labels, IMAP folders). HEY’s attention box is the Imbox;
+  Feed, Paper Trail, and the Screener are not unread.
 
 The orchestrator adds `account` (the label), `accountCount`, and an
 `inboxes` array (`account`, `unread`, `searchUrl` per account) on the

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import unittest
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 from support import capture_json, load_provider
 
@@ -226,6 +226,125 @@ class ImapReadAllTests(unittest.TestCase):
         self.assertEqual(searches, [(None, "UNSEEN")])
         self.assertEqual([row[0] for row in stored], ["1,2", "3"])
         self.assertTrue(all(row[1] == "+FLAGS" for row in stored))
+
+    def test_read_all_uses_configured_folders(self) -> None:
+        listed = []
+        selected = []
+
+        class FakeClient:
+            def list(self):
+                listed.append(True)
+                return "OK", [b'(\\HasNoChildren) "/" "INBOX"']
+
+            def select(self, folder, readonly=False):
+                selected.append(folder)
+                return "OK", []
+
+            def uid(self, cmd, *args):
+                if cmd == "search":
+                    return "OK", [b"9"]
+                if cmd == "store":
+                    return "OK", []
+                raise AssertionError(cmd)
+
+            def logout(self):
+                return "OK", []
+
+        fake = FakeClient()
+        with patch.object(self.imap, "_connect", return_value=fake):
+            payload = capture_json(
+                self.imap.cmd_read_all,
+                {"host": "h", "user": "u", "folders": ["INBOX/Work"]},
+                "pw",
+            )
+        self.assertEqual(payload, {"ok": True, "marked": 1})
+        self.assertEqual(listed, [])
+        self.assertEqual(selected, ["INBOX/Work", "INBOX/Work"])
+
+
+class ImapFolderTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls) -> None:
+        cls.imap = load_provider("imap")
+
+    def _client(self, rows: list[bytes]):
+        class FakeClient:
+            def list(inner_self):
+                return "OK", rows
+
+        return FakeClient()
+
+    def test_english_names_are_skipped(self) -> None:
+        client = self._client(
+            [
+                b'(\\HasNoChildren) "/" "INBOX"',
+                b'(\\HasNoChildren) "/" "Trash"',
+                b'(\\HasNoChildren) "/" "Junk"',
+                b'(\\HasNoChildren) "/" "Drafts"',
+                b'(\\HasNoChildren) "/" "Sent"',
+            ]
+        )
+        self.assertEqual(self.imap._folders(client), ["INBOX"])
+
+    def test_special_use_skipped_when_name_would_not_match(self) -> None:
+        client = self._client(
+            [
+                b'(\\HasNoChildren) "/" "INBOX"',
+                b'(\\HasNoChildren \\All) "/" "[Gmail]/Todos os e-mails"',
+                b'(\\HasNoChildren \\Flagged) "/" "[Gmail]/Com estrela"',
+                b'(\\HasNoChildren \\Important) "/" "[Gmail]/Importante"',
+                b'(\\HasNoChildren \\Trash) "/" "[Gmail]/Lixeira"',
+                b'(\\HasNoChildren \\Sent) "/" "[Gmail]/Sent Mail"',
+            ]
+        )
+        self.assertEqual(self.imap._folders(client), ["INBOX"])
+
+    def test_inbox_and_user_folder_are_kept(self) -> None:
+        client = self._client(
+            [
+                b'(\\HasNoChildren \\Inbox) "/" "INBOX"',
+                b'(\\HasNoChildren) "/" "INBOX/Work"',
+                '(\\HasNoChildren) "/" "Promoções"'.encode(),
+            ]
+        )
+        self.assertEqual(
+            self.imap._folders(client), ["INBOX", "INBOX/Work", "Promoções"]
+        )
+
+    def test_configured_folders_are_authoritative(self) -> None:
+        class Boom:
+            def list(self):
+                raise AssertionError("LIST must not run when folders is set")
+
+        acc = {"folders": ["INBOX", "INBOX/Work", "Trash"]}
+        self.assertEqual(
+            self.imap._folders(Boom(), acc), ["INBOX", "INBOX/Work", "Trash"]
+        )
+
+    def test_missing_or_empty_folders_falls_through_to_discovery(self) -> None:
+        client = self._client(
+            [
+                b'(\\HasNoChildren) "/" "INBOX"',
+                b'(\\HasNoChildren) "/" "Trash"',
+            ]
+        )
+        self.assertEqual(self.imap._folders(client), ["INBOX"])
+        self.assertEqual(self.imap._folders(client, {}), ["INBOX"])
+        self.assertEqual(self.imap._folders(client, {"folders": []}), ["INBOX"])
+        self.assertEqual(self.imap._folders(client, {"folders": ["  "]}), ["INBOX"])
+        self.assertEqual(self.imap._folders(client, {"folders": "INBOX"}), ["INBOX"])
+
+    def test_connect_passes_socket_timeout(self) -> None:
+        fake = MagicMock()
+        with patch.object(self.imap.imaplib, "IMAP4_SSL", return_value=fake) as ctor:
+            client = self.imap._connect(
+                {"host": "imap.example.test", "port": 993, "user": "u"}, "pw"
+            )
+        self.assertIs(client, fake)
+        self.assertEqual(self.imap.SOCKET_TIMEOUT, 30)
+        kwargs = ctor.call_args.kwargs
+        self.assertEqual(kwargs.get("timeout"), 30)
+        fake.login.assert_called_once_with("u", "pw")
 
 
 class HeyReadAllTests(unittest.TestCase):
