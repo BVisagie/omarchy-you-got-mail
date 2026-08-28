@@ -70,10 +70,16 @@ class PanelContractTests(unittest.TestCase):
         )
 
     def test_mark_all_confirm_and_busy(self) -> None:
-        self.assertIn("Mark all unread as read (a)", self.qml)
+        self.assertIn("Mark all unread as read (A)", self.qml)
         self.assertIn("Click again to confirm", self.qml)
         self.assertIn("Marking unread mail as read…", self.qml)
         self.assertIn('t === "a"', self.qml)
+        self.assertIn('t === "A"', self.qml)
+        self.assertIn("function markCursorRead()", self.qml)
+        self.assertIn("function enqueueRead(", self.qml)
+        self.assertIn("function pumpRead()", self.qml)
+        self.assertIn("property var dismissedIds", self.qml)
+        self.assertIn("property var readQueue", self.qml)
         self.assertIn("property bool markAllArmed", self.qml)
         self.assertIn("property bool markAllBusy", self.qml)
         self.assertIn("property string actionWarning", self.qml)
@@ -83,6 +89,11 @@ class PanelContractTests(unittest.TestCase):
         self.assertIn("opacity: root.markAllBusy ? 0.4 : 1", self.qml)
         self.assertNotIn("unread = 0", self.qml)
         self.assertNotIn("messages = []", self.qml)
+        self.assertRegex(self.qml, r't === "a"\s*\n\s*root\.markCursorRead\(\)')
+        self.assertRegex(self.qml, r't === "A"\s*\n\s*root\.requestMarkAll\(\)')
+        readme = (ROOT / "README.md").read_text(encoding="utf-8")
+        self.assertIn("Header envelope-open or `A`", readme)
+        self.assertIn("mark the message under the cursor as read, without opening it", readme)
 
     def test_mailbox_is_stroked_and_contained(self) -> None:
         icon = (ROOT / "MailSlotIcon.qml").read_text(encoding="utf-8")

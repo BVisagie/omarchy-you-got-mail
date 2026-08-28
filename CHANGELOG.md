@@ -2,6 +2,21 @@
 
 Versions match `manifest.json`. Git tags are created at release time.
 
+## 2.5.0
+
+IMAP folder discovery follows SPECIAL-USE attributes, not only English
+names, and the panel can mark one row as read from the keyboard.
+
+- IMAP skips `\All`, `\Archive`, `\Sent`, `\Trash`, `\Drafts`, `\Junk`,
+  `\Flagged`, and `\Important` on the LIST flag list, then still filters
+  English folder names for servers that omit SPECIAL-USE.
+- IMAP sockets time out after 30s so a hung login fails in the provider
+  instead of eating the orchestrator's 45s budget.
+- Optional `folders` on an IMAP account is an allow-list: no LIST, no skip
+  filters. Edit `accounts.json`; the add wizard is unchanged.
+- Panel: `a` marks the cursor row as read without opening it. `A` and the
+  header envelope keep two-press mark-all.
+
 ## 2.4.2
 
 - Local config, account, secret, and Outlook-cache reads open the file
