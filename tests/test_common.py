@@ -228,7 +228,7 @@ class AccountsFileTests(unittest.TestCase):
 class ManifestAndHelpTests(unittest.TestCase):
     def test_manifest_widget_settings(self) -> None:
         data = json.loads((ROOT / "manifest.json").read_text(encoding="utf-8"))
-        self.assertEqual(data["version"], "2.4.2")
+        self.assertEqual(data["version"], "2.5.0")
         keys = {item["key"] for item in data["barWidget"]["schema"]}
         self.assertEqual(keys, {"max", "refreshIntervalSec"})
         self.assertEqual(data["barWidget"]["defaults"]["max"], 25)

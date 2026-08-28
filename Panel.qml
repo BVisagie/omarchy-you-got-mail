@@ -41,6 +41,8 @@ Panel {
   property string errorText: ""
   property string warningText: ""
   property string pendingId: ""
+  property var readQueue: []
+  property var dismissedIds: ({})
   property bool markAllArmed: false
   property bool markAllBusy: false
   property string actionWarning: ""
@@ -136,7 +138,14 @@ Panel {
     return root.unread + " unread"
   }
 
+  function rememberDismissed(id) {
+    var next = Object.assign({}, root.dismissedIds)
+    next[id] = true
+    root.dismissedIds = next
+  }
+
   function dismissLocal(id) {
+    rememberDismissed(id)
     var next = []
     for (var i = 0; i < messages.length; i++) {
       if (messages[i].id !== id) next.push(messages[i])
@@ -166,6 +175,23 @@ Panel {
 
   readonly property bool hasOpenableInbox: openableInboxUrls().length > 0
 
+  function enqueueRead(id) {
+    var q = root.readQueue.slice()
+    q.push(id)
+    root.readQueue = q
+    root.pumpRead()
+  }
+
+  function pumpRead() {
+    if (readProc.running || root.readQueue.length === 0) return
+    var q = root.readQueue.slice()
+    var id = q.shift()
+    root.readQueue = q
+    root.pendingId = id
+    readProc.command = [root.script, "read", id]
+    readProc.running = true
+  }
+
   function openMessage(message) {
     if (root.markAllBusy) return
     if (!message || !validId(message.id)) return
@@ -174,10 +200,18 @@ Panel {
       if (!openBrowser(url)) return
     }
     dismissLocal(message.id)
-    pendingId = message.id
-    readProc.command = [root.script, "read", message.id]
-    readProc.running = true
+    enqueueRead(message.id)
     close()
+  }
+
+  function markCursorRead() {
+    if (root.markAllBusy) return
+    if (cursor < 0 || cursor >= messages.length) return
+    var message = messages[cursor]
+    if (!message || !validId(message.id)) return
+    cancelMarkAllConfirm()
+    dismissLocal(message.id)
+    enqueueRead(message.id)
   }
 
   function openSearch() {
@@ -209,6 +243,7 @@ Panel {
   function applyReadAllPayload(text) {
     root.markAllBusy = false
     root.cancelMarkAllConfirm()
+    root.dismissedIds = ({})
     try {
       var data = JSON.parse(text)
       var marked = parseInt(data.marked, 10)
@@ -266,8 +301,16 @@ Panel {
       warningText = reachable ? (data.warning || "") : ""
       // Keep actionWarning across this refresh: a write can fail while list still works.
       if (!reachable) return
-      messages = data.messages || []
-      unread = data.unread || 0
+      var incoming = data.messages || []
+      var kept = []
+      var dropped = 0
+      for (var i = 0; i < incoming.length; i++) {
+        var row = incoming[i]
+        if (row && root.dismissedIds[row.id]) dropped += 1
+        else kept.push(row)
+      }
+      messages = kept
+      unread = Math.max(0, (data.unread || 0) - dropped)
       email = data.email || ""
       searchUrl = data.searchUrl || ""
       inboxes = data.inboxes || []
@@ -289,6 +332,7 @@ Panel {
       firstPage()
       cancelMarkAllConfirm()
       actionWarning = ""
+      dismissedIds = ({})
     }
   }
 
@@ -305,6 +349,10 @@ Panel {
     id: readProc
     onExited: function(exitCode) {
       root.pendingId = ""
+      if (root.readQueue.length > 0) {
+        root.pumpRead()
+        return
+      }
       root.refresh()
     }
   }
@@ -423,6 +471,8 @@ Panel {
         else if (t === "i" && root.hasOpenableInbox)
           root.openSearch()
         else if (t === "a")
+          root.markCursorRead()
+        else if (t === "A")
           root.requestMarkAll()
         else if (t === "n")
           root.goNextPage()
@@ -484,7 +534,7 @@ Panel {
                 ? "Marking unread mail as read…"
                 : (root.markAllArmed
                   ? "Click again to confirm"
-                  : "Mark all unread as read (a)")
+                  : "Mark all unread as read (A)")
               foreground: root.foreground
               hoverColor: root.accent
               fontFamily: root.fontFamily

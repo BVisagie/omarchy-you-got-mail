@@ -91,7 +91,8 @@ If you never add an account, a single Gmail account is assumed. The first
 | Click the bar icon | open the panel |
 | Right-click the bar icon | open each inbox that currently has unread (one tab per account) |
 | Middle-click the bar icon | refresh now |
-| Header envelope-open or `a` | mark all unread as read (click or press twice to confirm) |
+| Header envelope-open or `A` | mark all unread as read (click or press twice to confirm) |
+| `a` | mark the message under the cursor as read, without opening it |
 | Header external-link or `i` | same as right-click |
 | Click a message | open **that** thread in the browser and take it off the pile |
 | `↑` `↓` or `j` `k` | move through the list |

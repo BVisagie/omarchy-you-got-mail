@@ -234,9 +234,20 @@ host, port (993), username, password or app password
 webmail URL (optional) — opened when you click a message
 ```
 
-Unread is every folder except trash, junk/spam, drafts, sent, and similar.
+Unread is every selectable folder except special-use mailboxes (RFC 6154
+`\All`, `\Archive`, `\Sent`, `\Trash`, `\Drafts`, `\Junk`, `\Flagged`, and
+Gmail’s `\Important`) and, as a fallback, English names like trash, junk,
+spam, drafts, and sent. User folders and Gmail labels with no special-use
+flag still count. Category labels (Promotions and the like) are not
+special-use; pin an explicit `folders` list if they inflate the badge.
+
 There is no standard “open this IMAP message in the browser” URL; if you
 leave webmail empty, click still marks the message read.
+
+Optional `"folders": ["INBOX", "INBOX/Work"]` on the account object is an
+allow-list: those names are used as-is, with no LIST and no skip filters.
+Names must match the server’s LIST response exactly. Interactive
+`accounts add imap` does not prompt for this; edit `accounts.json`.
 
 `YOU_GOT_MAIL_IMAP_PASSWORD` can supply the password for automated tests.
 Interactive `accounts add imap` still writes `secrets/<id>.json`.
@@ -269,13 +280,16 @@ Interactive `accounts add imap` still writes `secrets/<id>.json`.
       "host": "imap.example.com",
       "port": 993,
       "user": "you@example.com",
-      "webmail": "https://webmail.example.com/"
+      "webmail": "https://webmail.example.com/",
+      "folders": ["INBOX", "INBOX/Work"]
     }
   ]
 }
 ```
 
 Optional HEY field: `"hey_account": "12345"` to pin one linked mailbox.
+Optional IMAP field: `"folders": ["INBOX", "INBOX/Work"]` to replace folder
+discovery with that exact list.
 
 `secrets/fastmail.json`:
 
