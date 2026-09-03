@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import fcntl
 import json
 import os
 import sys
@@ -17,12 +18,15 @@ import _bootstrap
 from common import (
     FileTooLargeError,
     ResponseTooLargeError,
+    account_error,
     die,
     emit,
+    load_secret,
     one_line,
     read_http_body,
     read_owned_file,
     save_secret,
+    secret_path,
     write_private,
 )
 from outlook_auth import refresh_access_token
@@ -100,28 +104,60 @@ def _write_cache(account_id: str, data: dict) -> None:
     write_private(_cache_dir(account_id) / "outlook.json", json.dumps(data))
 
 
+def _outlook_error(account_id: str, raw: str) -> None:
+    die(account_error({"id": account_id, "provider": "outlook"}, raw))
+
+
 def _access(sec: dict, account_id: str) -> str:
     client_id = str(sec.get("client_id") or "")
     refresh = str(sec.get("refresh_token") or "")
     tenant = str(sec.get("tenant") or "common")
     if not client_id or not refresh:
-        die("Outlook is not signed in; run: you-got-mail accounts add outlook")
+        _outlook_error(account_id, "not signed in")
     now = time.time()
     cached = str(sec.get("access_token") or "")
     expires_at = float(sec.get("access_expires_at") or 0)
     if cached and expires_at > now + 60:
         return cached
+
+    lock_path = secret_path(account_id).with_name(f"{account_id}.lock")
+    lock_path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+    fd = os.open(str(lock_path), os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW, 0o600)
     try:
-        tokens = refresh_access_token(client_id, refresh, tenant)
-    except RuntimeError as exc:
-        die(str(exc))
-    sec = dict(sec)
-    sec["access_token"] = str(tokens["access_token"])
-    sec["access_expires_at"] = now + int(tokens.get("expires_in") or 3600)
-    if tokens.get("refresh_token"):
-        sec["refresh_token"] = tokens["refresh_token"]
-    save_secret(account_id, sec)
-    return str(sec["access_token"])
+        os.fchmod(fd, 0o600)
+        fcntl.flock(fd, fcntl.LOCK_EX)
+        latest = load_secret(account_id)
+        if latest:
+            sec = dict(latest)
+        client_id = str(sec.get("client_id") or client_id)
+        refresh = str(sec.get("refresh_token") or refresh)
+        tenant = str(sec.get("tenant") or tenant)
+        cached = str(sec.get("access_token") or "")
+        expires_at = float(sec.get("access_expires_at") or 0)
+        now = time.time()
+        if cached and expires_at > now + 60:
+            return cached
+        if not client_id or not refresh:
+            _outlook_error(account_id, "not signed in")
+        try:
+            tokens = refresh_access_token(client_id, refresh, tenant)
+        except RuntimeError as exc:
+            _outlook_error(account_id, str(exc))
+        sec = dict(sec)
+        sec["client_id"] = client_id
+        sec["tenant"] = tenant
+        sec["access_token"] = str(tokens["access_token"])
+        sec["access_expires_at"] = now + int(tokens.get("expires_in") or 3600)
+        if tokens.get("refresh_token"):
+            sec["refresh_token"] = tokens["refresh_token"]
+        save_secret(account_id, sec)
+        return str(sec["access_token"])
+    finally:
+        try:
+            fcntl.flock(fd, fcntl.LOCK_UN)
+        except OSError:
+            pass
+        os.close(fd)
 
 
 def _skip_folders(token: str, account_id: str, cache: dict) -> tuple[set[str], dict]:

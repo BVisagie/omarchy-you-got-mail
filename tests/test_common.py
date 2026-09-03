@@ -34,6 +34,38 @@ class CommonHelpersTests(unittest.TestCase):
         self.assertEqual(common.one_line("Hello\r\nworld\t  there"), "Hello world there")
         self.assertTrue(common.one_line("x" * 200).endswith("…"))
 
+    def test_gmail_oauth_soup_maps_to_login_command(self) -> None:
+        raw = (
+            "Authentication failed: Failed to get token: Server error: "
+            "invalid_grant: Token has been expired or revoked.: "
+            "invalid_grant: Token has been expired or revoked."
+        )
+        msg = common.account_error(
+            {"id": "gmail", "provider": "gmail"},
+            raw,
+        )
+        self.assertTrue(msg.startswith("gmail: Gmail sign-in expired."))
+        self.assertIn("gws auth login -s gmail", msg)
+        self.assertNotIn("invalid_grant", msg)
+
+    def test_account_error_is_idempotent(self) -> None:
+        first = common.account_error(
+            {"id": "outlook", "provider": "outlook"},
+            "invalid_grant: Token has been expired or revoked.",
+        )
+        again = common.account_error({"id": "outlook", "provider": "outlook"}, first)
+        self.assertEqual(first, again)
+        self.assertEqual(first.count("outlook:"), 1)
+
+    def test_non_auth_error_is_prefixed_only(self) -> None:
+        msg = common.account_error({"id": "work", "provider": "imap"}, "timed out")
+        self.assertEqual(msg, "work: timed out")
+
+    def test_is_auth_failure_http_401(self) -> None:
+        self.assertTrue(common.is_auth_failure("Fastmail HTTP 401"))
+        self.assertFalse(common.is_auth_failure("Fastmail HTTP 500"))
+        self.assertFalse(common.is_auth_failure("could not reach host"))
+
     def test_encode_decode_id(self) -> None:
         opaque = common.encode_id("work", "INBOX/12")
         self.assertEqual(common.decode_id(opaque), ("work", "INBOX/12"))
@@ -228,7 +260,7 @@ class AccountsFileTests(unittest.TestCase):
 class ManifestAndHelpTests(unittest.TestCase):
     def test_manifest_widget_settings(self) -> None:
         data = json.loads((ROOT / "manifest.json").read_text(encoding="utf-8"))
-        self.assertEqual(data["version"], "2.5.1")
+        self.assertEqual(data["version"], "2.6.0")
         for name in ("Gmail", "Outlook", "Fastmail", "IMAP", "HEY"):
             self.assertIn(name, data["description"])
             self.assertIn(name, data["barWidget"]["description"])

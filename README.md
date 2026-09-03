@@ -84,11 +84,14 @@ $PLUGIN accounts add hey
 $PLUGIN accounts add outlook
 $PLUGIN accounts add fastmail
 $PLUGIN accounts add imap
+$PLUGIN accounts login gmail
 $PLUGIN accounts
 ```
 
-Run `accounts add` in a **terminal**, not from the bar. Outlook opens a
-browser tab; Gmail and HEY sign in through their own CLIs.
+Run `accounts add` and `accounts login` in a **terminal**, not from the
+bar. Outlook opens a browser tab; Gmail and HEY sign in through their
+own CLIs. `accounts login` re-authenticates an existing id in place
+when a token expires.
 
 If you never add an account, a single Gmail account is assumed. The first
 *extra* account (Outlook, HEY, …) writes that implicit Gmail into
@@ -117,7 +120,9 @@ The panel refreshes on the interval from widget settings (default one
 minute), and again when you open it or click a row. With more than one
 account the badge is the sum of unread, rows are newest-first, and each
 row shows an account chip. If one account fails, the others still show
-and the panel names the failure.
+and the panel names the failure, including when the healthy mailboxes
+are empty. Expired OAuth tokens become a one-line sign-in command, not
+the raw `invalid_grant` dump. See [docs/ACCOUNTS.md](docs/ACCOUNTS.md).
 
 The unread badge is the provider's mailbox total, not just the rows on
 this page. Merged paging walks a cap of 200 newest messages across

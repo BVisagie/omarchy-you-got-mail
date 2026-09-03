@@ -23,6 +23,16 @@ class PanelContractTests(unittest.TestCase):
         self.assertIn("data.warning", self.qml)
         self.assertIn("partialWarning", self.qml)
 
+    def test_error_banner_wraps_and_empty_state_does_not_repeat(self) -> None:
+        self.assertIn("id: staleWarning", self.qml)
+        self.assertIn("wrapMode: Text.WordWrap", self.qml)
+        self.assertIn(
+            '"Fix sign-in from a terminal, then middle-click the icon."',
+            self.qml,
+        )
+        empty = self.qml.split("You're all caught up.")[1].split("textFormat:")[0]
+        self.assertNotIn("root.errorText", empty)
+
     def test_keyboard_and_tooltip(self) -> None:
         self.assertIn("onTabRequested", self.qml)
         self.assertIn('t === "i"', self.qml)
@@ -43,6 +53,7 @@ class PanelContractTests(unittest.TestCase):
         self.assertIn("~/.bun/bin", readme)
         self.assertIn("YOU_GOT_MAIL_IMAP_PASSWORD", readme)
         self.assertIn("gws auth setup", readme)
+        self.assertIn("accounts login", readme)
         self.assertIn("GOOGLE_WORKSPACE_CLI_KEYRING_BACKEND=file", readme)
         self.assertIn("No sudo or pkexec is required", readme)
         self.assertNotIn("must be public", readme)

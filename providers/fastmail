@@ -11,7 +11,7 @@ import urllib.request
 from email.utils import parseaddr
 
 import _bootstrap
-from common import ResponseTooLargeError, die, emit, one_line, read_http_body
+from common import ResponseTooLargeError, account_error, die, emit, one_line, read_http_body
 
 SESSION_URL = "https://api.fastmail.com/jmap/session"
 USING = [
@@ -33,6 +33,8 @@ def _try_request(url: str, token: str, payload: dict | None = None) -> tuple[dic
             raw = read_http_body(resp).decode()
             return json.loads(raw), ""
     except urllib.error.HTTPError as exc:
+        if exc.code in (401, 403):
+            return None, "unauthorized"
         return None, f"Fastmail HTTP {exc.code}"
     except urllib.error.URLError:
         return None, "could not reach Fastmail"
@@ -45,7 +47,8 @@ def _try_request(url: str, token: str, payload: dict | None = None) -> tuple[dic
 def _request(url: str, token: str, payload: dict | None = None) -> dict:
     data, err = _try_request(url, token, payload)
     if err:
-        die(err)
+        acc = _bootstrap.account()
+        die(account_error(acc, err, provider="fastmail") if acc else err)
     return data or {}
 
 

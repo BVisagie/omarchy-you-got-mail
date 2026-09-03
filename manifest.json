@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "id": "bvisagie.you-got-mail",
   "name": "You've Got Mail",
-  "version": "2.5.1",
+  "version": "2.6.0",
   "author": "BVisagie",
   "description": "Unread-only mailbox for Gmail, Outlook, Fastmail, IMAP, and HEY. One pile across accounts; click a row to open it.",
   "homepage": "https://github.com/BVisagie/omarchy-you-got-mail",

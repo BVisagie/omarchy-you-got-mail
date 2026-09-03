@@ -24,6 +24,7 @@ you-got-mail accounts ...
 The panel calls list, read, and read-all. Accounts are added in a terminal:
 
   you-got-mail accounts add
+  you-got-mail accounts login [id]
 
 --limit is the panel page size (1–50). The CLI also honours
 YOU_GOT_MAIL_MAX. Providers may be asked for more rows so merged

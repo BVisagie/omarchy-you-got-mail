@@ -8,6 +8,7 @@
 #
 # Accounts are added in a terminal:
 #   you-got-mail accounts add
+#   you-got-mail accounts login [id]
 #
 # Output of list/read/read-all is always one JSON object. Failures print
 # {"ok":false,...} and exit 0 so the widget never crashes on empty stdout.

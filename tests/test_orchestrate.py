@@ -120,8 +120,54 @@ class PaginationTests(unittest.TestCase):
         self.assertTrue(payload["ok"])
         self.assertEqual(payload["accountCount"], 2)
         self.assertEqual(payload["unread"], 2)
-        self.assertEqual(payload["warning"], "b failed")
+        self.assertEqual(payload["warning"], "b: b failed")
         self.assertEqual(len(payload["messages"]), 2)
+
+    def test_empty_success_plus_auth_failure_is_warning(self) -> None:
+        accounts = [
+            _account("gmail", "gmail", "Gmail"),
+            _account("outlook", "outlook", "Outlook"),
+        ]
+
+        def run(acc: dict, args: list[str]) -> dict:
+            if acc["id"] == "gmail":
+                return {
+                    "ok": False,
+                    "error": (
+                        "Authentication failed: Failed to get token: Server error: "
+                        "invalid_grant: Token has been expired or revoked."
+                    ),
+                }
+            return {"ok": True, "unread": 0, "messages": [], "searchUrl": "https://outlook.live.com/mail/inbox"}
+
+        with patch.object(orchestrate, "load_accounts", return_value=accounts), patch.object(
+            orchestrate, "_run_provider", side_effect=run
+        ):
+            payload = capture_json(orchestrate.cmd_list, "")
+        self.assertTrue(payload["ok"])
+        self.assertEqual(payload["unread"], 0)
+        self.assertEqual(payload["messages"], [])
+        self.assertIn("gmail: Gmail sign-in expired", payload["warning"])
+        self.assertIn("gws auth login", payload["warning"])
+        self.assertNotIn("invalid_grant", payload["warning"])
+
+    def test_all_accounts_fail_list_is_error(self) -> None:
+        accounts = [
+            _account("gmail", "gmail", "Gmail"),
+            _account("outlook", "outlook", "Outlook"),
+        ]
+
+        def run(acc: dict, args: list[str]) -> dict:
+            return {"ok": False, "error": acc["id"] + " down"}
+
+        with patch.object(orchestrate, "load_accounts", return_value=accounts), patch.object(
+            orchestrate, "_run_provider", side_effect=run
+        ):
+            payload = capture_json(orchestrate.cmd_list, "")
+        self.assertFalse(payload["ok"])
+        self.assertIn("all accounts failed", payload["error"])
+        self.assertIn("gmail: gmail down", payload["error"])
+        self.assertIn("outlook: outlook down", payload["error"])
 
 
 class ReadAllTests(unittest.TestCase):
@@ -156,7 +202,7 @@ class ReadAllTests(unittest.TestCase):
             payload = capture_json(orchestrate.cmd_read_all)
         self.assertTrue(payload["ok"])
         self.assertEqual(payload["marked"], 5)
-        self.assertEqual(payload["warning"], "b failed")
+        self.assertEqual(payload["warning"], "b: b failed")
 
     def test_all_accounts_fail_includes_partial_marks(self) -> None:
         accounts = [_account("a", "gmail", "Gmail"), _account("b", "hey", "HEY")]

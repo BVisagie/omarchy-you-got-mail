@@ -9,6 +9,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from common import (
     FETCH_CAP,
+    account_error,
     decode_id,
     die,
     emit,
@@ -100,7 +101,7 @@ def cmd_list(page_token: str) -> None:
         for fut in as_completed(futures):
             acc, payload = fut.result()
             if not payload.get("ok"):
-                errors.append(str(payload.get("error") or f"{acc['id']}: failed"))
+                errors.append(account_error(acc, str(payload.get("error") or "failed")))
                 continue
             payloads[acc["id"]] = payload
             unread += int(payload.get("unread") or 0)
@@ -108,7 +109,7 @@ def cmd_list(page_token: str) -> None:
                 emails.append(str(payload["email"]))
             merged.extend(_tag_messages(acc, payload))
 
-    if not merged and errors and unread == 0:
+    if not payloads and errors:
         die(errors[0] if len(errors) == 1 else "all accounts failed: " + "; ".join(errors))
 
     merged.sort(key=lambda m: int(m.get("ts") or 0), reverse=True)
@@ -183,7 +184,7 @@ def cmd_read_all() -> None:
             if payload.get("ok"):
                 succeeded += 1
                 continue
-            errors.append(str(payload.get("error") or f"{acc['id']}: failed"))
+            errors.append(account_error(acc, str(payload.get("error") or "failed")))
 
     if succeeded == 0:
         err = errors[0] if len(errors) == 1 else "all accounts failed: " + "; ".join(errors)

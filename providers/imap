@@ -16,7 +16,7 @@ from datetime import datetime, timezone
 from email.message import Message
 
 import _bootstrap
-from common import die, emit, one_line
+from common import account_error, die, emit, one_line
 
 SKIP_FOLDER = re.compile(
     r"(^|/)(trash|junk|spam|drafts?|sent|bin|deleted|queue|outbox)(/|$)",
@@ -135,7 +135,7 @@ def cmd_list(acc: dict, password: str, limit: int) -> None:
     except ssl.SSLError:
         die("IMAP TLS handshake failed")
     except imaplib.IMAP4.error as exc:
-        die(str(exc) or "IMAP login failed")
+        die(account_error(acc, str(exc) or "IMAP login failed"))
     except OSError as exc:
         die(str(exc) or "could not reach IMAP host")
     messages = []
@@ -207,7 +207,7 @@ def cmd_read(acc: dict, password: str, local_id: str) -> None:
     except ssl.SSLError:
         die("IMAP TLS handshake failed")
     except imaplib.IMAP4.error as exc:
-        die(str(exc) or "IMAP login failed")
+        die(account_error(acc, str(exc) or "IMAP login failed"))
     except OSError as exc:
         die(str(exc) or "could not reach IMAP host")
     try:
@@ -252,7 +252,7 @@ def cmd_read_all(acc: dict, password: str) -> None:
     except ssl.SSLError:
         die("IMAP TLS handshake failed")
     except imaplib.IMAP4.error as exc:
-        die(str(exc) or "IMAP login failed")
+        die(account_error(acc, str(exc) or "IMAP login failed"))
     except OSError as exc:
         die(str(exc) or "could not reach IMAP host")
     marked = 0
