@@ -574,7 +574,7 @@ Panel {
               ? root.errorText
               : "Could not reach mail. Showing the last list."
             textFormat: Text.PlainText
-            elide: Text.ElideRight
+            wrapMode: Text.WordWrap
             font.family: root.fontFamily
             font.pixelSize: Style.font.caption
             color: bar ? bar.urgent : Color.urgent
@@ -593,7 +593,7 @@ Panel {
             width: parent.width
             text: root.warningText
             textFormat: Text.PlainText
-            elide: Text.ElideRight
+            wrapMode: Text.WordWrap
             font.family: root.fontFamily
             font.pixelSize: Style.font.caption
             color: bar ? bar.urgent : Color.urgent
@@ -654,8 +654,9 @@ Panel {
           readonly property int cap: {
             var chrome = Style.space(70)
             if (root.hasPrev || root.hasNext) chrome += Style.space(38)
-            if (!root.reachable) chrome += Style.space(24)
-            if (root.reachable && root.warningText !== "") chrome += Style.space(24)
+            if (!root.reachable) chrome += staleWarning.implicitHeight + Style.space(6)
+            if (root.reachable && root.warningText !== "")
+              chrome += partialWarning.implicitHeight + Style.space(6)
             if (root.actionWarning !== "" && !root.markAllBusy) chrome += Style.space(24)
             if (root.markAllBusy) chrome += Style.space(24)
             return Math.max(Style.space(200),
@@ -876,7 +877,7 @@ Panel {
             wrapMode: Text.WordWrap
             text: root.reachable
               ? "You're all caught up."
-              : (root.errorText !== "" ? root.errorText : "Mail unreachable")
+              : "Fix sign-in from a terminal, then middle-click the icon."
             textFormat: Text.PlainText
             font.family: root.fontFamily
             font.pixelSize: Style.font.body

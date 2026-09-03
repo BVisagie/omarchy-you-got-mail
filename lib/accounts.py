@@ -3,7 +3,10 @@
 from __future__ import annotations
 
 import getpass
+import os
 import re
+import shutil
+import subprocess
 import sys
 
 from common import (
@@ -11,6 +14,7 @@ from common import (
     ACCOUNTS_FILE,
     PROVIDERS,
     load_accounts,
+    load_secret,
     save_accounts,
     save_secret,
     secret_path,
@@ -25,11 +29,15 @@ USAGE = """\
 you-got-mail accounts
 you-got-mail accounts list
 you-got-mail accounts add [gmail|outlook|fastmail|imap|hey]
+you-got-mail accounts login [id]
 you-got-mail accounts remove <id>
 
 Accounts live in ~/.config/omarchy-you-got-mail/accounts.json.
 Secrets (tokens, passwords) live in ~/.config/omarchy-you-got-mail/secrets/<id>.json
 (mode 600) and are never written next to the account list.
+
+accounts login re-authenticates an existing id in place. It does not
+create a second account.
 
 Full setup for each provider is in docs/ACCOUNTS.md next to this plugin.
 """
@@ -254,6 +262,134 @@ def cmd_remove(acc_id: str) -> None:
     sys.stdout.write(f"Removed {acc_id}.\n")
 
 
+def _which(name: str) -> str:
+    extra = [
+        os.path.expanduser("~/.local/share/mise/shims"),
+        os.path.expanduser("~/.local/bin"),
+        os.path.expanduser("~/.bun/bin"),
+    ]
+    path = os.environ.get("PATH", "")
+    for directory in extra:
+        if os.path.isdir(directory) and directory not in path.split(":"):
+            path = f"{path}:{directory}"
+    found = shutil.which(name, path=path)
+    if not found:
+        fail(f"{name} not found on PATH")
+    return found
+
+
+def _run_login(argv: list[str], env: dict[str, str] | None = None) -> None:
+    run_env = os.environ.copy()
+    extra = [
+        os.path.expanduser("~/.local/share/mise/shims"),
+        os.path.expanduser("~/.local/bin"),
+        os.path.expanduser("~/.bun/bin"),
+    ]
+    path = run_env.get("PATH", "")
+    for directory in extra:
+        if os.path.isdir(directory) and directory not in path.split(":"):
+            path = f"{path}:{directory}"
+    run_env["PATH"] = path
+    if env:
+        run_env.update(env)
+    exe = _which(argv[0])
+    try:
+        proc = subprocess.run([exe, *argv[1:]], env=run_env, check=False)
+    except OSError as exc:
+        fail(str(exc))
+    if proc.returncode != 0:
+        fail(f"{argv[0]} exited {proc.returncode}")
+
+
+def _login_gmail(_acc: dict) -> None:
+    sys.stderr.write(
+        "Gmail uses gws. Signing in with the gmail scope (file keyring backend).\n"
+    )
+    _run_login(
+        ["gws", "auth", "login", "-s", "gmail"],
+        {"GOOGLE_WORKSPACE_CLI_KEYRING_BACKEND": "file"},
+    )
+
+
+def _login_hey(_acc: dict) -> None:
+    sys.stderr.write("HEY uses hey-cli. Signing in…\n")
+    _run_login(["hey", "auth", "login"])
+
+
+def _login_outlook(acc: dict) -> None:
+    from outlook_auth import graph_login
+
+    sec = load_secret(acc["id"])
+    client_id = str(sec.get("client_id") or "")
+    tenant = str(sec.get("tenant") or "consumers")
+    if not client_id:
+        client_id = _ask("Azure application (client) ID")
+        tenant = _ask("Tenant (consumers for outlook.com, common for work)", tenant)
+    if not client_id:
+        fail("client id is required")
+    try:
+        tokens = graph_login(client_id, tenant)
+    except RuntimeError as exc:
+        fail(str(exc))
+    save_secret(
+        acc["id"],
+        {
+            "client_id": client_id,
+            "tenant": tenant,
+            "refresh_token": tokens["refresh_token"],
+        },
+    )
+
+
+def _login_fastmail(acc: dict) -> None:
+    sys.stderr.write(
+        "Create an API token at Fastmail → Settings → Privacy & Security →\n"
+        "Integrations → API tokens. Scope: mail read/write.\n"
+    )
+    token = _ask_secret("API token")
+    if not token:
+        fail("API token is required")
+    save_secret(acc["id"], {"token": token})
+
+
+def _login_imap(acc: dict) -> None:
+    password = _ask_secret("Password or app password")
+    if not password:
+        fail("password is required")
+    save_secret(acc["id"], {"password": password})
+
+
+def cmd_login(acc_id: str | None) -> None:
+    if not _tty():
+        fail("accounts login needs a terminal; see docs/ACCOUNTS.md")
+    accounts = load_accounts()
+    if not accounts:
+        fail("no accounts; add one with: you-got-mail accounts add")
+    if not acc_id:
+        if len(accounts) == 1:
+            acc_id = str(accounts[0]["id"])
+        else:
+            ids = ", ".join(a["id"] for a in accounts)
+            acc_id = _ask(f"Account id ({ids})")
+    acc = next((a for a in accounts if a["id"] == acc_id), None)
+    if not acc:
+        fail(f"no account named '{acc_id}'")
+    provider = str(acc.get("provider") or "")
+    if provider == "gmail":
+        _login_gmail(acc)
+    elif provider == "hey":
+        _login_hey(acc)
+    elif provider == "outlook":
+        _login_outlook(acc)
+    elif provider == "fastmail":
+        _login_fastmail(acc)
+    elif provider == "imap":
+        _login_imap(acc)
+    else:
+        fail(f"unknown provider '{provider}'")
+    sys.stdout.write(f"Signed in {acc_id}. Middle-click the mailbox icon to refresh.\n")
+
+
 def main(argv: list[str]) -> None:
     # argv is everything after `accounts`
     if not argv or argv[0] in ("list", "--list"):
@@ -269,5 +405,8 @@ def main(argv: list[str]) -> None:
         if len(argv) < 2:
             fail("usage: you-got-mail accounts remove <id>")
         cmd_remove(argv[1])
+        return
+    if argv[0] in ("login", "reauth", "signin"):
+        cmd_login(argv[1] if len(argv) > 1 else None)
         return
     fail("unknown accounts command; try: you-got-mail accounts --help")

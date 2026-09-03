@@ -130,6 +130,6 @@ with a partial `marked` count rather than hanging.
 
 1. Drop the executable in `providers/<name>` (`chmod +x`).
 2. Add `"<name>"` to `PROVIDERS` in `lib/common.py`.
-3. Teach `lib/accounts.py` how to prompt — or that there is no secret
-   (Gmail, HEY).
+3. Teach `lib/accounts.py` how to prompt for `accounts add` and
+   `accounts login` — or that there is no plugin secret (Gmail, HEY).
 4. Document the steps, including failure modes, in `docs/ACCOUNTS.md`.

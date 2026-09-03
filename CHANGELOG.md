@@ -2,6 +2,23 @@
 
 Versions match `manifest.json`. Git tags are created at release time.
 
+## 2.6.0
+
+Expired mail logins are a warning, not a dead widget, and the panel
+tells you the terminal command to sign in again.
+
+- `list` stays `ok` when at least one account answers, even if that
+  mailbox is empty. A dead sibling is a `warning`, not a full outage.
+- OAuth soup (`invalid_grant`, revoked tokens, HTTP 401) maps to
+  `{id}: {provider} sign-in expired. In a terminal: …`.
+- `you-got-mail accounts login [id]` re-authenticates in place.
+- Gmail keeps `gws` stderr instead of discarding it; Outlook serialises
+  token refresh with a lock file so two `list` calls cannot rotate the
+  refresh token out from under each other.
+- Panel error banner wraps; the empty state no longer repeats the dump.
+- Docs: Google OAuth clients in Testing revoke refresh tokens after
+  7 days. Publish the Desktop client to Production for personal use.
+
 ## 2.5.1
 
 - README: `omarchy plugin update` shows a diff (page, then `q` to leave

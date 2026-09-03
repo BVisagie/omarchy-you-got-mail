@@ -13,11 +13,16 @@ $PLUGIN accounts add hey
 $PLUGIN accounts add outlook
 $PLUGIN accounts add fastmail
 $PLUGIN accounts add imap
+$PLUGIN accounts login [id]
 $PLUGIN accounts remove <id>
 ```
 
 Run these from a **terminal**, not from the bar. Put `$PLUGIN` on your
 PATH if you want the short command `you-got-mail`.
+
+`accounts login` signs the same id in again after a token expires or is
+revoked. It does not create `gmail2`. Gmail and HEY open their own CLIs;
+Outlook reuses the Azure client id already in `secrets/<id>.json`.
 
 - [Which provider?](#which-provider)
 - [Where things live](#where-things-live)
@@ -89,9 +94,20 @@ omarchy-mise-install npm:@googleworkspace/cli gws gws
 
 - With [`gcloud`](https://cloud.google.com/sdk/docs/install): `gws auth setup`
 - Without gcloud: Google Cloud Console → create a project → OAuth consent
-  screen (External, testing is fine) → add yourself as a **test user** →
-  Credentials → **Desktop app** → save the JSON as
-  `~/.config/gws/client_secret.json`
+  screen (External) → add yourself as a **test user** → Credentials →
+  **Desktop app** → save the JSON as `~/.config/gws/client_secret.json`
+
+  **Testing** apps revoke refresh tokens after **7 days**. That is the
+  usual reason the panel says `invalid_grant` / `Token has been expired
+  or revoked`. Publish the OAuth client to **Production** (a personal
+  unverified Desktop app is enough; the 100-user cap is fine). Until
+  then, re-login after each revocation:
+
+  ```bash
+  GOOGLE_WORKSPACE_CLI_KEYRING_BACKEND=file gws auth login -s gmail
+  # or
+  $PLUGIN accounts login gmail
+  ```
 
 **2. Login** — `file` so the bar (not a login shell) can read the token:
 
@@ -343,7 +359,10 @@ zero unread, and IMAP accounts with no webmail URL, are skipped.
 | HEY lists nothing | Looking at Feed / Paper Trail | Only Imbox unseen is unread. Confirm `hey box imbox --json`. |
 | Outlook signed in but rows wrap into a wall of text | Old plugin build | Update: Graph `bodyPreview` has line breaks; current builds flatten them. |
 | Warning naming a mailbox at the top of the panel | That account failed; others still listed | Fix that provider (auth, PATH, token); middle-click to retry |
-| `accounts add` refuses to run | Needs a real terminal | Run `$PLUGIN accounts add …` in a terminal, not piped. |
+| `invalid_grant` / `Token has been expired or revoked` / Gmail sign-in expired | Google refresh token revoked. Testing OAuth clients last 7 days. | `$PLUGIN accounts login gmail` (or `GOOGLE_WORKSPACE_CLI_KEYRING_BACKEND=file gws auth login -s gmail`). Publish the OAuth client to Production so this stops weekly. |
+| Outlook sign-in expired / Graph `invalid_grant` | Microsoft refresh token expired or revoked | `$PLUGIN accounts login outlook` in a terminal. Reuses the Azure client id. |
+| Fastmail / IMAP sign-in expired | Token or app password rejected | `$PLUGIN accounts login <id>` and paste a new token or password. |
+| `accounts add` or `accounts login` refuses to run | Needs a real terminal | Run `$PLUGIN accounts login …` in a terminal, not piped. |
 
 Test without the panel:
 

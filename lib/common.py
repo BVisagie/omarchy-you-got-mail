@@ -164,6 +164,79 @@ def one_line(value: str, limit: int = 180) -> str:
     return text[: limit - 1].rstrip() + "…"
 
 
+PROVIDER_LABELS = {
+    "gmail": "Gmail",
+    "outlook": "Outlook",
+    "fastmail": "Fastmail",
+    "imap": "IMAP",
+    "hey": "HEY",
+}
+
+_SIGNIN_EXPIRED = "sign-in expired. in a terminal:"
+
+_AUTH_NEEDLES = (
+    "invalid_grant",
+    "token has been expired or revoked",
+    "has been expired",
+    "has expired due to",
+    "token expired",
+    "grant has expired",
+    "authentication failed",
+    "failed to get token",
+    "not signed in",
+    "not logged in",
+    "unauthenticated",
+    "unauthorized",
+    "invalid credentials",
+    "login failed",
+    "authenticationfailed",
+    "aadsts",
+    "http 401",
+)
+
+
+def login_command(provider: str, account_id: str = "") -> str:
+    if provider == "gmail":
+        return "GOOGLE_WORKSPACE_CLI_KEYRING_BACKEND=file gws auth login -s gmail"
+    if provider == "hey":
+        return "hey auth login"
+    target = account_id or provider
+    return f"you-got-mail accounts login {target}"
+
+
+def is_auth_failure(raw: str) -> bool:
+    text = (raw or "").lower()
+    if not text:
+        return False
+    if _SIGNIN_EXPIRED in text:
+        return True
+    if any(needle in text for needle in _AUTH_NEEDLES):
+        return True
+    return re.search(r"(?:^|[\s:])401(?:\D|$)", text) is not None
+
+
+def account_error(account: dict | str, raw: str, *, provider: str = "") -> str:
+    """Prefix an account failure, and replace OAuth soup with a login command."""
+    if isinstance(account, dict):
+        acc_id = str(account.get("id") or "")
+        provider = provider or str(account.get("provider") or "")
+    else:
+        acc_id = str(account)
+    label = acc_id or provider or "account"
+    name = PROVIDER_LABELS.get(provider, provider or label)
+    text = one_line(str(raw or "failed"), limit=240)
+    prefix = f"{label}: "
+    if text.lower().startswith(label.lower() + ":"):
+        rest = text.split(":", 1)[1].lstrip()
+    else:
+        rest = text
+    if _SIGNIN_EXPIRED in rest.lower():
+        return prefix + rest
+    if is_auth_failure(text):
+        return f"{prefix}{name} sign-in expired. In a terminal: {login_command(provider, acc_id)}"
+    return prefix + rest
+
+
 def ensure_config_dirs() -> None:
     CONFIG_DIR.mkdir(mode=0o700, parents=True, exist_ok=True)
     os.chmod(CONFIG_DIR, 0o700)

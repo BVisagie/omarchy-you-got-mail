@@ -40,6 +40,22 @@ die() {
   exit 0
 }
 
+gmail_error() {
+  local raw="${1:-could not read unread mail}"
+  local lower
+  lower="$(printf '%s' "$raw" | tr '[:upper:]' '[:lower:]')"
+  if [[ "$lower" == *invalid_grant* \
+     || "$lower" == *"token has been expired or revoked"* \
+     || "$lower" == *"has been expired"* \
+     || "$lower" == *"authentication failed"* \
+     || "$lower" == *"failed to get token"* \
+     || "$lower" == *unauthenticated* \
+     || "$lower" == *unauthorized* ]]; then
+    die "Gmail sign-in expired. In a terminal: GOOGLE_WORKSPACE_CLI_KEYRING_BACKEND=file gws auth login -s gmail"
+  fi
+  die "$raw"
+}
+
 write_private() {
   local dest="$1" tmp
   tmp="$(mktemp "$dest.XXXXXX" 2>/dev/null)" || return 1
@@ -85,7 +101,23 @@ command -v gws >/dev/null 2>&1 || die "gws not found on PATH - see the README"
 private_dir "$CACHE_DIR" || die "cache directory is not usable"
 
 gws_gmail() {
-  gws gmail "$@" 2>/dev/null
+  gws gmail "$@"
+}
+
+gws_list() {
+  local errfile="$CACHE_DIR/gws.err" out
+  out="$(gws gmail "$@" 2>"$errfile")" || true
+  if printf '%s' "$out" | jq -e 'type == "object" and .error' >/dev/null 2>&1; then
+    gmail_error "$(printf '%s' "$out" | jq -r '.error.message // "could not read unread mail"')"
+  fi
+  if printf '%s' "$out" | jq -e 'type == "object"' >/dev/null 2>&1; then
+    printf '%s' "$out"
+    return 0
+  fi
+  local msg
+  msg="$(tr -s '[:space:]' ' ' <"$errfile" 2>/dev/null)"
+  [ -n "$msg" ] || msg="$(tr -s '[:space:]' ' ' <<<"$out")"
+  gmail_error "${msg:-could not read unread mail}"
 }
 
 ensure_json_object() {
@@ -100,7 +132,7 @@ account_email() {
     cached="$(jq -r '.emailAddress // empty' "$PROFILE_FILE" 2>/dev/null)"
     [ -n "$cached" ] && { printf '%s' "$cached"; return 0; }
   fi
-  email="$(gws_gmail users getProfile --params '{"userId":"me"}' \
+  email="$(gws_gmail users getProfile --params '{"userId":"me"}' 2>/dev/null \
     | jq -r '.emailAddress // empty' 2>/dev/null)"
   [ -n "$email" ] || return 1
   printf '{"emailAddress":%s}\n' "$(printf '%s' "$email" | jq -Rs .)" | write_private "$PROFILE_FILE"
@@ -138,7 +170,7 @@ unread_total() {
     printf '%s' "$listed"
     return 0
   fi
-  page="$(gws_gmail users messages list --params "$(
+  page="$(gws_list users messages list --params "$(
     jq -nc --arg q "$QUERY" --argjson n 500 \
       '{userId:"me",q:$q,maxResults:$n}')")"
   ids="$(printf '%s' "$page" | jq '[.messages[]?.id | select(test("^[0-9a-f]{1,32}$"))] | length' 2>/dev/null)"
@@ -159,7 +191,7 @@ fill_labels_from_cache() {
     ' <<<"$ids" 2>/dev/null)"
   case "$unknown" in ''|*[!0-9]*) return 0 ;; 0) return 0 ;; esac
 
-  fetched="$(gws_gmail users labels list --params '{"userId":"me"}' \
+  fetched="$(gws_gmail users labels list --params '{"userId":"me"}' 2>/dev/null \
     | jq -c '[.labels[]? | select(.type == "user")
               | {key: .id, value: (.name | split("/") | last)}] | from_entries' 2>/dev/null)"
   [ -n "$fetched" ] && printf '%s\n' "$fetched" | write_private "$LABEL_FILE"
@@ -295,12 +327,9 @@ cmd_list() {
   case "$token" in *[!A-Za-z0-9_-]*) token="" ;; esac
 
   max="$(max_messages)"
-  page="$(gws_gmail users messages list --params "$(
+  page="$(gws_list users messages list --params "$(
     jq -nc --arg q "$QUERY" --argjson n "$max" --arg t "$token" \
       '{userId:"me",q:$q,maxResults:$n} + (if $t == "" then {} else {pageToken:$t} end)')")"
-  if printf '%s' "$page" | jq -e '.error' >/dev/null 2>&1; then
-    die "$(printf '%s' "$page" | jq -r '.error.message // "could not read unread mail"')"
-  fi
   ids="$(printf '%s' "$page" | jq -c '[.messages[]?.id | select(test("^[0-9a-f]{1,32}$"))]' 2>/dev/null)"
   [ -n "$ids" ] || ids='[]'
   next="$(printf '%s' "$page" | jq -r '.nextPageToken // empty' 2>/dev/null)"
@@ -336,12 +365,9 @@ cmd_read_all() {
 
   while :; do
     [ "${SECONDS:-0}" -gt 90 ] && fail_read_all 0 "timed out collecting unread mail"
-    page="$(gws_gmail users messages list --params "$(
+    page="$(gws_list users messages list --params "$(
       jq -nc --arg q "$QUERY" --argjson n 500 --arg t "$token" \
         '{userId:"me",q:$q,maxResults:$n} + (if $t == "" then {} else {pageToken:$t} end)')")"
-    if printf '%s' "$page" | jq -e '.error' >/dev/null 2>&1; then
-      die "$(printf '%s' "$page" | jq -r '.error.message // "could not read unread mail"')"
-    fi
     ids="$(printf '%s' "$page" | jq -c '[.messages[]?.id | select(test("^[0-9a-f]{1,32}$"))]' 2>/dev/null)"
     [ -n "$ids" ] || ids='[]'
     all="$(jq -nc --argjson a "$all" --argjson b "$ids" \

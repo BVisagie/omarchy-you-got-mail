@@ -412,6 +412,13 @@ class GmailScriptTests(unittest.TestCase):
         self.assertIn('--argjson n 500', script)
         self.assertIn("mkdir -p --", script)
         self.assertNotIn("mkdir -p -m", script)
+        self.assertIn("gmail_error", script)
+        self.assertIn("gws_list", script)
+        self.assertNotIn('gws gmail "$@" 2>/dev/null', script)
+        self.assertIn("gws auth login -s gmail", script)
+        import subprocess
+
+        subprocess.check_call(["bash", "-n", str(ROOT / "providers" / "gmail")])
 
     def test_read_all_uses_same_query_and_batch_modify(self) -> None:
         from support import ROOT
@@ -450,6 +457,15 @@ class OutlookUnreadTests(unittest.TestCase):
 
     def test_one_line_preview(self) -> None:
         self.assertEqual(self.out.one_line("Hi\r\nthere"), "Hi there")
+
+    def test_token_refresh_uses_lock_and_maps_auth(self) -> None:
+        from support import ROOT
+
+        source = (ROOT / "providers" / "outlook").read_text(encoding="utf-8")
+        self.assertIn("fcntl.flock", source)
+        self.assertIn(".lock", source)
+        self.assertIn("account_error", source)
+        self.assertIn("load_secret", source)
 
     def test_cache_uses_write_private(self) -> None:
         from support import ROOT
