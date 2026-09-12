@@ -2,6 +2,28 @@
 
 Versions match `manifest.json`. Git tags are created at release time.
 
+## 2.7.0
+
+Read an email inside the panel without leaving the pile. Gmail first.
+
+- Providers gain an optional `body <local-id>` command. Gmail answers it
+  with `users.messages.get` (`format=full`) on the same `gws` session
+  `list` and `read` already use; no new scope or consent.
+- `lib/mime_text.py` decodes the MIME tree: first `text/plain` leaf,
+  `text/html` stripped to plain text as a fallback, base64url leaves,
+  part charsets with `errors="replace"`, and RFC 2047 headers. Decoded
+  text is capped at 256 KB with `truncated:true`.
+- Panel: click, `Enter`, or `Space` reads the message in a slide-in
+  reader and marks it read, exactly like today's open-in-Gmail. `o`
+  (and middle/right-click) opens it in Gmail as the secondary action;
+  the reader also offers "Open in Gmail" when a body is unreadable.
+- Reader keys: `j/k`/arrows scroll, `Space`/`Shift+Space` page, `g`/`G`
+  top/bottom, `n/p` next/previous, `o` Gmail, `a` mark read,
+  `Backspace`/`Esc` back to the pile.
+- Security posture is unchanged: bodies are fetched on demand, never
+  written to disk or `messages.json`, never cached, and every mail-derived
+  string is still `Text.PlainText`.
+
 ## 2.6.0
 
 Expired mail logins are a warning, not a dead widget, and the panel

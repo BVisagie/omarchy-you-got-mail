@@ -4,6 +4,7 @@ import os
 import unittest
 from unittest.mock import patch
 
+import common
 import orchestrate
 from support import capture_json, message
 
@@ -232,6 +233,55 @@ class ReadAllTests(unittest.TestCase):
         self.assertFalse(payload["ok"])
         self.assertEqual(payload["marked"], 0)
         self.assertEqual(payload["error"], "a: timed out")
+
+
+class BodyTests(unittest.TestCase):
+    def test_opaque_id_is_decoded_and_routed_to_provider(self) -> None:
+        accounts = [_account("gmail", "gmail", "Gmail")]
+        seen = {}
+
+        def run(acc: dict, args: list[str], timeout: int = 45) -> dict:
+            seen["args"] = args
+            return {
+                "ok": True,
+                "text": "body text",
+                "subject": "Hello",
+                "url": "https://mail.google.com/mail/u/0/#all/thread-1",
+            }
+
+        with patch.object(orchestrate, "load_accounts", return_value=accounts), patch.object(
+            orchestrate, "_run_provider", side_effect=run
+        ):
+            payload = capture_json(orchestrate.cmd_body, common.encode_id("gmail", "abc123"))
+        self.assertEqual(seen["args"], ["body", "abc123"])
+        self.assertTrue(payload["ok"])
+        self.assertEqual(payload["text"], "body text")
+        self.assertIn("mail.google.com", payload["url"])
+
+    def test_unknown_account_is_error(self) -> None:
+        accounts = [_account("gmail", "gmail", "Gmail")]
+        with patch.object(orchestrate, "load_accounts", return_value=accounts), patch.object(
+            orchestrate, "_run_provider", side_effect=AssertionError("must not run")
+        ):
+            payload = capture_json(orchestrate.cmd_body, common.encode_id("work", "abc123"))
+        self.assertFalse(payload["ok"])
+
+    def test_provider_failure_surfaces_error(self) -> None:
+        accounts = [_account("gmail", "gmail", "Gmail")]
+
+        def run(acc: dict, args: list[str], timeout: int = 45) -> dict:
+            return {"ok": False, "error": "Gmail sign-in expired"}
+
+        with patch.object(orchestrate, "load_accounts", return_value=accounts), patch.object(
+            orchestrate, "_run_provider", side_effect=run
+        ):
+            payload = capture_json(orchestrate.cmd_body, common.encode_id("gmail", "abc123"))
+        self.assertFalse(payload["ok"])
+        self.assertEqual(payload["error"], "Gmail sign-in expired")
+
+    def test_bad_id_is_error(self) -> None:
+        payload = capture_json(orchestrate.cmd_body, "not-an-opaque-id")
+        self.assertFalse(payload["ok"])
 
 
 if __name__ == "__main__":

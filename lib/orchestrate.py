@@ -167,6 +167,19 @@ def cmd_read(opaque: str) -> None:
     emit({"ok": True})
 
 
+def cmd_body(opaque: str) -> None:
+    account_id, local_id = decode_id(opaque)
+    accounts = {a["id"]: a for a in load_accounts()}
+    acc = accounts.get(account_id)
+    if not acc:
+        die("unknown account")
+    payload = _run_provider(acc, ["body", local_id])
+    if not payload.get("ok"):
+        die(str(payload.get("error") or "could not read this message"))
+    payload.setdefault("ok", True)
+    emit(payload)
+
+
 def cmd_read_all() -> None:
     accounts = load_accounts()
     errors: list[str] = []

@@ -48,6 +48,12 @@ Panel {
   property string actionWarning: ""
   property int cursor: -1
 
+  property bool reading: false
+  property var currentMessage: null
+  property var currentBody: null
+  property bool bodyLoading: false
+  property string bodyError: ""
+
   property string pageToken: ""
   property var pageStack: []
   property string nextPage: ""
@@ -192,16 +198,85 @@ Panel {
     readProc.running = true
   }
 
-  function openMessage(message) {
+  // Primary action: read in the panel. Marks the row read, drops it from
+  // the pile, and keeps the panel open (no browser round-trip).
+  function readMessage(message) {
+    if (root.markAllBusy) return
+    if (!message || !validId(message.id)) return
+    if (bodyProc.running) bodyProc.running = false
+    currentMessage = message
+    currentBody = null
+    bodyError = ""
+    bodyLoading = true
+    reading = true
+    bodyProc.command = [root.script, "body", message.id]
+    bodyProc.running = true
+    if (!root.dismissedIds[message.id]) {
+      dismissLocal(message.id)
+      enqueueRead(message.id)
+    }
+  }
+
+  // Secondary action: open the message in Gmail (list: then close).
+  function openInGmail(message, closePanel) {
     if (root.markAllBusy) return
     if (!message || !validId(message.id)) return
     var url = message.url || ""
     if (url !== "") {
       if (!openBrowser(url)) return
     }
+    if (!root.dismissedIds[message.id]) {
+      dismissLocal(message.id)
+      enqueueRead(message.id)
+    }
+    if (closePanel) close()
+  }
+
+  function closeReader() {
+    if (!root.reading) return
+    reading = false
+    currentMessage = null
+    currentBody = null
+    bodyLoading = false
+    bodyError = ""
+  }
+
+  function markCurrentRead() {
+    var message = root.currentMessage
+    if (!message || !validId(message.id)) return
+    if (root.dismissedIds[message.id]) return
+    cancelMarkAllConfirm()
     dismissLocal(message.id)
     enqueueRead(message.id)
-    close()
+  }
+
+  function readerMove(delta) {
+    if (root.messages.length === 0) return
+    var next = root.cursor + delta
+    if (next < 0) next = 0
+    if (next > root.messages.length - 1) next = root.messages.length - 1
+    root.cursor = next
+    root.readMessage(root.messages[next])
+  }
+
+  function applyBodyPayload(text) {
+    if (!root.reading) return
+    root.bodyLoading = false
+    var data = null
+    try {
+      data = JSON.parse(String(text || "").trim())
+    } catch (e) {
+      data = null
+    }
+    if (!data || data.ok !== true) {
+      root.currentBody = null
+      root.bodyError = (data && data.error)
+        ? String(data.error)
+        : "Could not read this message."
+      return
+    }
+    root.bodyError = ""
+    root.currentBody = data
   }
 
   function markCursorRead() {
@@ -275,7 +350,7 @@ Panel {
 
   function activateCursor() {
     if (cursor < 0 || cursor >= messages.length) return
-    openMessage(messages[cursor])
+    readMessage(messages[cursor])
   }
 
   function ageLabel(ts) {
@@ -333,6 +408,11 @@ Panel {
       cancelMarkAllConfirm()
       actionWarning = ""
       dismissedIds = ({})
+      reading = false
+      currentMessage = null
+      currentBody = null
+      bodyLoading = false
+      bodyError = ""
     }
   }
 
@@ -362,6 +442,27 @@ Panel {
     stdout: StdioCollector {
       onStreamFinished: root.applyReadAllPayload(text)
     }
+  }
+
+  Process {
+    id: bodyProc
+    stdout: StdioCollector {
+      onStreamFinished: root.applyBodyPayload(text)
+    }
+  }
+
+  Shortcut {
+    enabled: root.opened && root.reading
+    sequence: "Backspace"
+    context: Qt.ApplicationShortcut
+    onActivated: root.closeReader()
+  }
+
+  Shortcut {
+    enabled: root.opened && root.reading
+    sequence: "Shift+Space"
+    context: Qt.ApplicationShortcut
+    onActivated: reader.pageBy(-1)
   }
 
   Timer {
@@ -449,7 +550,8 @@ Panel {
     open: root.opened
     focusTarget: keyCatcher
     contentWidth: panel.fittedContentWidth(Style.space(400))
-    contentHeight: panel.fittedContentHeight(content.implicitHeight)
+    contentHeight: panel.fittedContentHeight(
+      root.reading ? reader.implicitHeight : content.implicitHeight)
 
     PanelKeyCatcher {
       id: keyCatcher
@@ -459,15 +561,45 @@ Panel {
           root.cancelMarkAllConfirm()
           return
         }
+        if (root.reading) {
+          root.closeReader()
+          return
+        }
         root.close()
       }
-      onMoveRequested: function(dx, dy) { if (dy !== 0) root.moveCursor(dy) }
-      onActivateRequested: root.activateCursor()
+      onMoveRequested: function(dx, dy) {
+        if (root.reading) {
+          if (dy !== 0) reader.scrollBy(dy * Style.space(56))
+          return
+        }
+        if (dy !== 0) root.moveCursor(dy)
+      }
+      onActivateRequested: {
+        if (root.reading)
+          reader.pageBy(1)
+        else
+          root.activateCursor()
+      }
       onTabRequested: function(direction) { root.switchPanel(direction) }
       onTextKey: function(t) {
+        if (root.reading) {
+          if (t === "o" && root.currentMessage && root.validId(root.currentMessage.id))
+            root.openInGmail(root.currentMessage, false)
+          else if (t === "a")
+            root.markCurrentRead()
+          else if (t === "n")
+            root.readerMove(1)
+          else if (t === "p")
+            root.readerMove(-1)
+          else if (t === "g")
+            reader.scrollToTop()
+          else if (t === "G")
+            reader.scrollToBottom()
+          return
+        }
         var onCursor = root.cursor >= 0 && root.cursor < root.messages.length
         if (t === "o" && onCursor)
-          root.openMessage(root.messages[root.cursor])
+          root.openInGmail(root.messages[root.cursor], true)
         else if (t === "i" && root.hasOpenableInbox)
           root.openSearch()
         else if (t === "a")
@@ -483,6 +615,7 @@ Panel {
       Column {
         id: content
         anchors.fill: parent
+        visible: !root.reading
         spacing: Style.space(6)
 
         Item {
@@ -685,9 +818,16 @@ Panel {
               id: rowMouse
               anchors.fill: parent
               hoverEnabled: true
+              acceptedButtons: Qt.LeftButton | Qt.MiddleButton | Qt.RightButton
               cursorShape: Qt.PointingHandCursor
               onContainsMouseChanged: if (containsMouse) root.cursor = row.index
-              onClicked: if (!root.markAllBusy) root.openMessage(row.modelData)
+              onClicked: function(mouse) {
+                if (root.markAllBusy) return
+                if (mouse.button === Qt.MiddleButton || mouse.button === Qt.RightButton)
+                  root.openInGmail(row.modelData, true)
+                else
+                  root.readMessage(row.modelData)
+              }
             }
 
             Column {
@@ -883,6 +1023,224 @@ Panel {
             font.pixelSize: Style.font.body
             color: root.foreground
             opacity: 0.6
+          }
+        }
+      }
+
+      // Reader: slides in over the pile. Body text is fetched on demand and
+      // rendered as plain text only; nothing remote is loaded or rendered.
+      Item {
+        id: reader
+        anchors.fill: parent
+        visible: root.reading
+        implicitHeight: readerColumn.implicitHeight
+
+        readonly property var msg: root.currentMessage || ({})
+        readonly property var body: root.currentBody || ({})
+        readonly property string plainText: String(body.text || "")
+        readonly property int bodyCap: Math.max(Style.space(140),
+          panel.availableCardHeight - panel.verticalContentInset - Style.space(200))
+
+        function scrollBy(distance) {
+          bodyFlick.contentY = Math.max(0, Math.min(bodyFlick.contentY + distance,
+            Math.max(0, bodyFlick.contentHeight - bodyFlick.height)))
+        }
+
+        function pageBy(direction) {
+          scrollBy(direction * Math.max(Style.space(56), bodyFlick.height - Style.space(56)))
+        }
+
+        function scrollToTop() { bodyFlick.contentY = 0 }
+
+        function scrollToBottom() {
+          bodyFlick.contentY = Math.max(0, bodyFlick.contentHeight - bodyFlick.height)
+        }
+
+        Column {
+          id: readerColumn
+          width: parent.width
+          spacing: Style.space(6)
+
+          Item {
+            width: parent.width
+            height: Math.max(backButton.implicitHeight, readerDate.implicitHeight)
+
+            PanelActionButton {
+              id: backButton
+              anchors.left: parent.left
+              anchors.verticalCenter: parent.verticalCenter
+              iconText: root.iconPrev
+              tooltipText: "Back to the pile (Esc)"
+              foreground: root.foreground
+              hoverColor: root.accent
+              fontFamily: root.fontFamily
+              fontSize: Style.font.iconSmall
+              onClicked: root.closeReader()
+            }
+
+            Text {
+              id: readerDate
+              anchors.right: parent.right
+              anchors.left: backButton.right
+              anchors.leftMargin: Style.space(8)
+              anchors.verticalCenter: parent.verticalCenter
+              text: root.oneLine(reader.msg.date)
+              textFormat: Text.PlainText
+              horizontalAlignment: Text.AlignRight
+              elide: Text.ElideRight
+              font.family: root.fontFamily
+              font.pixelSize: Style.font.caption
+              color: Qt.darker(root.foreground, 1.7)
+            }
+          }
+
+          Text {
+            id: readerSubject
+            width: parent.width
+            text: root.oneLine(reader.msg.subject)
+            textFormat: Text.PlainText
+            wrapMode: Text.WordWrap
+            maximumLineCount: 2
+            elide: Text.ElideRight
+            font.family: root.fontFamily
+            font.pixelSize: Style.font.heading
+            font.weight: Font.DemiBold
+            color: root.foreground
+          }
+
+          Text {
+            id: readerFrom
+            width: parent.width
+            text: {
+              var from = root.oneLine(reader.msg.from)
+              var to = root.oneLine(reader.msg.to)
+              if (from !== "" && to !== "") return from + "  ·  to " + to
+              return from || to
+            }
+            textFormat: Text.PlainText
+            elide: Text.ElideRight
+            wrapMode: Text.NoWrap
+            maximumLineCount: 1
+            font.family: root.fontFamily
+            font.pixelSize: Style.font.caption
+            color: Qt.darker(root.foreground, 1.5)
+          }
+
+          PanelSeparator { width: parent.width }
+
+          Item {
+            id: bodyArea
+            width: parent.width
+            height: {
+              if (root.bodyLoading) return Style.space(72)
+              if (root.bodyError !== "") return errorBlock.implicitHeight
+              if (reader.plainText === "") return unsupportedBlock.implicitHeight
+              return Math.min(messageText.implicitHeight, reader.bodyCap)
+            }
+
+            Text {
+              anchors.left: parent.left
+              anchors.right: parent.right
+              anchors.verticalCenter: parent.verticalCenter
+              visible: root.bodyLoading
+              text: "Loading message…"
+              textFormat: Text.PlainText
+              font.family: root.fontFamily
+              font.pixelSize: Style.font.body
+              color: Qt.darker(root.foreground, 1.7)
+            }
+
+            Column {
+              id: errorBlock
+              visible: !root.bodyLoading && root.bodyError !== ""
+              width: parent.width
+              spacing: Style.space(6)
+
+              Text {
+                width: parent.width
+                text: root.bodyError
+                textFormat: Text.PlainText
+                wrapMode: Text.WordWrap
+                font.family: root.fontFamily
+                font.pixelSize: Style.font.body
+                color: root.foreground
+              }
+
+              PanelActionButton {
+                iconText: root.iconExternal
+                tooltipText: "Open in Gmail (o)"
+                foreground: root.foreground
+                hoverColor: root.accent
+                fontFamily: root.fontFamily
+                fontSize: Style.font.iconSmall
+                onClicked: if (root.currentMessage) root.openInGmail(root.currentMessage, false)
+              }
+            }
+
+            Column {
+              id: unsupportedBlock
+              visible: !root.bodyLoading && root.bodyError === "" && reader.plainText === ""
+              width: parent.width
+              spacing: Style.space(6)
+
+              Text {
+                width: parent.width
+                text: "This message has no plain-text body to show here."
+                textFormat: Text.PlainText
+                wrapMode: Text.WordWrap
+                font.family: root.fontFamily
+                font.pixelSize: Style.font.body
+                color: Qt.darker(root.foreground, 1.5)
+              }
+
+              PanelActionButton {
+                iconText: root.iconExternal
+                tooltipText: "Open in Gmail (o)"
+                foreground: root.foreground
+                hoverColor: root.accent
+                fontFamily: root.fontFamily
+                fontSize: Style.font.iconSmall
+                onClicked: if (root.currentMessage) root.openInGmail(root.currentMessage, false)
+              }
+            }
+
+            Flickable {
+              id: bodyFlick
+              anchors.fill: parent
+              visible: !root.bodyLoading && root.bodyError === "" && reader.plainText !== ""
+              clip: true
+              contentWidth: width
+              contentHeight: messageText.implicitHeight
+              boundsBehavior: Flickable.StopAtBounds
+              flickableDirection: Flickable.VerticalFlick
+              interactive: contentHeight > height
+              ScrollBar.vertical: ScrollBar { policy: ScrollBar.AsNeeded }
+
+              Text {
+                id: messageText
+                width: bodyFlick.width - (bodyFlick.interactive ? Style.space(10) : 0)
+                text: reader.plainText + (reader.body.truncated ? "\n\n[Message truncated]" : "")
+                textFormat: Text.PlainText
+                wrapMode: Text.WrapAtWordBoundaryOrAnywhere
+                font.family: root.fontFamily
+                font.pixelSize: Style.font.body
+                color: root.foreground
+                lineHeight: 1.3
+                lineHeightMode: Text.ProportionalHeight
+              }
+            }
+          }
+
+          Text {
+            id: readerFooter
+            width: parent.width
+            text: "Esc back · j/k scroll · Space page · o Gmail · n/p next"
+            textFormat: Text.PlainText
+            horizontalAlignment: Text.AlignHCenter
+            elide: Text.ElideRight
+            font.family: root.fontFamily
+            font.pixelSize: Style.font.caption
+            color: Qt.darker(root.foreground, 1.7)
           }
         }
       }

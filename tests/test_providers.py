@@ -432,6 +432,119 @@ class GmailScriptTests(unittest.TestCase):
         self.assertNotIn("users messages modify", script.split("cmd_read_all()")[1].split("case ")[0])
 
 
+class GmailBodyCommandTests(unittest.TestCase):
+    def _run_body(self, message: dict, local_id: str = "abc123") -> dict:
+        import json
+        import os
+        import shutil
+        import subprocess
+        import tempfile
+        from pathlib import Path
+
+        from support import ROOT
+
+        if shutil.which("bash") is None or shutil.which("jq") is None:
+            self.skipTest("bash and jq are required")
+
+        root = ROOT / ".test-tmp"
+        root.mkdir(exist_ok=True)
+        tmp = Path(tempfile.mkdtemp(dir=root))
+        self.addCleanup(lambda: shutil.rmtree(tmp, ignore_errors=True))
+
+        (tmp / "message.json").write_text(json.dumps(message), encoding="utf-8")
+        fake = tmp / "gws"
+        fake.write_text(
+            "#!/usr/bin/env bash\n"
+            'if [ "${3:-}" = "messages" ] && [ "${4:-}" = "get" ]; then\n'
+            '  cat "$FAKE_GMAIL_MESSAGE"\n'
+            "else\n"
+            "  printf '%s\\n' '{\"emailAddress\":\"tester@example.test\"}'\n"
+            "fi\n",
+            encoding="utf-8",
+        )
+        fake.chmod(0o755)
+
+        env = dict(os.environ)
+        env["PATH"] = str(tmp) + os.pathsep + env.get("PATH", "")
+        env["XDG_CACHE_HOME"] = str(tmp / "cache")
+        env["YOU_GOT_MAIL_ACCOUNT_ID"] = "gmail"
+        env["FAKE_GMAIL_MESSAGE"] = str(tmp / "message.json")
+        proc = subprocess.run(
+            [str(ROOT / "providers" / "gmail"), "body", local_id],
+            capture_output=True,
+            text=True,
+            env=env,
+            timeout=60,
+            check=False,
+        )
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        text = proc.stdout.strip()
+        self.assertTrue(text, proc.stderr)
+        return json.loads(text.splitlines()[-1])
+
+    def test_body_prefers_plain_part_and_builds_url(self) -> None:
+        message = self._message(
+            [
+                self._part("text/html", "<p>html body</p>"),
+                self._part("text/plain", "plain body"),
+            ]
+        )
+        payload = self._run_body(message)
+        self.assertTrue(payload["ok"])
+        self.assertEqual(payload["text"], "plain body")
+        self.assertEqual(payload["subject"], "Hello")
+        self.assertIn("mail.google.com", payload["url"])
+        self.assertIn("thread-1", payload["url"])
+
+    def test_body_falls_back_to_html(self) -> None:
+        message = self._message([self._part("text/html", "<p>Hi<br>there</p>")])
+        payload = self._run_body(message)
+        self.assertTrue(payload["ok"])
+        self.assertEqual(payload["text"], "Hi\nthere")
+
+    @staticmethod
+    def _part(mime_type: str, text: str) -> dict:
+        import base64
+
+        return {
+            "mimeType": mime_type,
+            "headers": [
+                {"name": "Content-Type", "value": f"{mime_type}; charset=utf-8"}
+            ],
+            "body": {"data": base64.urlsafe_b64encode(text.encode("utf-8")).decode("ascii")},
+        }
+
+    @staticmethod
+    def _message(parts: list[dict]) -> dict:
+        return {
+            "id": "abc123",
+            "threadId": "thread-1",
+            "payload": {
+                "mimeType": "multipart/alternative",
+                "headers": [
+                    {"name": "Subject", "value": "=?UTF-8?B?SGVsbG8=?="},
+                    {"name": "From", "value": "Ada <ada@example.test>"},
+                    {"name": "To", "value": "you@example.test"},
+                    {"name": "Date", "value": "Tue, 1 Jan 2030 00:00:00 +0000"},
+                ],
+                "parts": parts,
+            },
+        }
+
+    def test_body_uses_full_format_and_never_caches(self) -> None:
+        from support import ROOT
+
+        script = (ROOT / "providers" / "gmail").read_text(encoding="utf-8")
+        self.assertIn("cmd_body()", script)
+        self.assertIn('format:"full"', script)
+        self.assertIn("users messages get", script)
+        self.assertIn("mime_text.py", script)
+        self.assertIn("body) cmd_body", script)
+        body = script.split("cmd_body()")[1].split("fail_read_all()")[0]
+        for forbidden in ("write_private", "messages.json", "CACHE_FILE"):
+            self.assertNotIn(forbidden, body)
+
+
 class OutlookUnreadTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls) -> None:

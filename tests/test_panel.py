@@ -108,6 +108,45 @@ class PanelContractTests(unittest.TestCase):
         self.assertIn("Header envelope-open or `A`", readme)
         self.assertIn("mark the message under the cursor as read, without opening it", readme)
 
+    def test_reader_state_and_body_process(self) -> None:
+        self.assertIn("property bool reading", self.qml)
+        self.assertIn("property var currentMessage", self.qml)
+        self.assertIn("property var currentBody", self.qml)
+        self.assertIn("property bool bodyLoading", self.qml)
+        self.assertIn("property string bodyError", self.qml)
+        self.assertIn("id: bodyProc", self.qml)
+        self.assertIn('bodyProc.command = [root.script, "body", message.id]', self.qml)
+        self.assertIn("function applyBodyPayload(", self.qml)
+        self.assertIn("function readMessage(", self.qml)
+        self.assertIn("function openInGmail(", self.qml)
+        self.assertIn("function closeReader(", self.qml)
+        self.assertIn("function markCurrentRead(", self.qml)
+        self.assertIn("function readerMove(", self.qml)
+
+    def test_reader_opening_keeps_panel_open(self) -> None:
+        reader = self.qml.split("function readMessage(")[1].split("function ")[0]
+        self.assertNotIn("close()", reader)
+        self.assertIn("dismissLocal(message.id)", reader)
+        self.assertIn("enqueueRead(message.id)", reader)
+        self.assertIn("reading = true", reader)
+
+    def test_reader_keys_and_secondary_gmail_action(self) -> None:
+        self.assertIn("reader.scrollBy", self.qml)
+        self.assertIn("reader.pageBy", self.qml)
+        self.assertIn("reader.scrollToTop", self.qml)
+        self.assertIn("reader.scrollToBottom", self.qml)
+        self.assertIn('sequence: "Backspace"', self.qml)
+        self.assertIn('sequence: "Shift+Space"', self.qml)
+        self.assertIn("root.openInGmail(root.currentMessage, false)", self.qml)
+        self.assertIn("root.openInGmail(root.messages[root.cursor], true)", self.qml)
+        self.assertIn("root.readMessage(row.modelData)", self.qml)
+
+    def test_reader_text_is_always_plain(self) -> None:
+        self.assertIn("textFormat: Text.PlainText", self.qml)
+        self.assertIn("reader.plainText", self.qml)
+        self.assertNotIn("Text.StyledText", self.qml)
+        self.assertNotIn("Text.RichText", self.qml)
+
     def test_mailbox_is_stroked_and_contained(self) -> None:
         icon = (ROOT / "MailSlotIcon.qml").read_text(encoding="utf-8")
         self.assertIn("ctx.arc(", icon)

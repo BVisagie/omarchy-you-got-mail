@@ -7,11 +7,14 @@
 #   gmail list [--page TOKEN]
 #   gmail read <id>
 #   gmail read-all
+#   gmail body <id>
 #
 # gws owns the OAuth token. This script never sees a credential.
 
 set -uo pipefail
 umask 077
+
+ROOT="${YOU_GOT_MAIL_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
 
 export GOOGLE_WORKSPACE_CLI_KEYRING_BACKEND="${GOOGLE_WORKSPACE_CLI_KEYRING_BACKEND:-file}"
 
@@ -98,6 +101,7 @@ private_dir() {
 
 command -v jq >/dev/null 2>&1 || die "jq not found on PATH"
 command -v gws >/dev/null 2>&1 || die "gws not found on PATH - see the README"
+command -v python3 >/dev/null 2>&1 || die "python3 not found on PATH"
 private_dir "$CACHE_DIR" || die "cache directory is not usable"
 
 gws_gmail() {
@@ -355,6 +359,26 @@ cmd_read() {
   printf '{"ok":true}\n'
 }
 
+# Fetch one message on demand and decode it to plain text in lib/mime_text.py.
+# Bodies are never written to disk or folded into messages.json.
+cmd_body() {
+  local id="${1:-}"
+  valid_id "$id" || die "not a message id"
+  local msg decoded thread email url
+  msg="$(gws_list users messages get --params "$(
+    jq -nc --arg id "$id" '{userId:"me",id:$id,format:"full"}')")"
+  thread="$(printf '%s' "$msg" | jq -r '.threadId // .id // empty' 2>/dev/null)"
+  [ -n "$thread" ] || thread="$id"
+  email="$(account_email)" || email=""
+  url="$(message_url "$email" "$thread")"
+  decoded="$(printf '%s' "$msg" | python3 "$ROOT/lib/mime_text.py" 2>/dev/null)" || decoded=""
+  if ! printf '%s' "$decoded" | jq -e 'type == "object"' >/dev/null 2>&1; then
+    die "could not read this message"
+  fi
+  jq -nc --argjson body "$decoded" --arg url "$url" --arg thread "$thread" \
+    '$body + {url: $url, threadId: ($body.threadId // $thread)}'
+}
+
 fail_read_all() {
   printf '{"ok":false,"marked":%s,"error":%s}\n' "$1" "$(printf '%s' "$2" | jq -Rs .)"
   exit 0
@@ -405,5 +429,6 @@ case "${1:-list}" in
   list) shift; cmd_list "$@" ;;
   read) cmd_read "${2:-}" ;;
   read-all) cmd_read_all ;;
+  body) cmd_body "${2:-}" ;;
   *)    die "unknown command" ;;
 esac

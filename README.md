@@ -1,8 +1,8 @@
 # You've Got Mail
 
 An Omarchy bar widget for **unread mail only**. One pile, across every
-account you add. Click a row to open that message in the browser. Read
-mail is never listed.
+account you add. Click a row to read that message inside the panel; `o`
+opens it in Gmail when you want the browser. Read mail is never listed.
 
 Gmail, Outlook, Fastmail, generic IMAP, and HEY are built in. Adding
 another provider is documented in [docs/PROVIDERS.md](docs/PROVIDERS.md).
@@ -107,12 +107,32 @@ If you never add an account, a single Gmail account is assumed. The first
 | Header envelope-open or `A` | mark all unread as read (click or press twice to confirm) |
 | `a` | mark the message under the cursor as read, without opening it |
 | Header external-link or `i` | same as right-click |
-| Click a message | open **that** thread in the browser and take it off the pile |
+| Click a message | read **that** message inside the panel and take it off the pile |
+| Middle-click or right-click a message | open **that** thread in Gmail |
 | `↑` `↓` or `j` `k` | move through the list |
-| `Enter`, `Space` or `o` | open the message under the cursor |
+| `Enter` or `Space` | read the message under the cursor in the panel |
+| `o` | open the message under the cursor in Gmail |
 | `n` / `p` | next page, previous page |
 | `Tab` / `Shift+Tab` | switch to the next or previous bar panel |
-| `Esc` | cancel mark-all confirm, or close |
+| `Esc` | cancel mark-all confirm, go back from the reader, or close |
+
+Inside the reader:
+
+| | |
+|---|---|
+| `↑` `↓` or `j` `k` | scroll the message |
+| `Space` / `Shift+Space` | page down / up |
+| `g` / `G` | jump to the top / bottom |
+| `n` / `p` | next / previous message (fetch and mark read) |
+| `o` | open this message in Gmail |
+| `a` | mark this message read |
+| `Backspace` / `Esc` | back to the pile |
+
+Reading a message in the panel marks it read and removes it from the pile,
+exactly like the old open-in-Gmail behavior. The body is fetched on demand,
+is never written to disk, and is rendered as plain text only; `o` (or the
+reader's button) opens the full message in Gmail when a body cannot be
+shown. Gmail is the provider with `body` support today.
 
 The bar tooltip shows the unread count, or why mail is unreachable.
 

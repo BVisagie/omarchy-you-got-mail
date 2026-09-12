@@ -11,6 +11,7 @@ Supported names today: `gmail`, `outlook`, `fastmail`, `imap`, `hey`.
 <provider> list [--limit N]
 <provider> read <local-id>
 <provider> read-all
+<provider> body <local-id>
 ```
 
 Always print **one JSON object** to stdout and exit 0, even on failure:
@@ -125,6 +126,41 @@ If some messages were marked and a later batch fails, return that count:
 Do not fall back to thousands of per-message calls when a bulk API is
 missing. The orchestrator times this command out after 120 seconds; stop
 with a partial `marked` count rather than hanging.
+
+## `body` success (optional)
+
+```json
+{
+  "ok": true,
+  "subject": "Hello",
+  "from": "Ada <ada@example.test>",
+  "to": "you@example.test",
+  "date": "Tue, 1 Jan 2030 00:00:00 +0000",
+  "text": "plain text body",
+  "truncated": false,
+  "url": "https://…"
+}
+```
+
+`body` returns one message as **plain text** for the panel's reader. It is
+optional: a provider that does not implement it makes the panel show the
+message's `url` instead (an "Open in Gmail" style fallback).
+
+- `text` must always be present (may be empty when the message has no
+  readable body). `truncated` is `true` when `text` was capped; cap at
+  roughly 256 KB of decoded text.
+- `subject`, `from`, `to`, and `date` are decoded for display; the four
+  are normally the same headers `list` already had.
+- `url` should be the provider's web link for the message, or empty.
+- Fetch on demand, for the one id the panel opened — never in the `list`
+  refresh loop. **Never** write a body to disk, the metadata cache, or
+  `messages.json`. Decode untrusted HTML to text; never fetch remote
+  images or execute markup.
+- Gmail does this with `users.messages.get` (`format=full`) and
+  `lib/mime_text.py`; `format=raw` plus the stdlib `email` module is an
+  equally valid shape for other providers.
+- Map auth expiry the same way `list` does, and return
+  `{"ok":false,"error":"…"}` for a missing or deleted id.
 
 ## Adding the name to the CLI
 
