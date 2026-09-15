@@ -85,7 +85,9 @@ class PanelContractTests(unittest.TestCase):
     def test_mark_all_confirm_and_busy(self) -> None:
         self.assertIn("Mark all unread as read (A)", self.qml)
         self.assertIn("Click again to confirm", self.qml)
+        self.assertIn("Press A again to mark ", self.qml)
         self.assertIn("Marking unread mail as read…", self.qml)
+        self.assertIn("Refreshing unread mail…", self.qml)
         self.assertIn('t === "a"', self.qml)
         self.assertIn('t === "A"', self.qml)
         self.assertIn("function markCursorRead()", self.qml)
@@ -95,11 +97,14 @@ class PanelContractTests(unittest.TestCase):
         self.assertIn("property var readQueue", self.qml)
         self.assertIn("property bool markAllArmed", self.qml)
         self.assertIn("property bool markAllBusy", self.qml)
+        self.assertIn("property bool reconciling", self.qml)
+        self.assertIn("!root.reachable || listProc.running", self.qml)
         self.assertIn("property string actionWarning", self.qml)
         self.assertIn('readAllProc.command = [root.script, "read-all"]', self.qml)
         self.assertIn("applyReadAllPayload", self.qml)
         self.assertIn("root.actionWarning", self.qml)
-        self.assertIn("opacity: root.markAllBusy ? 0.4 : 1", self.qml)
+        self.assertIn("opacity: (root.markAllBusy || root.reconciling) ? 0.4 : 1", self.qml)
+        self.assertIn("enabled: !root.markAllBusy && !root.reconciling", self.qml)
         self.assertNotIn("unread = 0", self.qml)
         self.assertNotIn("messages = []", self.qml)
         self.assertRegex(self.qml, r't === "a"\)\s+root\.markCursorRead\(\)')
@@ -107,6 +112,21 @@ class PanelContractTests(unittest.TestCase):
         readme = (ROOT / "README.md").read_text(encoding="utf-8")
         self.assertIn("Header envelope-open or `A`", readme)
         self.assertIn("mark the message under the cursor as read, without opening it", readme)
+
+    def test_refresh_requests_are_coalesced(self) -> None:
+        self.assertIn("property bool refreshPending", self.qml)
+        self.assertIn("if (listProc.running) {", self.qml)
+        self.assertIn("root.refreshPending = true", self.qml)
+        self.assertIn("root.refreshPending = false", self.qml)
+        self.assertIn("onExited: if (root.refreshPending) root.refresh()", self.qml)
+
+    def test_first_message_is_keyboard_ready(self) -> None:
+        self.assertIn("if (cursor < 0 && messages.length > 0) cursor = 0", self.qml)
+
+    def test_reconciliation_waits_for_latest_refresh(self) -> None:
+        self.assertIn("if (!root.refreshPending) root.reconciling = false", self.qml)
+        self.assertGreaterEqual(self.qml.count("root.reconciling = true"), 2)
+        self.assertIn("root.markAllBusy || root.reconciling", self.qml)
 
     def test_mailbox_is_stroked_and_contained(self) -> None:
         icon = (ROOT / "MailSlotIcon.qml").read_text(encoding="utf-8")

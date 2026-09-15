@@ -45,6 +45,8 @@ Panel {
   property var dismissedIds: ({})
   property bool markAllArmed: false
   property bool markAllBusy: false
+  property bool refreshPending: false
+  property bool reconciling: false
   property string actionWarning: ""
   property int cursor: -1
 
@@ -101,7 +103,12 @@ Panel {
   }
 
   function refresh() {
-    if (listProc.running || root.markAllBusy) return
+    if (root.markAllBusy) return
+    if (listProc.running) {
+      root.refreshPending = true
+      return
+    }
+    root.refreshPending = false
     var argv = [root.script, "list", "--limit", String(root.pageSize)]
     if (pageToken !== "" && validToken(pageToken)) argv.push("--page", pageToken)
     listProc.command = argv
@@ -109,7 +116,7 @@ Panel {
   }
 
   function goNextPage() {
-    if (!hasNext || listProc.running || root.markAllBusy) return
+    if (!hasNext || listProc.running || root.markAllBusy || root.reconciling) return
     var stack = pageStack.slice()
     stack.push(pageToken)
     pageStack = stack
@@ -119,7 +126,7 @@ Panel {
   }
 
   function goPrevPage() {
-    if (!hasPrev || listProc.running || root.markAllBusy) return
+    if (!hasPrev || listProc.running || root.markAllBusy || root.reconciling) return
     var stack = pageStack.slice()
     pageToken = stack.pop()
     pageStack = stack
@@ -193,7 +200,7 @@ Panel {
   }
 
   function openMessage(message) {
-    if (root.markAllBusy) return
+    if (root.markAllBusy || root.reconciling) return
     if (!message || !validId(message.id)) return
     var url = message.url || ""
     if (url !== "") {
@@ -205,7 +212,7 @@ Panel {
   }
 
   function markCursorRead() {
-    if (root.markAllBusy) return
+    if (root.markAllBusy || root.reconciling) return
     if (cursor < 0 || cursor >= messages.length) return
     var message = messages[cursor]
     if (!message || !validId(message.id)) return
@@ -228,7 +235,8 @@ Panel {
   }
 
   function requestMarkAll() {
-    if (!root.hasUnread || !root.reachable || root.markAllBusy) return
+    if (!root.hasUnread || !root.reachable || listProc.running
+        || root.markAllBusy || root.reconciling) return
     if (!root.markAllArmed) {
       root.markAllArmed = true
       markAllArmTimer.restart()
@@ -250,12 +258,14 @@ Panel {
       if (!(marked > 0)) marked = 0
       if (data.ok === true) {
         root.actionWarning = data.warning || ""
+        root.reconciling = true
         firstPage()
         refresh()
         return
       }
       root.actionWarning = data.error || "could not mark all as read"
       if (marked > 0) {
+        root.reconciling = true
         firstPage()
         refresh()
       }
@@ -265,7 +275,7 @@ Panel {
   }
 
   function moveCursor(delta) {
-    if (messages.length === 0) return
+    if (root.reconciling || messages.length === 0) return
     var next = cursor + delta
     if (next < 0) next = 0
     if (next > messages.length - 1) next = messages.length - 1
@@ -296,6 +306,7 @@ Panel {
   function applyPayload(text) {
     try {
       var data = JSON.parse(text)
+      if (!root.refreshPending) root.reconciling = false
       reachable = data.ok === true
       errorText = data.error || ""
       warningText = reachable ? (data.warning || "") : ""
@@ -317,7 +328,9 @@ Panel {
       accountCount = data.accountCount || 0
       nextPage = validToken(data.nextPage) ? data.nextPage : ""
       if (cursor > messages.length - 1) cursor = messages.length - 1
+      if (cursor < 0 && messages.length > 0) cursor = 0
     } catch (e) {
+      if (!root.refreshPending) root.reconciling = false
       reachable = false
       errorText = "unexpected output from you-got-mail"
     }
@@ -343,6 +356,7 @@ Panel {
     stdout: StdioCollector {
       onStreamFinished: root.applyPayload(text)
     }
+    onExited: if (root.refreshPending) root.refresh()
   }
 
   Process {
@@ -527,7 +541,8 @@ Panel {
             PanelActionButton {
               id: markAllButton
               visible: root.hasUnread && root.reachable
-              enabled: root.hasUnread && root.reachable && !root.markAllBusy
+              enabled: root.hasUnread && root.reachable
+                && !listProc.running && !root.markAllBusy && !root.reconciling
               iconText: root.markAllArmed || root.markAllBusy
                 ? root.iconConfirm : root.iconMarkAll
               tooltipText: root.markAllBusy
@@ -602,9 +617,9 @@ Panel {
 
         Item {
           width: parent.width
-          height: (root.actionWarning !== "" && !root.markAllBusy)
+          height: (root.actionWarning !== "" && !root.markAllBusy && !root.reconciling)
             ? actionWarningLabel.implicitHeight + Style.space(6) : 0
-          visible: root.actionWarning !== "" && !root.markAllBusy
+          visible: root.actionWarning !== "" && !root.markAllBusy && !root.reconciling
 
           Text {
             id: actionWarningLabel
@@ -621,14 +636,36 @@ Panel {
 
         Item {
           width: parent.width
-          height: root.markAllBusy ? markAllBusyLabel.implicitHeight + Style.space(6) : 0
-          visible: root.markAllBusy
+          height: root.markAllArmed
+            ? markAllConfirmLabel.implicitHeight + Style.space(6) : 0
+          visible: root.markAllArmed
+
+          Text {
+            id: markAllConfirmLabel
+            anchors.verticalCenter: parent.verticalCenter
+            width: parent.width
+            text: "Press A again to mark " + root.unread + " unread as read"
+            textFormat: Text.PlainText
+            elide: Text.ElideRight
+            font.family: root.fontFamily
+            font.pixelSize: Style.font.caption
+            color: bar ? bar.urgent : Color.urgent
+          }
+        }
+
+        Item {
+          width: parent.width
+          height: (root.markAllBusy || root.reconciling)
+            ? markAllBusyLabel.implicitHeight + Style.space(6) : 0
+          visible: root.markAllBusy || root.reconciling
 
           Text {
             id: markAllBusyLabel
             anchors.verticalCenter: parent.verticalCenter
             width: parent.width
-            text: "Marking unread mail as read…"
+            text: root.markAllBusy
+              ? "Marking unread mail as read…"
+              : "Refreshing unread mail…"
             textFormat: Text.PlainText
             elide: Text.ElideRight
             font.family: root.fontFamily
@@ -642,13 +679,13 @@ Panel {
           width: parent.width
           visible: root.messages.length > 0
           clip: true
-          opacity: root.markAllBusy ? 0.4 : 1
-          enabled: !root.markAllBusy
+          opacity: (root.markAllBusy || root.reconciling) ? 0.4 : 1
+          enabled: !root.markAllBusy && !root.reconciling
           model: root.messages
           spacing: Style.space(1)
           boundsBehavior: Flickable.StopAtBounds
           flickableDirection: Flickable.VerticalFlick
-          interactive: contentHeight > height && !root.markAllBusy
+          interactive: contentHeight > height && !root.markAllBusy && !root.reconciling
           ScrollBar.vertical: ScrollBar { policy: ScrollBar.AsNeeded }
 
           readonly property int cap: {
@@ -657,8 +694,12 @@ Panel {
             if (!root.reachable) chrome += staleWarning.implicitHeight + Style.space(6)
             if (root.reachable && root.warningText !== "")
               chrome += partialWarning.implicitHeight + Style.space(6)
-            if (root.actionWarning !== "" && !root.markAllBusy) chrome += Style.space(24)
-            if (root.markAllBusy) chrome += Style.space(24)
+            if (root.actionWarning !== "" && !root.markAllBusy && !root.reconciling)
+              chrome += Style.space(24)
+            if (root.markAllArmed)
+              chrome += markAllConfirmLabel.implicitHeight + Style.space(6)
+            if (root.markAllBusy || root.reconciling)
+              chrome += markAllBusyLabel.implicitHeight + Style.space(6)
             return Math.max(Style.space(200),
                             panel.availableCardHeight - panel.verticalContentInset - chrome)
           }
@@ -833,7 +874,7 @@ Panel {
             PanelActionButton {
               iconText: root.iconPrev
               tooltipText: "Previous page"
-              enabled: root.hasPrev && !root.markAllBusy
+              enabled: root.hasPrev && !root.markAllBusy && !root.reconciling
               opacity: enabled ? 1 : 0.3
               foreground: root.foreground
               hoverColor: root.accent
@@ -854,7 +895,7 @@ Panel {
             PanelActionButton {
               iconText: root.iconNext
               tooltipText: "Next page"
-              enabled: root.hasNext && !root.markAllBusy
+              enabled: root.hasNext && !root.markAllBusy && !root.reconciling
               opacity: enabled ? 1 : 0.3
               foreground: root.foreground
               hoverColor: root.accent

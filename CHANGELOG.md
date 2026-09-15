@@ -2,6 +2,15 @@
 
 Versions match `manifest.json`. Git tags are created at release time.
 
+## 2.6.1
+
+- Refresh requests that arrive while a mailbox refresh is running are
+  coalesced into one follow-up refresh instead of being dropped.
+- The first message is selected when mail loads, so keyboard actions work
+  immediately without a mouse movement or navigation key.
+- Mark-all shows a clear confirmation prompt, then keeps the old list dimmed
+  and inactive until the refreshed mailbox state arrives.
+
 ## 2.6.0
 
 Expired mail logins are a warning, not a dead widget, and the panel
