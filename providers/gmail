@@ -40,6 +40,25 @@ die() {
   exit 0
 }
 
+# The command to paste into a terminal. The plugin never puts you-got-mail
+# on PATH, so the short name is only used when it resolves to this plugin.
+login_hint() {
+  local root script found home
+  root="${YOU_GOT_MAIL_ROOT:-$(cd "$(dirname "$0")/.." && pwd)}"
+  script="$root/bin/you-got-mail"
+  found="$(command -v you-got-mail 2>/dev/null)"
+  if [ -n "$found" ] && [ "$(readlink -f -- "$found")" = "$(readlink -f -- "$script")" ]; then
+    printf 'you-got-mail accounts login %q' "$ACCOUNT_ID"
+    return
+  fi
+  home="${HOME%/}"
+  if [ -n "$home" ] && [[ "$script" == "$home"/* ]]; then
+    printf '%s/%q accounts login %q' '~' "${script#"$home"/}" "$ACCOUNT_ID"
+  else
+    printf '%q accounts login %q' "$script" "$ACCOUNT_ID"
+  fi
+}
+
 gmail_error() {
   local raw="${1:-could not read unread mail}"
   local lower
@@ -51,7 +70,7 @@ gmail_error() {
      || "$lower" == *"failed to get token"* \
      || "$lower" == *unauthenticated* \
      || "$lower" == *unauthorized* ]]; then
-    die "Gmail needs you to sign in again. In a terminal: you-got-mail accounts login gmail"
+    die "Gmail needs you to sign in again. In a terminal: $(login_hint)"
   fi
   die "$raw"
 }

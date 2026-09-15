@@ -2,6 +2,20 @@
 
 Versions match `manifest.json`. Git tags are created at release time.
 
+## 2.6.3
+
+The sign-in hint is a command you can actually run.
+
+- The panel said `In a terminal: you-got-mail accounts login gmail`, but
+  the plugin never installs `you-got-mail` on PATH, so pasting it gave
+  `command not found`.
+- The hint now names the plugin's script, e.g.
+  `~/.config/omarchy/plugins/bvisagie.you-got-mail/bin/you-got-mail accounts login gmail`.
+  It uses the short `you-got-mail` only when that name on PATH resolves to
+  this plugin.
+- The Gmail provider's own message uses the same rule and the real
+  account id instead of always saying `gmail`.
+
 ## 2.6.2
 
 Expired mail logins no longer look like an empty mailbox.

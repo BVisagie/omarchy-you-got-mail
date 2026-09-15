@@ -415,7 +415,7 @@ class GmailScriptTests(unittest.TestCase):
         self.assertIn("gmail_error", script)
         self.assertIn("gws_list", script)
         self.assertNotIn('gws gmail "$@" 2>/dev/null', script)
-        self.assertIn("you-got-mail accounts login gmail", script)
+        self.assertIn("login_hint", script)
         # die() exits 0, so $(gws_list) would swallow auth errors as unread 0.
         self.assertNotIn('page="$(gws_list', script)
         self.assertNotIn('unread="$(unread_total', script)
@@ -467,6 +467,8 @@ class GmailProviderProcessTests(unittest.TestCase):
         env["PATH"] = str(bindir) + os.pathsep + env.get("PATH", "")
         env["XDG_CACHE_HOME"] = str(tmp / "cache")
         env["YOU_GOT_MAIL_ACCOUNT_ID"] = "gmail-test"
+        env["HOME"] = str(ROOT.parent)
+        env.pop("YOU_GOT_MAIL_ROOT", None)
         env["GOOGLE_WORKSPACE_CLI_KEYRING_BACKEND"] = "file"
         proc = subprocess.run(
             ["bash", str(ROOT / "providers" / "gmail"), *args],
@@ -481,6 +483,8 @@ class GmailProviderProcessTests(unittest.TestCase):
         return json.loads(text.splitlines()[-1])
 
     def test_list_auth_error_is_not_empty_success(self) -> None:
+        from support import ROOT
+
         payload = self._run(
             f"printf '%s\\n' '{self.AUTH_ERROR}'\nexit 2\n",
             "list",
@@ -489,7 +493,13 @@ class GmailProviderProcessTests(unittest.TestCase):
         )
         self.assertFalse(payload["ok"])
         self.assertIn("Gmail needs you to sign in again", payload["error"])
-        self.assertIn("you-got-mail accounts login gmail", payload["error"])
+        # The plugin is not on PATH, so the hint must name the script itself.
+        self.assertTrue(
+            payload["error"].endswith(
+                f"In a terminal: ~/{ROOT.name}/bin/you-got-mail accounts login gmail-test"
+            ),
+            payload["error"],
+        )
         self.assertNotIn("invalid_grant", payload["error"])
         self.assertNotIn("GOOGLE_WORKSPACE_CLI_KEYRING_BACKEND", payload["error"])
 

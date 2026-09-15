@@ -17,8 +17,11 @@ $PLUGIN accounts login [id]
 $PLUGIN accounts remove <id>
 ```
 
-Run these from a **terminal**, not from the bar. Put `$PLUGIN` on your
-PATH if you want the short command `you-got-mail`.
+Run these from a **terminal**, not from the bar. The plugin does not
+install a `you-got-mail` command. For the short name, link it:
+`ln -s "$PLUGIN" ~/.local/bin/you-got-mail`. The panel's sign-in hint
+uses the short name only when it finds that link, and the full path
+otherwise.
 
 `accounts login` signs the same id in again after a token expires or is
 revoked. It does not create `gmail2`. Gmail and HEY open their own CLIs;
@@ -359,7 +362,7 @@ zero unread, and IMAP accounts with no webmail URL, are skipped.
 | HEY lists nothing | Looking at Feed / Paper Trail | Only Imbox unseen is unread. Confirm `hey box imbox --json`. |
 | Outlook signed in but rows wrap into a wall of text | Old plugin build | Update: Graph `bodyPreview` has line breaks; current builds flatten them. |
 | Warning naming a mailbox at the top of the panel | That account failed; others still listed | Fix that provider (auth, PATH, token); middle-click to retry |
-| `{Provider} needs you to sign in again` / `invalid_grant` / `Token has been expired or revoked` | Refresh token revoked. Gmail Testing OAuth clients last 7 days. | `$PLUGIN accounts login <id>` (Gmail: `you-got-mail accounts login gmail`). Publish a Gmail Desktop client to Production so this stops weekly. |
+| `{Provider} needs you to sign in again` / `invalid_grant` / `Token has been expired or revoked` | Refresh token revoked. Gmail Testing OAuth clients last 7 days. | `$PLUGIN accounts login <id>` (the panel prints the exact command to paste). Publish a Gmail Desktop client to Production so this stops weekly. |
 | Panel says caught up, Gmail web still has unread | Expired `gws` token that older builds treated as zero messages. Folders/labels are already in the pile (`in:inbox OR has:userlabels`). | Update to 2.6.2+. The bar shows `!` and **Sign-in needed**, not an empty pile. Then `$PLUGIN accounts login gmail`. |
 | `Couldn't reach {Provider}` | TLS, DNS, or the host refused the connection | Check the network; for IMAP confirm host/port. Middle-click to retry. |
 | `accounts add` or `accounts login` refuses to run | Needs a real terminal | Run `$PLUGIN accounts login …` in a terminal, not piped. |
