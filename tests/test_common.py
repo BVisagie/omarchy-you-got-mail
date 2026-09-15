@@ -3,9 +3,12 @@ from __future__ import annotations
 import json
 import os
 import shutil
+import subprocess
+import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from support import capture_json, ROOT
 
@@ -89,6 +92,79 @@ class CommonHelpersTests(unittest.TestCase):
     def test_encode_decode_id(self) -> None:
         opaque = common.encode_id("work", "INBOX/12")
         self.assertEqual(common.decode_id(opaque), ("work", "INBOX/12"))
+
+
+class LoginCommandTests(unittest.TestCase):
+    """The panel prints this for you to paste. The plugin never puts
+    `you-got-mail` on PATH, so the short name alone is not runnable."""
+
+    def setUp(self) -> None:
+        self.tmp = _workdir()
+        self.addCleanup(lambda: shutil.rmtree(self.tmp, ignore_errors=True))
+        self.bindir = self.tmp / "bin"
+        self.bindir.mkdir()
+
+    def _env(self, home: Path, root: Path = ROOT) -> dict[str, str]:
+        return {"HOME": str(home), "PATH": str(self.bindir), "YOU_GOT_MAIL_ROOT": str(root)}
+
+    def test_not_on_path_uses_plugin_path_under_home(self) -> None:
+        with patch.dict(os.environ, self._env(ROOT.parent)):
+            cmd = common.login_command("gmail", "gmail")
+        self.assertEqual(cmd, f"~/{ROOT.name}/bin/you-got-mail accounts login gmail")
+
+    def test_not_on_path_outside_home_uses_absolute_path(self) -> None:
+        with patch.dict(os.environ, self._env(self.tmp / "home")):
+            cmd = common.login_command("outlook", "work")
+        self.assertEqual(cmd, f"{ROOT}/bin/you-got-mail accounts login work")
+
+    def test_plugin_root_with_space_is_quoted(self) -> None:
+        root = self.tmp / "my plugin"
+        with patch.dict(os.environ, self._env(self.tmp, root)):
+            cli = common.cli_command()
+        self.assertTrue(cli.startswith("~/"), cli)
+        proc = subprocess.run(
+            ["bash", "--noprofile", "--norc", "-c", f"printf '%s\\n' {cli}"],
+            capture_output=True,
+            text=True,
+            env={"HOME": str(self.tmp), "PATH": "/usr/bin:/bin"},
+            check=True,
+        )
+        self.assertEqual(proc.stdout, f"{root}/bin/you-got-mail\n")
+
+    def test_short_name_when_path_links_to_this_plugin(self) -> None:
+        (self.bindir / "you-got-mail").symlink_to(ROOT / "bin" / "you-got-mail")
+        with patch.dict(os.environ, self._env(ROOT.parent)):
+            cmd = common.login_command("gmail", "gmail")
+        self.assertEqual(cmd, "you-got-mail accounts login gmail")
+
+    def test_other_you_got_mail_on_path_is_not_trusted(self) -> None:
+        other = self.bindir / "you-got-mail"
+        other.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+        other.chmod(0o755)
+        with patch.dict(os.environ, self._env(ROOT.parent)):
+            cmd = common.login_command("gmail", "gmail")
+        self.assertEqual(cmd, f"~/{ROOT.name}/bin/you-got-mail accounts login gmail")
+
+    def test_sign_in_hint_runs_in_a_fresh_shell(self) -> None:
+        with patch.dict(os.environ, self._env(ROOT.parent)):
+            msg = common.account_error(
+                {"id": "gmail", "provider": "gmail"},
+                "invalid_grant: Token has been expired or revoked.",
+            )
+        hint = msg.split("In a terminal: ", 1)[1]
+        self.assertTrue(hint.endswith(" accounts login gmail"), msg)
+        cli = hint[: -len(" accounts login gmail")]
+        # No you-got-mail on PATH, like a terminal on a stock install.
+        path = os.pathsep.join([os.path.dirname(sys.executable), "/usr/bin", "/bin"])
+        proc = subprocess.run(
+            ["bash", "--noprofile", "--norc", "-c", f"{cli} --help"],
+            capture_output=True,
+            text=True,
+            env={"HOME": str(ROOT.parent), "PATH": path},
+            check=False,
+        )
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertIn("accounts login", proc.stdout)
 
 
 class HttpBodyTests(unittest.TestCase):
@@ -280,7 +356,7 @@ class AccountsFileTests(unittest.TestCase):
 class ManifestAndHelpTests(unittest.TestCase):
     def test_manifest_widget_settings(self) -> None:
         data = json.loads((ROOT / "manifest.json").read_text(encoding="utf-8"))
-        self.assertEqual(data["version"], "2.6.2")
+        self.assertEqual(data["version"], "2.6.3")
         for name in ("Gmail", "Outlook", "Fastmail", "IMAP", "HEY"):
             self.assertIn(name, data["description"])
             self.assertIn(name, data["barWidget"]["description"])

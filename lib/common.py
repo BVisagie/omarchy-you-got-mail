@@ -6,6 +6,8 @@ import errno
 import json
 import os
 import re
+import shlex
+import shutil
 import stat
 import sys
 import tempfile
@@ -217,9 +219,26 @@ _UNREACHABLE_NEEDLES = (
 )
 
 
+def cli_command() -> str:
+    """The CLI as you would type it in a terminal.
+
+    The plugin never puts `you-got-mail` on PATH, so the short name is only
+    used when it already resolves to this plugin's script.
+    """
+    script = Path(os.environ.get("YOU_GOT_MAIL_ROOT") or ROOT) / "bin" / "you-got-mail"
+    found = shutil.which("you-got-mail")
+    if found and os.path.realpath(found) == os.path.realpath(script):
+        return "you-got-mail"
+    home = os.environ.get("HOME", "").rstrip("/")
+    text = str(script)
+    if home and text.startswith(home + "/"):
+        return "~/" + shlex.quote(text[len(home) + 1 :])
+    return shlex.quote(text)
+
+
 def login_command(provider: str, account_id: str = "") -> str:
     target = account_id or provider or "account"
-    return f"you-got-mail accounts login {target}"
+    return f"{cli_command()} accounts login {shlex.quote(target)}"
 
 
 def is_auth_failure(raw: str) -> bool:
