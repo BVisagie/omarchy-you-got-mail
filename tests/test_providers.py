@@ -415,7 +415,12 @@ class GmailScriptTests(unittest.TestCase):
         self.assertIn("gmail_error", script)
         self.assertIn("gws_list", script)
         self.assertNotIn('gws gmail "$@" 2>/dev/null', script)
-        self.assertIn("gws auth login -s gmail", script)
+        self.assertIn("you-got-mail accounts login gmail", script)
+        # die() exits 0, so $(gws_list) would swallow auth errors as unread 0.
+        self.assertNotIn('page="$(gws_list', script)
+        self.assertNotIn('unread="$(unread_total', script)
+        self.assertIn("gws_list page ", script)
+        self.assertIn("unread_total unread ", script)
         import subprocess
 
         subprocess.check_call(["bash", "-n", str(ROOT / "providers" / "gmail")])
@@ -430,6 +435,87 @@ class GmailScriptTests(unittest.TestCase):
         self.assertIn("$QUERY", script)
         self.assertIn("fail_read_all", script)
         self.assertNotIn("users messages modify", script.split("cmd_read_all()")[1].split("case ")[0])
+
+
+class GmailProviderProcessTests(unittest.TestCase):
+    AUTH_ERROR = (
+        '{"error":{"code":401,"message":"Authentication failed: Failed to get token: '
+        'Server error: invalid_grant: Token has been expired or revoked.",'
+        '"reason":"authError"}}'
+    )
+
+    def _run(self, gws_body: str, *args: str) -> dict:
+        import json
+        import os
+        import shutil
+        import subprocess
+        import tempfile
+        from pathlib import Path
+
+        from support import ROOT
+
+        root = ROOT / ".test-tmp"
+        root.mkdir(exist_ok=True)
+        tmp = Path(tempfile.mkdtemp(dir=root))
+        self.addCleanup(lambda: shutil.rmtree(tmp, ignore_errors=True))
+        bindir = tmp / "bin"
+        bindir.mkdir()
+        gws = bindir / "gws"
+        gws.write_text("#!/usr/bin/env bash\n" + gws_body, encoding="utf-8")
+        gws.chmod(0o755)
+        env = os.environ.copy()
+        env["PATH"] = str(bindir) + os.pathsep + env.get("PATH", "")
+        env["XDG_CACHE_HOME"] = str(tmp / "cache")
+        env["YOU_GOT_MAIL_ACCOUNT_ID"] = "gmail-test"
+        env["GOOGLE_WORKSPACE_CLI_KEYRING_BACKEND"] = "file"
+        proc = subprocess.run(
+            ["bash", str(ROOT / "providers" / "gmail"), *args],
+            capture_output=True,
+            text=True,
+            env=env,
+            check=False,
+        )
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        text = (proc.stdout or "").strip()
+        self.assertTrue(text, proc.stderr)
+        return json.loads(text.splitlines()[-1])
+
+    def test_list_auth_error_is_not_empty_success(self) -> None:
+        payload = self._run(
+            f"printf '%s\\n' '{self.AUTH_ERROR}'\nexit 2\n",
+            "list",
+            "--limit",
+            "5",
+        )
+        self.assertFalse(payload["ok"])
+        self.assertIn("Gmail needs you to sign in again", payload["error"])
+        self.assertIn("you-got-mail accounts login gmail", payload["error"])
+        self.assertNotIn("invalid_grant", payload["error"])
+        self.assertNotIn("GOOGLE_WORKSPACE_CLI_KEYRING_BACKEND", payload["error"])
+
+    def test_read_all_auth_error_is_not_marked_zero(self) -> None:
+        payload = self._run(
+            f"printf '%s\\n' '{self.AUTH_ERROR}'\nexit 2\n",
+            "read-all",
+        )
+        self.assertFalse(payload["ok"])
+        self.assertIn("Gmail needs you to sign in again", payload["error"])
+        self.assertNotIn("marked", payload)
+
+    def test_empty_mailbox_is_still_ok(self) -> None:
+        payload = self._run(
+            'case " $* " in\n'
+            '  *" users getProfile "*) printf \'{"emailAddress":"you@gmail.com"}\\n\' ;;\n'
+            '  *) printf \'{"messages":[]}\\n\' ;;\n'
+            "esac\n",
+            "list",
+            "--limit",
+            "5",
+        )
+        self.assertTrue(payload["ok"])
+        self.assertEqual(payload["unread"], 0)
+        self.assertEqual(payload["messages"], [])
+        self.assertEqual(payload["email"], "you@gmail.com")
 
 
 class OutlookUnreadTests(unittest.TestCase):

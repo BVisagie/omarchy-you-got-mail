@@ -32,6 +32,26 @@ class PanelContractTests(unittest.TestCase):
         )
         empty = self.qml.split("You're all caught up.")[1].split("textFormat:")[0]
         self.assertNotIn("root.errorText", empty)
+        self.assertIn("root.warningText === \"\" || !root.reachable", self.qml)
+
+    def test_empty_partial_failure_uses_warning_not_caught_up(self) -> None:
+        self.assertIn("function barTooltip()", self.qml)
+        self.assertIn("Sign-in needed", self.qml)
+        self.assertIn('text: root.showAlertBadge ? "!" : root.badgeCount', self.qml)
+        self.assertIn("property bool needsSignIn", self.qml)
+        self.assertIn("readonly property bool hasAlert", self.qml)
+        self.assertIn("opacity: root.hasAlert ? 0.5 : 1", self.qml)
+        self.assertIn("font.pixelSize: Style.font.body", self.qml)
+
+    def test_total_failure_alert_ignores_stale_unread(self) -> None:
+        # applyPayload returns before touching unread when ok is false.
+        self.assertIn(
+            "showAlertBadge: hasAlert && (unread === 0 || !reachable)", self.qml
+        )
+        self.assertIn(
+            'if (root.needsSignIn && (root.unread === 0 || !root.reachable)) return "Sign-in needed"',
+            self.qml,
+        )
 
     def test_keyboard_and_tooltip(self) -> None:
         self.assertIn("onTabRequested", self.qml)
@@ -69,7 +89,7 @@ class PanelContractTests(unittest.TestCase):
         self.assertIn("color: button.foreground", self.qml)
         self.assertIn("flagColor: button.foreground", self.qml)
         self.assertIn("hasMail: root.hasUnread && root.reachable", self.qml)
-        self.assertIn("color: Qt.rgba(button.foreground.r, button.foreground.g,", self.qml)
+        self.assertIn("Qt.rgba(button.foreground.r, button.foreground.g,", self.qml)
         self.assertNotIn("button.activeColor", self.qml)
         self.assertNotIn("color: Color.background", self.qml)
         self.assertNotIn(

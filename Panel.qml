@@ -38,6 +38,7 @@ Panel {
   property string searchUrl: ""
   property var inboxes: []
   property bool reachable: true
+  property bool needsSignIn: false
   property string errorText: ""
   property string warningText: ""
   property string pendingId: ""
@@ -61,9 +62,13 @@ Panel {
 
   readonly property int badgeCount: unread
   readonly property bool hasUnread: unread > 0
+  readonly property bool hasAlert: !reachable || warningText !== "" || needsSignIn
+  // A failed refresh keeps the last unread count; don't let it hide the alert.
+  readonly property bool showAlertBadge: hasAlert && (unread === 0 || !reachable)
+  readonly property color alertColor: bar ? bar.urgent : Color.urgent
 
-  readonly property int badgeWidth: badgeCount > 0
-    ? Math.max(Style.space(12), String(badgeCount).length * Style.space(6) + Style.space(8))
+  readonly property int badgeWidth: (badgeCount > 0 || showAlertBadge)
+    ? Math.max(Style.space(12), String(showAlertBadge ? "!" : badgeCount).length * Style.space(6) + Style.space(8))
     : 0
   readonly property int barContentWidth: Style.bar.iconFont + badgeWidth + Style.space(5)
   readonly property int barSlot: barContentWidth + Style.space(10)
@@ -141,8 +146,24 @@ Panel {
   }
 
   function titleText() {
+    if (root.needsSignIn && (root.unread === 0 || !root.reachable)) return "Sign-in needed"
     if (root.unread === 1) return "1 unread"
     return root.unread + " unread"
+  }
+
+  function countLabel() {
+    if (root.unread === 1) return "1 unread"
+    return root.unread + " unread"
+  }
+
+  function barTooltip() {
+    if (!root.reachable)
+      return root.errorText !== "" ? root.errorText : "Mail unreachable"
+    var warn = root.warningText
+    if (root.hasUnread)
+      return warn !== "" ? (countLabel() + " · " + warn) : countLabel()
+    if (warn !== "") return warn
+    return "No unread mail"
   }
 
   function rememberDismissed(id) {
@@ -310,6 +331,16 @@ Panel {
       reachable = data.ok === true
       errorText = data.error || ""
       warningText = reachable ? (data.warning || "") : ""
+      needsSignIn = data.needsSignIn === true
+      if (!needsSignIn) {
+        var boxes = data.inboxes || []
+        for (var b = 0; b < boxes.length; b++) {
+          if (boxes[b] && boxes[b].needsSignIn) {
+            needsSignIn = true
+            break
+          }
+        }
+      }
       // Keep actionWarning across this refresh: a write can fail while list still works.
       if (!reachable) return
       var incoming = data.messages || []
@@ -400,12 +431,10 @@ Panel {
     id: button
     anchors.fill: parent
     bar: root.bar
-    opacity: root.reachable ? 1 : 0.5
+    opacity: root.hasAlert ? 0.5 : 1
     slotSize: root.barSlot
     opticalSize: root.barContentWidth
-    tooltipText: !root.reachable
-      ? (root.errorText !== "" ? root.errorText : "Mail unreachable")
-      : (root.hasUnread ? (root.unread === 1 ? "1 unread" : root.unread + " unread") : "No unread mail")
+    tooltipText: root.barTooltip()
 
     iconComponent: Component {
       Item {
@@ -423,21 +452,23 @@ Panel {
 
           Rectangle {
             anchors.verticalCenter: parent.verticalCenter
-            visible: root.reachable && root.badgeCount > 0
+            visible: root.badgeCount > 0 || root.showAlertBadge
             height: Style.space(12)
             width: root.badgeWidth
             radius: height / 2
-            color: Qt.rgba(button.foreground.r, button.foreground.g,
-                           button.foreground.b, 0.14)
+            color: root.showAlertBadge
+              ? Qt.rgba(root.alertColor.r, root.alertColor.g, root.alertColor.b, 0.18)
+              : Qt.rgba(button.foreground.r, button.foreground.g,
+                        button.foreground.b, 0.14)
 
             Text {
               anchors.centerIn: parent
-              text: root.badgeCount
+              text: root.showAlertBadge ? "!" : root.badgeCount
               textFormat: Text.PlainText
               font.family: root.fontFamily
               font.pixelSize: Style.font.caption
               renderType: Text.NativeRendering
-              color: button.foreground
+              color: root.showAlertBadge ? root.alertColor : button.foreground
             }
           }
         }
@@ -591,7 +622,7 @@ Panel {
             textFormat: Text.PlainText
             wrapMode: Text.WordWrap
             font.family: root.fontFamily
-            font.pixelSize: Style.font.caption
+            font.pixelSize: Style.font.body
             color: bar ? bar.urgent : Color.urgent
           }
         }
@@ -610,7 +641,7 @@ Panel {
             textFormat: Text.PlainText
             wrapMode: Text.WordWrap
             font.family: root.fontFamily
-            font.pixelSize: Style.font.caption
+            font.pixelSize: Style.font.body
             color: bar ? bar.urgent : Color.urgent
           }
         }
@@ -908,8 +939,9 @@ Panel {
 
         Item {
           width: parent.width
-          height: root.messages.length === 0 ? Style.space(60) : 0
-          visible: root.messages.length === 0
+          height: root.messages.length === 0 && (root.warningText === "" || !root.reachable)
+            ? Style.space(60) : 0
+          visible: root.messages.length === 0 && (root.warningText === "" || !root.reachable)
 
           Text {
             anchors.centerIn: parent
