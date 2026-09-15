@@ -63,7 +63,8 @@ Panel {
   readonly property int badgeCount: unread
   readonly property bool hasUnread: unread > 0
   readonly property bool hasAlert: !reachable || warningText !== "" || needsSignIn
-  readonly property bool showAlertBadge: hasAlert && unread === 0
+  // A failed refresh keeps the last unread count; don't let it hide the alert.
+  readonly property bool showAlertBadge: hasAlert && (unread === 0 || !reachable)
   readonly property color alertColor: bar ? bar.urgent : Color.urgent
 
   readonly property int badgeWidth: (badgeCount > 0 || showAlertBadge)
@@ -145,7 +146,7 @@ Panel {
   }
 
   function titleText() {
-    if (root.unread === 0 && root.needsSignIn) return "Sign-in needed"
+    if (root.needsSignIn && (root.unread === 0 || !root.reachable)) return "Sign-in needed"
     if (root.unread === 1) return "1 unread"
     return root.unread + " unread"
   }

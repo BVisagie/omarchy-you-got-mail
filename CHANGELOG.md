@@ -15,8 +15,9 @@ Expired mail logins no longer look like an empty mailbox.
   terminal: you-got-mail accounts login {id}`. Missing `gws`/`hey` and
   unreachable hosts get their own short lines, not OAuth soup.
 - Failed accounts stay in `inboxes` with `ok: false` and `needsSignIn`.
-  The bar dims, shows a `!` when the pile is empty, and the panel title
-  becomes "Sign-in needed" instead of "0 unread" / "You're all caught up."
+  The bar dims, shows a `!` when the pile is empty or every account failed
+  (not the last good count), and the panel title becomes "Sign-in needed"
+  instead of "0 unread" / "You're all caught up."
 
 ## 2.6.1
 

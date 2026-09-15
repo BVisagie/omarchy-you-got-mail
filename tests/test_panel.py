@@ -43,6 +43,16 @@ class PanelContractTests(unittest.TestCase):
         self.assertIn("opacity: root.hasAlert ? 0.5 : 1", self.qml)
         self.assertIn("font.pixelSize: Style.font.body", self.qml)
 
+    def test_total_failure_alert_ignores_stale_unread(self) -> None:
+        # applyPayload returns before touching unread when ok is false.
+        self.assertIn(
+            "showAlertBadge: hasAlert && (unread === 0 || !reachable)", self.qml
+        )
+        self.assertIn(
+            'if (root.needsSignIn && (root.unread === 0 || !root.reachable)) return "Sign-in needed"',
+            self.qml,
+        )
+
     def test_keyboard_and_tooltip(self) -> None:
         self.assertIn("onTabRequested", self.qml)
         self.assertIn('t === "i"', self.qml)
