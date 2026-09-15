@@ -173,6 +173,9 @@ PROVIDER_LABELS = {
 }
 
 _SIGNIN_EXPIRED = "sign-in expired. in a terminal:"
+_NEEDS_SIGNIN = "needs you to sign in again"
+_MISSING_TOOL = "isn't installed for this bar"
+_UNREACHABLE = "couldn't reach"
 
 _AUTH_NEEDLES = (
     "invalid_grant",
@@ -194,13 +197,28 @@ _AUTH_NEEDLES = (
     "http 401",
 )
 
+_MISSING_TOOL_NEEDLES = (
+    "not found on path",
+    "command not found",
+    "gws not found",
+    "hey-cli not found",
+    "hey not found",
+)
+
+_UNREACHABLE_NEEDLES = (
+    "tls handshake",
+    "could not reach",
+    "couldn't reach",
+    "connection refused",
+    "network is unreachable",
+    "temporary failure in name resolution",
+    "name or service not known",
+    "failed to resolve",
+)
+
 
 def login_command(provider: str, account_id: str = "") -> str:
-    if provider == "gmail":
-        return "GOOGLE_WORKSPACE_CLI_KEYRING_BACKEND=file gws auth login -s gmail"
-    if provider == "hey":
-        return "hey auth login"
-    target = account_id or provider
+    target = account_id or provider or "account"
     return f"you-got-mail accounts login {target}"
 
 
@@ -208,11 +226,33 @@ def is_auth_failure(raw: str) -> bool:
     text = (raw or "").lower()
     if not text:
         return False
-    if _SIGNIN_EXPIRED in text:
+    if _SIGNIN_EXPIRED in text or _NEEDS_SIGNIN in text:
         return True
     if any(needle in text for needle in _AUTH_NEEDLES):
         return True
     return re.search(r"(?:^|[\s:])401(?:\D|$)", text) is not None
+
+
+def is_missing_tool(raw: str) -> bool:
+    text = (raw or "").lower()
+    if not text:
+        return False
+    if _MISSING_TOOL in text:
+        return True
+    return any(needle in text for needle in _MISSING_TOOL_NEEDLES)
+
+
+def is_unreachable(raw: str) -> bool:
+    text = (raw or "").lower()
+    if not text:
+        return False
+    if _UNREACHABLE in text:
+        return True
+    return any(needle in text for needle in _UNREACHABLE_NEEDLES)
+
+
+def needs_sign_in(raw: str) -> bool:
+    return is_auth_failure(raw)
 
 
 def account_error(account: dict | str, raw: str, *, provider: str = "") -> str:
@@ -230,10 +270,15 @@ def account_error(account: dict | str, raw: str, *, provider: str = "") -> str:
         rest = text.split(":", 1)[1].lstrip()
     else:
         rest = text
-    if _SIGNIN_EXPIRED in rest.lower():
-        return prefix + rest
     if is_auth_failure(text):
-        return f"{prefix}{name} sign-in expired. In a terminal: {login_command(provider, acc_id)}"
+        return (
+            f"{prefix}{name} needs you to sign in again. "
+            f"In a terminal: {login_command(provider, acc_id)}"
+        )
+    if is_missing_tool(text):
+        return f"{prefix}{name} isn't installed for this bar. See the setup guide."
+    if is_unreachable(text):
+        return f"{prefix}Couldn't reach {name}."
     return prefix + rest
 
 

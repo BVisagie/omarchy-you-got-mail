@@ -16,6 +16,7 @@ from common import (
     encode_id,
     load_accounts,
     max_messages,
+    needs_sign_in,
     provider_path,
     secret_path,
 )
@@ -87,7 +88,8 @@ def cmd_list(page_token: str) -> None:
     fetch = str(min(FETCH_CAP, max(per, needed)))
     os.environ["YOU_GOT_MAIL_FETCH"] = fetch
 
-    errors = []
+    errors: list[str] = []
+    error_by_id: dict[str, str] = {}
     merged: list[dict] = []
     unread = 0
     emails = []
@@ -101,7 +103,9 @@ def cmd_list(page_token: str) -> None:
         for fut in as_completed(futures):
             acc, payload = fut.result()
             if not payload.get("ok"):
-                errors.append(account_error(acc, str(payload.get("error") or "failed")))
+                msg = account_error(acc, str(payload.get("error") or "failed"))
+                errors.append(msg)
+                error_by_id[acc["id"]] = msg
                 continue
             payloads[acc["id"]] = payload
             unread += int(payload.get("unread") or 0)
@@ -109,8 +113,54 @@ def cmd_list(page_token: str) -> None:
                 emails.append(str(payload["email"]))
             merged.extend(_tag_messages(acc, payload))
 
+    inboxes = []
+    signin = False
+    for acc in accounts:
+        label = str(acc.get("label") or acc["id"])
+        payload = payloads.get(acc["id"])
+        if payload:
+            inboxes.append(
+                {
+                    "account": label,
+                    "unread": int(payload.get("unread") or 0),
+                    "searchUrl": str(payload.get("searchUrl") or ""),
+                    "ok": True,
+                    "needsSignIn": False,
+                }
+            )
+            continue
+        err = error_by_id.get(acc["id"], "failed")
+        acc_signin = needs_sign_in(err)
+        if acc_signin:
+            signin = True
+        inboxes.append(
+            {
+                "account": label,
+                "unread": 0,
+                "searchUrl": "",
+                "ok": False,
+                "needsSignIn": acc_signin,
+                "error": err,
+            }
+        )
+
     if not payloads and errors:
-        die(errors[0] if len(errors) == 1 else "all accounts failed: " + "; ".join(errors))
+        err = errors[0] if len(errors) == 1 else "all accounts failed: " + "; ".join(errors)
+        emit(
+            {
+                "ok": False,
+                "error": err,
+                "needsSignIn": signin,
+                "unread": 0,
+                "messages": [],
+                "inboxes": inboxes,
+                "accountCount": len(accounts),
+                "searchUrl": "",
+                "nextPage": "",
+                "thisPage": str(start),
+            }
+        )
+        return
 
     merged.sort(key=lambda m: int(m.get("ts") or 0), reverse=True)
     chunk = merged[start : start + per]
@@ -121,23 +171,10 @@ def cmd_list(page_token: str) -> None:
     capped_total = min(max(len(merged), unread), FETCH_CAP)
     next_page = str(next_start) if next_start < capped_total else ""
 
-    inboxes = []
-    for acc in accounts:
-        payload = payloads.get(acc["id"])
-        if not payload:
-            continue
-        inboxes.append(
-            {
-                "account": str(acc.get("label") or acc["id"]),
-                "unread": int(payload.get("unread") or 0),
-                "searchUrl": str(payload.get("searchUrl") or ""),
-            }
-        )
-
     email = emails[0] if len(emails) == 1 else ""
     search_url = ""
-    if len(accounts) == 1 and inboxes:
-        search_url = str(inboxes[0].get("searchUrl") or "")
+    if len(accounts) == 1:
+        search_url = str(inboxes[0].get("searchUrl") or "") if inboxes else ""
 
     out = {
         "ok": True,
@@ -152,6 +189,8 @@ def cmd_list(page_token: str) -> None:
     }
     if errors:
         out["warning"] = "; ".join(errors)
+    if signin:
+        out["needsSignIn"] = True
     emit(out)
 
 
@@ -186,12 +225,18 @@ def cmd_read_all() -> None:
                 continue
             errors.append(account_error(acc, str(payload.get("error") or "failed")))
 
+    signin = any(needs_sign_in(e) for e in errors)
     if succeeded == 0:
         err = errors[0] if len(errors) == 1 else "all accounts failed: " + "; ".join(errors)
-        emit({"ok": False, "error": err, "marked": marked})
+        payload = {"ok": False, "error": err, "marked": marked}
+        if signin:
+            payload["needsSignIn"] = True
+        emit(payload)
         return
 
     out: dict = {"ok": True, "marked": marked}
     if errors:
         out["warning"] = "; ".join(errors)
+    if signin:
+        out["needsSignIn"] = True
     emit(out)

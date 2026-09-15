@@ -122,6 +122,11 @@ class PaginationTests(unittest.TestCase):
         self.assertEqual(payload["unread"], 2)
         self.assertEqual(payload["warning"], "b: b failed")
         self.assertEqual(len(payload["messages"]), 2)
+        self.assertEqual(len(payload["inboxes"]), 2)
+        self.assertTrue(payload["inboxes"][0]["ok"])
+        self.assertFalse(payload["inboxes"][1]["ok"])
+        self.assertEqual(payload["inboxes"][1]["error"], "b: b failed")
+        self.assertNotIn("needsSignIn", payload)
 
     def test_empty_success_plus_auth_failure_is_warning(self) -> None:
         accounts = [
@@ -147,9 +152,42 @@ class PaginationTests(unittest.TestCase):
         self.assertTrue(payload["ok"])
         self.assertEqual(payload["unread"], 0)
         self.assertEqual(payload["messages"], [])
-        self.assertIn("gmail: Gmail sign-in expired", payload["warning"])
-        self.assertIn("gws auth login", payload["warning"])
+        self.assertTrue(payload["needsSignIn"])
+        self.assertIn("gmail: Gmail needs you to sign in again", payload["warning"])
+        self.assertIn("you-got-mail accounts login gmail", payload["warning"])
         self.assertNotIn("invalid_grant", payload["warning"])
+        self.assertEqual(len(payload["inboxes"]), 2)
+        gmail_box = next(box for box in payload["inboxes"] if box["account"] == "Gmail")
+        outlook_box = next(box for box in payload["inboxes"] if box["account"] == "Outlook")
+        self.assertFalse(gmail_box["ok"])
+        self.assertTrue(gmail_box["needsSignIn"])
+        self.assertTrue(outlook_box["ok"])
+        self.assertEqual(outlook_box["unread"], 0)
+
+    def test_auth_failure_with_other_unread_keeps_count(self) -> None:
+        accounts = [
+            _account("gmail", "gmail", "Gmail"),
+            _account("outlook", "outlook", "Outlook"),
+        ]
+
+        def run(acc: dict, args: list[str]) -> dict:
+            if acc["id"] == "gmail":
+                return {"ok": False, "error": "invalid_grant"}
+            return {
+                "ok": True,
+                "unread": 2,
+                "messages": [message("1", 1), message("2", 2)],
+                "searchUrl": "https://outlook.live.com/mail/inbox",
+            }
+
+        with patch.object(orchestrate, "load_accounts", return_value=accounts), patch.object(
+            orchestrate, "_run_provider", side_effect=run
+        ):
+            payload = capture_json(orchestrate.cmd_list, "")
+        self.assertTrue(payload["ok"])
+        self.assertEqual(payload["unread"], 2)
+        self.assertTrue(payload["needsSignIn"])
+        self.assertEqual(len(payload["messages"]), 2)
 
     def test_all_accounts_fail_list_is_error(self) -> None:
         accounts = [

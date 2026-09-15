@@ -351,7 +351,7 @@ zero unread, and IMAP accounts with no webmail URL, are skipped.
 | Entra: account does not exist in tenant `Microsoft Services` (app `74658136-…`) | Personal Microsoft account has no Azure directory | Private window → [azure.microsoft.com/free](https://azure.microsoft.com/free/) → then [portal.azure.com](https://portal.azure.com/). Do not use entra.microsoft.com first. |
 | Azure wants a credit card | Identity check for a free directory | Normal. App registration is free. Do not provision paid resources. |
 | Outlook IMAP login fails for `@outlook.com` | Password IMAP is retired | Use Graph. |
-| `hey-cli not found` / `gws: command not found` | Binary not on the bar’s PATH | Install into `~/.local/bin`, mise shims, or `~/.bun/bin`; middle-click the icon to retry. |
+| `{Provider} isn't installed for this bar` / `hey-cli not found` / `gws: command not found` | Binary not on the bar’s PATH | Install into `~/.local/bin`, mise shims, or `~/.bun/bin`; middle-click the icon to retry. |
 | `No OAuth client configured` | Current `gws` needs a Desktop OAuth client | `gws auth setup` (needs gcloud) or save a Desktop client JSON as `~/.config/gws/client_secret.json`, then `GOOGLE_WORKSPACE_CLI_KEYRING_BACKEND=file gws auth login -s gmail`. |
 | Google **Access blocked / access_denied** | Unverified OAuth client, or missing test user | Add yourself as a test user, or use `-s gmail` only. |
 | Badge in the hundreds, Gmail web shows 2 | The other Gmail bar plugin, raw `UNREAD`, or an old build using Gmail's `resultSizeEstimate` (often 201) | Disable `jankeesvw.gmail-inbox` if it is still on the bar. This plugin counts Inbox + your labels, not Trash. Update if the badge is stuck on 201. |
@@ -359,9 +359,9 @@ zero unread, and IMAP accounts with no webmail URL, are skipped.
 | HEY lists nothing | Looking at Feed / Paper Trail | Only Imbox unseen is unread. Confirm `hey box imbox --json`. |
 | Outlook signed in but rows wrap into a wall of text | Old plugin build | Update: Graph `bodyPreview` has line breaks; current builds flatten them. |
 | Warning naming a mailbox at the top of the panel | That account failed; others still listed | Fix that provider (auth, PATH, token); middle-click to retry |
-| `invalid_grant` / `Token has been expired or revoked` / Gmail sign-in expired | Google refresh token revoked. Testing OAuth clients last 7 days. | `$PLUGIN accounts login gmail` (or `GOOGLE_WORKSPACE_CLI_KEYRING_BACKEND=file gws auth login -s gmail`). Publish the OAuth client to Production so this stops weekly. |
-| Outlook sign-in expired / Graph `invalid_grant` | Microsoft refresh token expired or revoked | `$PLUGIN accounts login outlook` in a terminal. Reuses the Azure client id. |
-| Fastmail / IMAP sign-in expired | Token or app password rejected | `$PLUGIN accounts login <id>` and paste a new token or password. |
+| `{Provider} needs you to sign in again` / `invalid_grant` / `Token has been expired or revoked` | Refresh token revoked. Gmail Testing OAuth clients last 7 days. | `$PLUGIN accounts login <id>` (Gmail: `you-got-mail accounts login gmail`). Publish a Gmail Desktop client to Production so this stops weekly. |
+| Panel says caught up, Gmail web still has unread | Expired `gws` token that older builds treated as zero messages. Folders/labels are already in the pile (`in:inbox OR has:userlabels`). | Update to 2.6.2+. The bar shows `!` and **Sign-in needed**, not an empty pile. Then `$PLUGIN accounts login gmail`. |
+| `Couldn't reach {Provider}` | TLS, DNS, or the host refused the connection | Check the network; for IMAP confirm host/port. Middle-click to retry. |
 | `accounts add` or `accounts login` refuses to run | Needs a real terminal | Run `$PLUGIN accounts login …` in a terminal, not piped. |
 
 Test without the panel:

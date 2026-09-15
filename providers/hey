@@ -64,9 +64,7 @@ def _hey(acc: dict, args: list[str], timeout: int = 40) -> dict:
 def _try_hey(acc: dict, args: list[str], timeout: int = 40) -> tuple[dict | None, str]:
     env = _hey_env(acc)
     if not shutil.which("hey", path=env.get("PATH")):
-        return None, (
-            "hey-cli not found. Install with: omarchy-mise-install github:basecamp/hey-cli hey"
-        )
+        return None, "HEY isn't installed for this bar. See the setup guide."
     cmd = ["hey", *args, "--json"]
     try:
         proc = subprocess.run(

@@ -44,9 +44,11 @@ class CommonHelpersTests(unittest.TestCase):
             {"id": "gmail", "provider": "gmail"},
             raw,
         )
-        self.assertTrue(msg.startswith("gmail: Gmail sign-in expired."))
-        self.assertIn("gws auth login -s gmail", msg)
+        self.assertTrue(msg.startswith("gmail: Gmail needs you to sign in again."))
+        self.assertIn("you-got-mail accounts login gmail", msg)
         self.assertNotIn("invalid_grant", msg)
+        self.assertNotIn("GOOGLE_WORKSPACE_CLI_KEYRING_BACKEND", msg)
+        self.assertTrue(common.needs_sign_in(msg))
 
     def test_account_error_is_idempotent(self) -> None:
         first = common.account_error(
@@ -56,6 +58,22 @@ class CommonHelpersTests(unittest.TestCase):
         again = common.account_error({"id": "outlook", "provider": "outlook"}, first)
         self.assertEqual(first, again)
         self.assertEqual(first.count("outlook:"), 1)
+        self.assertIn("you-got-mail accounts login outlook", first)
+
+    def test_missing_tool_and_unreachable_are_plain_language(self) -> None:
+        missing = common.account_error(
+            {"id": "gmail", "provider": "gmail"},
+            "gws not found on PATH - see the README",
+        )
+        self.assertEqual(missing, "gmail: Gmail isn't installed for this bar. See the setup guide.")
+        self.assertFalse(common.needs_sign_in(missing))
+        again = common.account_error({"id": "gmail", "provider": "gmail"}, missing)
+        self.assertEqual(again, missing)
+        down = common.account_error(
+            {"id": "work", "provider": "imap"},
+            "IMAP TLS handshake failed",
+        )
+        self.assertEqual(down, "work: Couldn't reach IMAP.")
 
     def test_non_auth_error_is_prefixed_only(self) -> None:
         msg = common.account_error({"id": "work", "provider": "imap"}, "timed out")
@@ -65,6 +83,8 @@ class CommonHelpersTests(unittest.TestCase):
         self.assertTrue(common.is_auth_failure("Fastmail HTTP 401"))
         self.assertFalse(common.is_auth_failure("Fastmail HTTP 500"))
         self.assertFalse(common.is_auth_failure("could not reach host"))
+        self.assertTrue(common.is_missing_tool("hey-cli not found. Install with: omarchy-mise-install"))
+        self.assertTrue(common.is_unreachable("could not reach IMAP host"))
 
     def test_encode_decode_id(self) -> None:
         opaque = common.encode_id("work", "INBOX/12")
@@ -260,7 +280,7 @@ class AccountsFileTests(unittest.TestCase):
 class ManifestAndHelpTests(unittest.TestCase):
     def test_manifest_widget_settings(self) -> None:
         data = json.loads((ROOT / "manifest.json").read_text(encoding="utf-8"))
-        self.assertEqual(data["version"], "2.6.1")
+        self.assertEqual(data["version"], "2.6.2")
         for name in ("Gmail", "Outlook", "Fastmail", "IMAP", "HEY"):
             self.assertIn(name, data["description"])
             self.assertIn(name, data["barWidget"]["description"])
