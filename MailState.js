@@ -25,6 +25,14 @@ function readError(text, exitCode) {
   return "Could not mark as read (unexpected response)."
 }
 
+function readNotice(error, accountId, accountLabel) {
+  var label = String(accountLabel || accountId)
+  var lower = error.toLowerCase()
+  if (lower.indexOf(accountId.toLowerCase() + ":") === 0
+      || lower.indexOf(label.toLowerCase() + ":") === 0) return error
+  return label + ": " + error
+}
+
 function settle(messages, unread, dismissed, id, error) {
   var saved = dismissed[id]
   var next = Object.assign({}, dismissed)

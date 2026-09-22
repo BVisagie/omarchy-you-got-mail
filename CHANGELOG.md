@@ -4,7 +4,7 @@ Versions match `manifest.json`. Git tags are created at release time.
 
 ## 2.8.0
 
-Small controls for the same unread-only pile.
+Reliable read actions and small controls for the same unread-only pile.
 
 - Accounts (`m`) shows unread totals and last successful checks per account,
   with individual Open inbox actions, Add account, and the setup guide.
@@ -17,22 +17,18 @@ Small controls for the same unread-only pile.
 - `list` adds stable `id` fields on every inbox and Unix-seconds `checkedAt`
   timestamps on successful inboxes. Credentials and settings are unchanged.
 - Read actions also recover when the CLI cannot start. A provider process
-  that exits unsuccessfully cannot report a successful action. Repeated identical
-  action errors share one dismissible notice.
-- No notification service or notification settings are added.
-
-## 2.7.1
-
-Single-message mark-as-read failures stay visible and recover the unread row.
-
+  that exits unsuccessfully cannot report a successful action.
 - Parse action JSON as well as the process result; a successful exit alone
   does not mean the provider marked the message read.
 - Failed actions restore the row and count, then refresh. Other queued reads
   continue. Old in-flight refreshes cannot overwrite newer actions.
 - Pending reads and action errors survive closing the panel. Dismiss errors
   with the × button or `x`; the bar tooltip also surfaces them.
+- Action notices show the account once and replace older warnings or errors.
+  A successful mark-all without warnings clears the notice.
 - Bulk actions and page changes wait for queued reads to finish.
 - Add executable panel state tests to CI.
+- No notification service or notification settings are added.
 
 ## 2.7.0
 

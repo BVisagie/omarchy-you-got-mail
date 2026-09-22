@@ -43,6 +43,63 @@ test('panel queues reads, recovers only failed action and refreshes after draini
   assert.deepEqual(Array.from(p.messages, row => row.id), ['work:b25l']);
 });
 
+test('read errors label the account once in both the banner and tooltip', () => {
+  for (const [label, error, expected] of [
+    ['Office', 'work: timed out', 'work: timed out'],
+    ['Office', 'Office: provider exited 1', 'Office: provider exited 1'],
+    ['Office', 'WORK: invalid JSON', 'WORK: invalid JSON'],
+    ['Office', 'work: no output', 'work: no output'],
+    ['Office', 'Permission denied', 'Office: Permission denied'],
+    ['Office', 'workshop: rejected', 'Office: workshop: rejected'],
+    ['Work [EU]', 'Work [EU]: rejected', 'Work [EU]: rejected'],
+    ['', 'Permission denied', 'work: Permission denied'],
+  ]) {
+    const p = setup();
+    p.messages[0].account = label;
+    p.markCursorRead();
+    complete(p, JSON.stringify({ok: false, error}));
+    assert.equal(p.actionWarning, expected);
+    assert.equal(p.mailTooltip(), expected);
+    assert.equal(p.unread, 2);
+  }
+});
+
+test('action notices replace stale errors and preserve multiline messages once', () => {
+  const p = setup();
+  p.actionWarning = 'Old error';
+  const warning = 'Work: timed out\nHome: needs sign-in';
+  p.showActionWarning(warning);
+  p.showActionWarning(warning);
+  assert.equal(p.actionWarning, warning);
+  p.showActionWarning('Work: permission denied');
+  assert.equal(p.actionWarning, 'Work: permission denied');
+});
+
+test('clean mark-all success clears an earlier action error', () => {
+  const p = setup();
+  p.actionWarning = 'Work: old read error';
+  p.markAllBusy = true;
+  p.applyReadAllPayload('{"ok":true,"marked":2}');
+  assert.equal(p.actionWarning, '');
+  assert.equal(p.markAllBusy, false);
+  assert.equal(p.reconciling, true);
+  assert.equal(p.listProc.running, true);
+});
+
+test('mark-all warning, failure and malformed output replace earlier action errors', () => {
+  for (const [output, expected] of [
+    ['{"ok":true,"marked":1,"warning":"Home: unavailable"}', 'Home: unavailable'],
+    ['{"ok":false,"marked":0,"error":"Work: rejected"}', 'Work: rejected'],
+    ['not JSON', 'unexpected output from you-got-mail'],
+  ]) {
+    const p = setup();
+    p.actionWarning = 'Work: old read error';
+    p.applyReadAllPayload(output);
+    assert.equal(p.actionWarning, expected);
+    assert.equal(p.mailTooltip(), expected);
+  }
+});
+
 test('browser handoff closes panel but preserves pending action and late error', () => {
   const p = setup();
   let opened = 0;

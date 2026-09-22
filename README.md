@@ -149,7 +149,8 @@ its section of [docs/ACCOUNTS.md](docs/ACCOUNTS.md).
 
 If marking a message read fails, its row and count are restored and the panel
 shows the error, including after reopening. Browser opening still happens
-immediately. Dismiss action errors with × or `x`.
+immediately. The latest action warning or error replaces the previous notice.
+Dismiss it with × or `x`; a successful mark-all without warnings also clears it.
 
 The unread badge is the provider's mailbox total, not just the rows on
 this page. Merged paging walks a cap of 200 newest messages across

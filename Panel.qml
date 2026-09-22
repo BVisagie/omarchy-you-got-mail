@@ -347,8 +347,9 @@ Panel {
   }
 
   function showActionWarning(message) {
-    if (!message || root.actionWarning.split("\n").indexOf(message) >= 0) return
-    root.actionWarning = root.actionWarning ? root.actionWarning + "\n" + message : message
+    var notice = String(message || "")
+    if (root.actionWarning === notice) return
+    root.actionWarning = notice
   }
 
   function finishRead() {
@@ -363,9 +364,9 @@ Panel {
     unread = result.unread
     dismissedIds = result.dismissed
     if (error) {
-      var account = saved ? saved.message.account : id.split(":")[0]
-      var notice = (account || id.split(":")[0]) + ": " + error
-      showActionWarning(notice)
+      var accountId = id.split(":")[0]
+      var account = saved ? saved.message.account : accountId
+      showActionWarning(MailState.readNotice(error, accountId, account))
     }
     root.pendingId = ""
     root.readExited = false
