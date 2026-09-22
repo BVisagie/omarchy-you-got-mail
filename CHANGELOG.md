@@ -2,6 +2,34 @@
 
 Versions match `manifest.json`. Git tags are created at release time.
 
+## 2.8.0
+
+Reliable read actions and small controls for the same unread-only pile.
+
+- Accounts (`m`) shows unread totals and last successful checks per account,
+  with individual Open inbox actions, Add account, and the setup guide.
+  Add account opens the existing wizard in a floating terminal.
+- Help (`?`) lists keyboard and mouse controls inside the panel. Escape
+  returns from either view to unread mail; Tab still switches bar panels.
+- `r` and the refresh button check mail. Relative check times update without
+  fetching. Failed accounts retain their last successful time and say
+  Unavailable; a partial success never advances the last full check.
+- `list` adds stable `id` fields on every inbox and Unix-seconds `checkedAt`
+  timestamps on successful inboxes. Credentials and settings are unchanged.
+- Read actions also recover when the CLI cannot start. A provider process
+  that exits unsuccessfully cannot report a successful action.
+- Parse action JSON as well as the process result; a successful exit alone
+  does not mean the provider marked the message read.
+- Failed actions restore the row and count, then refresh. Other queued reads
+  continue. Old in-flight refreshes cannot overwrite newer actions.
+- Pending reads and action errors survive closing the panel. Dismiss errors
+  with the × button or `x`; the bar tooltip also surfaces them.
+- Action notices show the account once and replace older warnings or errors.
+  A successful mark-all without warnings clears the notice.
+- Bulk actions and page changes wait for queued reads to finish.
+- Add executable panel state tests to CI.
+- No notification service or notification settings are added.
+
 ## 2.7.0
 
 Sign-in hints in the panel are buttons, not text to retype.

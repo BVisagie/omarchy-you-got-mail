@@ -91,10 +91,12 @@ return one JSON object. `_bootstrap.run(main)` is the last-resort wrap.
   Feed, Paper Trail, and the Screener are not unread.
 
 The orchestrator adds `account` (the label), `accountCount`, and an
-`inboxes` array (`account`, `unread`, `searchUrl`, `ok`, `needsSignIn`)
+`inboxes` array (`id`, `account`, `unread`, `searchUrl`, `ok`, `needsSignIn`)
 per account on the merged payload, including accounts that failed.
-Failed rows also have `error`. A top-level `needsSignIn` is set when any
-account is an auth failure. You do not add those fields. With more than
+Successful inboxes also have `checkedAt` (Unix seconds, recorded when that
+provider finishes). Failed rows have no new `checkedAt` and also have `error`.
+A top-level `needsSignIn` is set when any account is an auth failure.
+You do not add those fields. With more than
 one account the panel opens every inbox whose `unread` is greater than
 zero.
 

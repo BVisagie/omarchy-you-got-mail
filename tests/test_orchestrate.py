@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import subprocess
 import unittest
 from unittest.mock import patch
 
@@ -10,6 +11,51 @@ from support import capture_json, message
 
 def _account(acc_id: str, provider: str, label: str) -> dict:
     return {"id": acc_id, "provider": provider, "label": label}
+
+
+class ProviderResultTests(unittest.TestCase):
+    def test_nonzero_provider_exit_cannot_report_success(self) -> None:
+        process = subprocess.CompletedProcess([], 1, '{"ok":true}', '')
+        with patch.object(orchestrate.subprocess, "run", return_value=process):
+            result = orchestrate._run_provider(_account("gmail", "gmail", "Gmail"), ["read", "one"])
+        self.assertFalse(result["ok"])
+        self.assertIn("exited 1", result["error"])
+
+    def test_successful_exit_preserves_provider_failure(self) -> None:
+        process = subprocess.CompletedProcess([], 0, '{"ok":false,"error":"permission denied"}', '')
+        with patch.object(orchestrate.subprocess, "run", return_value=process):
+            result = orchestrate._run_provider(_account("gmail", "gmail", "Gmail"), ["read", "one"])
+        self.assertFalse(result["ok"])
+        self.assertEqual(result["error"], "permission denied")
+
+
+class AccountStatusTests(unittest.TestCase):
+    def test_every_inbox_has_id_and_only_successes_have_finish_time(self) -> None:
+        accounts = [
+            _account("work", "gmail", "Mail"),
+            _account("personal", "imap", "Mail"),
+        ]
+        def run(acc, args):
+            return {"ok": True, "unread": 0} if acc["id"] == "work" else {"ok": False, "error": "offline"}
+        with patch.object(orchestrate, "load_accounts", return_value=accounts), patch.object(
+            orchestrate, "_run_provider", side_effect=run
+        ), patch.object(orchestrate.time, "time", return_value=1234):
+            payload = capture_json(orchestrate.cmd_list, "")
+        self.assertTrue(payload["ok"])
+        self.assertEqual([box["id"] for box in payload["inboxes"]], ["work", "personal"])
+        self.assertEqual(payload["inboxes"][0]["checkedAt"], 1234)
+        self.assertNotIn("checkedAt", payload["inboxes"][1])
+        self.assertEqual(payload["unread"], 0)
+
+    def test_total_failure_keeps_all_account_ids_without_fresh_check_times(self) -> None:
+        accounts = [_account("work", "gmail", "Work"), _account("home", "imap", "Home")]
+        with patch.object(orchestrate, "load_accounts", return_value=accounts), patch.object(
+            orchestrate, "_run_provider", return_value={"ok": False, "error": "offline"}
+        ):
+            payload = capture_json(orchestrate.cmd_list, "")
+        self.assertFalse(payload["ok"])
+        self.assertEqual([box["id"] for box in payload["inboxes"]], ["work", "home"])
+        self.assertTrue(all("checkedAt" not in box for box in payload["inboxes"]))
 
 
 class PaginationTests(unittest.TestCase):
