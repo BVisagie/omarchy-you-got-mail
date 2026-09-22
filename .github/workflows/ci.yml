@@ -14,6 +14,13 @@ jobs:
         with:
           python-version: "3.12"
 
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Panel behavior
+        run: node --test tests/*.cjs
+
       - name: Contract tests
         run: python3 -m unittest discover -s tests -v
 

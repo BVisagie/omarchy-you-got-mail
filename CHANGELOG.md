@@ -2,6 +2,19 @@
 
 Versions match `manifest.json`. Git tags are created at release time.
 
+## 2.7.1
+
+Single-message mark-as-read failures stay visible and recover the unread row.
+
+- Parse action JSON as well as the process result; a successful exit alone
+  does not mean the provider marked the message read.
+- Failed actions restore the row and count, then refresh. Other queued reads
+  continue. Old in-flight refreshes cannot overwrite newer actions.
+- Pending reads and action errors survive closing the panel. Dismiss errors
+  with the × button or `x`; the bar tooltip also surfaces them.
+- Bulk actions and page changes wait for queued reads to finish.
+- Add executable panel state tests to CI.
+
 ## 2.7.0
 
 Sign-in hints in the panel are buttons, not text to retype.

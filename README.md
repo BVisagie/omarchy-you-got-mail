@@ -112,6 +112,7 @@ If you never add an account, a single Gmail account is assumed. The first
 | `Enter`, `Space` or `o` | open the message under the cursor |
 | `n` / `p` | next page, previous page |
 | `Tab` / `Shift+Tab` | switch to the next or previous bar panel |
+| `x` or action-error × | dismiss an action error |
 | `Esc` | cancel mark-all confirm, or close |
 
 The bar tooltip shows the unread count, or why mail needs attention. A
@@ -130,6 +131,10 @@ PATH), not the raw `invalid_grant` dump. Click the command (or ▶) to run
 it in a floating terminal, or ⧉ to copy it. This works for every
 provider. When a provider's CLI is missing, **Open setup guide** opens
 its section of [docs/ACCOUNTS.md](docs/ACCOUNTS.md).
+
+If marking a message read fails, its row and count are restored and the panel
+shows the error, including after reopening. Browser opening still happens
+immediately. Dismiss action errors with × or `x`.
 
 The unread badge is the provider's mailbox total, not just the rows on
 this page. Merged paging walks a cap of 200 newest messages across

@@ -4,6 +4,7 @@ import Quickshell
 import Quickshell.Io
 import qs.Commons
 import qs.Ui
+import "MailState.js" as MailState
 
 // You've Got Mail: unread only. Click a row to open that message.
 //
@@ -46,6 +47,14 @@ Panel {
   property string pendingId: ""
   property var readQueue: []
   property var dismissedIds: ({})
+  readonly property bool readBusy: pendingId !== "" || readQueue.length > 0
+  property int mailboxRevision: 0
+  property int listRevision: 0
+  property string listPage: ""
+  property string readOutput: ""
+  property bool readOutputReady: false
+  property bool readExited: false
+  property int readExitCode: 0
   property bool markAllArmed: false
   property bool markAllBusy: false
   property bool refreshPending: false
@@ -64,7 +73,7 @@ Panel {
 
   readonly property int badgeCount: unread
   readonly property bool hasUnread: unread > 0
-  readonly property bool hasAlert: !reachable || warningText !== "" || needsSignIn
+  readonly property bool hasAlert: !reachable || warningText !== "" || needsSignIn || actionWarning !== ""
   // A failed refresh keeps the last unread count; don't let it hide the alert.
   readonly property bool showAlertBadge: hasAlert && (unread === 0 || !reachable)
   readonly property color alertColor: bar ? bar.urgent : Color.urgent
@@ -139,6 +148,10 @@ Panel {
 
   function refresh() {
     if (root.markAllBusy) return
+    if (root.readBusy) {
+      root.refreshPending = true
+      return
+    }
     if (listProc.running) {
       root.refreshPending = true
       return
@@ -146,12 +159,14 @@ Panel {
     root.refreshPending = false
     var argv = [root.script, "list", "--limit", String(root.pageSize)]
     if (pageToken !== "" && validToken(pageToken)) argv.push("--page", pageToken)
+    root.listRevision = root.mailboxRevision
+    root.listPage = root.pageToken
     listProc.command = argv
     listProc.running = true
   }
 
   function goNextPage() {
-    if (!hasNext || listProc.running || root.markAllBusy || root.reconciling) return
+    if (!hasNext || listProc.running || root.readBusy || root.markAllBusy || root.reconciling) return
     var stack = pageStack.slice()
     stack.push(pageToken)
     pageStack = stack
@@ -161,7 +176,7 @@ Panel {
   }
 
   function goPrevPage() {
-    if (!hasPrev || listProc.running || root.markAllBusy || root.reconciling) return
+    if (!hasPrev || listProc.running || root.readBusy || root.markAllBusy || root.reconciling) return
     var stack = pageStack.slice()
     pageToken = stack.pop()
     pageStack = stack
@@ -187,6 +202,7 @@ Panel {
   }
 
   function barTooltip() {
+    if (root.actionWarning !== "") return root.actionWarning
     if (!root.reachable)
       return root.errorText !== "" ? root.errorText : "Mail unreachable"
     var warn = root.warningText
@@ -196,21 +212,39 @@ Panel {
     return "No unread mail"
   }
 
-  function rememberDismissed(id) {
-    var next = Object.assign({}, root.dismissedIds)
-    next[id] = true
-    root.dismissedIds = next
+  function dismissLocal(id) {
+    var result = MailState.dismiss(messages, unread, dismissedIds, id)
+    if (!result) return false
+    root.mailboxRevision += 1
+    messages = result.messages
+    unread = result.unread
+    dismissedIds = result.dismissed
+    if (cursor > messages.length - 1) cursor = messages.length - 1
+    return true
   }
 
-  function dismissLocal(id) {
-    rememberDismissed(id)
-    var next = []
-    for (var i = 0; i < messages.length; i++) {
-      if (messages[i].id !== id) next.push(messages[i])
+  function finishRead() {
+    // Process exit and stdout completion may arrive in either order.
+    if (!root.readExited || !root.readOutputReady || root.pendingId === "") return
+    var id = root.pendingId
+    var saved = root.dismissedIds[id]
+    var error = MailState.readError(root.readOutput, root.readExitCode)
+    var result = MailState.settle(messages, unread, dismissedIds, id, error)
+    root.mailboxRevision += 1
+    messages = result.messages
+    unread = result.unread
+    dismissedIds = result.dismissed
+    if (error) {
+      var account = saved ? saved.message.account : id.split(":")[0]
+      var notice = (account || id.split(":")[0]) + ": " + error
+      root.actionWarning = root.actionWarning ? root.actionWarning + "\n" + notice : notice
     }
-    messages = next
-    if (unread > 0) unread -= 1
-    if (cursor > messages.length - 1) cursor = messages.length - 1
+    root.pendingId = ""
+    root.readExited = false
+    root.readOutputReady = false
+    if (cursor < 0 && messages.length > 0) cursor = 0
+    if (root.readQueue.length > 0) root.pumpRead()
+    else root.refresh()
   }
 
   function openableInboxUrls() {
@@ -246,6 +280,10 @@ Panel {
     var id = q.shift()
     root.readQueue = q
     root.pendingId = id
+    root.readOutput = ""
+    root.readOutputReady = false
+    root.readExited = false
+    root.readExitCode = 0
     readProc.command = [root.script, "read", id]
     readProc.running = true
   }
@@ -257,7 +295,7 @@ Panel {
     if (url !== "") {
       if (!openBrowser(url)) return
     }
-    dismissLocal(message.id)
+    if (!dismissLocal(message.id)) return
     enqueueRead(message.id)
     close()
   }
@@ -268,7 +306,7 @@ Panel {
     var message = messages[cursor]
     if (!message || !validId(message.id)) return
     cancelMarkAllConfirm()
-    dismissLocal(message.id)
+    if (!dismissLocal(message.id)) return
     enqueueRead(message.id)
   }
 
@@ -286,7 +324,7 @@ Panel {
   }
 
   function requestMarkAll() {
-    if (!root.hasUnread || !root.reachable || listProc.running
+    if (!root.hasUnread || !root.reachable || listProc.running || root.readBusy
         || root.markAllBusy || root.reconciling) return
     if (!root.markAllArmed) {
       root.markAllArmed = true
@@ -308,7 +346,7 @@ Panel {
       var marked = parseInt(data.marked, 10)
       if (!(marked > 0)) marked = 0
       if (data.ok === true) {
-        root.actionWarning = data.warning || ""
+        if (data.warning) root.actionWarning = data.warning
         root.reconciling = true
         firstPage()
         refresh()
@@ -355,6 +393,10 @@ Panel {
   }
 
   function applyPayload(text) {
+    if (!MailState.acceptsList(root.listRevision, root.mailboxRevision, root.listPage, root.pageToken)) {
+      root.refreshPending = true
+      return
+    }
     try {
       var data = JSON.parse(text)
       if (!root.refreshPending) root.reconciling = false
@@ -412,8 +454,6 @@ Panel {
       cursor = -1
       firstPage()
       cancelMarkAllConfirm()
-      actionWarning = ""
-      dismissedIds = ({})
     }
   }
 
@@ -429,13 +469,17 @@ Panel {
 
   Process {
     id: readProc
-    onExited: function(exitCode) {
-      root.pendingId = ""
-      if (root.readQueue.length > 0) {
-        root.pumpRead()
-        return
+    stdout: StdioCollector {
+      onStreamFinished: {
+        root.readOutput = text
+        root.readOutputReady = true
+        root.finishRead()
       }
-      root.refresh()
+    }
+    onExited: function(exitCode, exitStatus) {
+      root.readExitCode = exitStatus === 0 ? exitCode : -1
+      root.readExited = true
+      root.finishRead()
     }
   }
 
@@ -545,6 +589,7 @@ Panel {
       }
       onMoveRequested: function(dx, dy) { if (dy !== 0) root.moveCursor(dy) }
       onActivateRequested: root.activateCursor()
+      onDeleteRequested: root.actionWarning = ""
       onTabRequested: function(direction) { root.switchPanel(direction) }
       onTextKey: function(t) {
         var onCursor = root.cursor >= 0 && root.cursor < root.messages.length
@@ -610,7 +655,7 @@ Panel {
               id: markAllButton
               visible: root.hasUnread && root.reachable
               enabled: root.hasUnread && root.reachable
-                && !listProc.running && !root.markAllBusy && !root.reconciling
+                && !listProc.running && !root.readBusy && !root.markAllBusy && !root.reconciling
               iconText: root.markAllArmed || root.markAllBusy
                 ? root.iconConfirm : root.iconMarkAll
               tooltipText: root.markAllBusy
@@ -692,19 +737,31 @@ Panel {
         Item {
           width: parent.width
           height: (root.actionWarning !== "" && !root.markAllBusy && !root.reconciling)
-            ? actionWarningLabel.implicitHeight + Style.space(6) : 0
+            ? Math.max(actionWarningLabel.implicitHeight, dismissWarning.height) + Style.space(6) : 0
           visible: root.actionWarning !== "" && !root.markAllBusy && !root.reconciling
 
           Text {
             id: actionWarningLabel
             anchors.verticalCenter: parent.verticalCenter
-            width: parent.width
+            anchors.left: parent.left
+            anchors.right: dismissWarning.left
+            anchors.rightMargin: Style.space(6)
             text: root.actionWarning
             textFormat: Text.PlainText
-            elide: Text.ElideRight
+            wrapMode: Text.WrapAnywhere
             font.family: root.fontFamily
             font.pixelSize: Style.font.caption
             color: bar ? bar.urgent : Color.urgent
+          }
+
+          PanelActionButton {
+            id: dismissWarning
+            anchors.right: parent.right
+            anchors.verticalCenter: parent.verticalCenter
+            iconText: "\uF00D"
+            tooltipText: "Dismiss action error (x)"
+            foreground: root.foreground
+            onClicked: root.actionWarning = ""
           }
         }
 
@@ -768,7 +825,7 @@ Panel {
             if (staleWarning.visible) chrome += staleWarning.implicitHeight + Style.space(6)
             if (failureList.visible) chrome += failureList.height + Style.space(6)
             if (root.actionWarning !== "" && !root.markAllBusy && !root.reconciling)
-              chrome += Style.space(24)
+              chrome += Math.max(actionWarningLabel.implicitHeight, dismissWarning.height) + Style.space(6)
             if (root.markAllArmed)
               chrome += markAllConfirmLabel.implicitHeight + Style.space(6)
             if (root.markAllBusy || root.reconciling)
@@ -947,7 +1004,7 @@ Panel {
             PanelActionButton {
               iconText: root.iconPrev
               tooltipText: "Previous page"
-              enabled: root.hasPrev && !root.markAllBusy && !root.reconciling
+              enabled: root.hasPrev && !root.readBusy && !root.markAllBusy && !root.reconciling
               opacity: enabled ? 1 : 0.3
               foreground: root.foreground
               hoverColor: root.accent
@@ -968,7 +1025,7 @@ Panel {
             PanelActionButton {
               iconText: root.iconNext
               tooltipText: "Next page"
-              enabled: root.hasNext && !root.markAllBusy && !root.reconciling
+              enabled: root.hasNext && !root.readBusy && !root.markAllBusy && !root.reconciling
               opacity: enabled ? 1 : 0.3
               foreground: root.foreground
               hoverColor: root.accent
