@@ -123,10 +123,13 @@ account the badge is the sum of unread, rows are newest-first, and each
 row shows an account chip. If one account fails, the others still show
 and the panel names the failure, including when the healthy mailboxes
 are empty. Expired OAuth tokens become **Gmail needs you to sign in
-again** plus the command to paste into a terminal
+again** plus the sign-in command
 (`~/.config/omarchy/plugins/bvisagie.you-got-mail/bin/you-got-mail accounts login gmail`,
 or `you-got-mail accounts login gmail` once you have linked it onto
-PATH), not the raw `invalid_grant` dump. See [docs/ACCOUNTS.md](docs/ACCOUNTS.md).
+PATH), not the raw `invalid_grant` dump. Click the command (or ▶) to run
+it in a floating terminal, or ⧉ to copy it. This works for every
+provider. When a provider's CLI is missing, **Open setup guide** opens
+its section of [docs/ACCOUNTS.md](docs/ACCOUNTS.md).
 
 The unread badge is the provider's mailbox total, not just the rows on
 this page. Merged paging walks a cap of 200 newest messages across

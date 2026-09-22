@@ -21,7 +21,39 @@ class PanelContractTests(unittest.TestCase):
     def test_surfaces_partial_warning(self) -> None:
         self.assertIn("property string warningText", self.qml)
         self.assertIn("data.warning", self.qml)
-        self.assertIn("partialWarning", self.qml)
+        self.assertIn("id: failureList", self.qml)
+        self.assertIn("model: root.failures", self.qml)
+        self.assertIn("FailureNotice {", self.qml)
+
+    def test_failures_survive_total_failure(self) -> None:
+        # The every-account-failed payload has ok=false; its actions still show.
+        apply = self.qml.split("function applyPayload(text)")[1]
+        self.assertLess(apply.index("failures = failed"), apply.index("if (!reachable) return"))
+        self.assertIn("reported[f].ok === false", apply)
+
+    def test_sign_in_runs_in_terminal_with_a_validated_id(self) -> None:
+        run = self.qml.split("function runSignIn(id)")[1].split("function copyCommand")[0]
+        self.assertIn("if (!validAccountId(id)) return", run)
+        self.assertIn('"omarchy-launch-floating-terminal-with-presentation"', run)
+        self.assertIn('Util.shellQuote(root.script) + " accounts login " + id', run)
+        self.assertIn("/^[A-Za-z0-9][A-Za-z0-9_-]{0,31}$/", self.qml)
+
+    def test_copy_uses_wl_copy_argv(self) -> None:
+        self.assertIn('Util.execArgv(["wl-copy", "--", value])', self.qml)
+
+    def test_setup_guide_opens_through_https_check(self) -> None:
+        self.assertIn("if (root.openBrowser(url)) root.close()", self.qml)
+
+    def test_failure_notice_is_plain_text_with_run_and_copy(self) -> None:
+        notice = (ROOT / "FailureNotice.qml").read_text(encoding="utf-8")
+        texts = notice.count("\n  Text {") + notice.count("\n      Text {")
+        self.assertEqual(notice.count("textFormat: Text.PlainText"), texts)
+        self.assertIn('action.kind === "signin"', notice)
+        self.assertIn('action.kind === "setup"', notice)
+        self.assertIn("Sign in in a terminal", notice)
+        self.assertIn("Copy command", notice)
+        self.assertIn("Open setup guide", notice)
+        self.assertIn("wrapMode: Text.WrapAnywhere", notice)
 
     def test_error_banner_wraps_and_empty_state_does_not_repeat(self) -> None:
         self.assertIn("id: staleWarning", self.qml)

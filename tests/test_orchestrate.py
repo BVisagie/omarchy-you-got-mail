@@ -161,6 +161,11 @@ class PaginationTests(unittest.TestCase):
         outlook_box = next(box for box in payload["inboxes"] if box["account"] == "Outlook")
         self.assertFalse(gmail_box["ok"])
         self.assertTrue(gmail_box["needsSignIn"])
+        self.assertEqual(gmail_box["id"], "gmail")
+        self.assertEqual(gmail_box["message"], "gmail: Gmail needs you to sign in again.")
+        self.assertEqual(gmail_box["action"]["kind"], "signin")
+        self.assertTrue(gmail_box["action"]["command"].endswith("you-got-mail accounts login gmail"))
+        self.assertNotIn("action", outlook_box)
         self.assertTrue(outlook_box["ok"])
         self.assertEqual(outlook_box["unread"], 0)
 
@@ -206,6 +211,33 @@ class PaginationTests(unittest.TestCase):
         self.assertIn("all accounts failed", payload["error"])
         self.assertIn("gmail: gmail down", payload["error"])
         self.assertIn("outlook: outlook down", payload["error"])
+
+    def test_all_accounts_fail_still_carries_fix_actions(self) -> None:
+        accounts = [
+            _account("gmail", "gmail", "Gmail"),
+            _account("home", "hey", "HEY"),
+            _account("work", "imap", "Work"),
+        ]
+        errors = {
+            "gmail": "invalid_grant",
+            "home": "hey-cli not found",
+            "work": "timed out",
+        }
+
+        def run(acc: dict, args: list[str]) -> dict:
+            return {"ok": False, "error": errors[acc["id"]]}
+
+        with patch.object(orchestrate, "load_accounts", return_value=accounts), patch.object(
+            orchestrate, "_run_provider", side_effect=run
+        ):
+            payload = capture_json(orchestrate.cmd_list, "")
+        self.assertFalse(payload["ok"])
+        boxes = {box["id"]: box for box in payload["inboxes"]}
+        self.assertEqual(boxes["gmail"]["action"]["kind"], "signin")
+        self.assertEqual(boxes["home"]["action"]["kind"], "setup")
+        self.assertEqual(boxes["home"]["message"], "home: HEY isn't installed for this bar.")
+        self.assertNotIn("action", boxes["work"])
+        self.assertEqual(boxes["work"]["message"], "work: timed out")
 
 
 class ReadAllTests(unittest.TestCase):

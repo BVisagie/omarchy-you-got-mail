@@ -10,6 +10,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from common import (
     FETCH_CAP,
     account_error,
+    classify_account_error,
     decode_id,
     die,
     emit,
@@ -133,16 +134,20 @@ def cmd_list(page_token: str) -> None:
         acc_signin = needs_sign_in(err)
         if acc_signin:
             signin = True
-        inboxes.append(
-            {
-                "account": label,
-                "unread": 0,
-                "searchUrl": "",
-                "ok": False,
-                "needsSignIn": acc_signin,
-                "error": err,
-            }
-        )
+        message, action = classify_account_error(acc, err)
+        box = {
+            "id": acc["id"],
+            "account": label,
+            "unread": 0,
+            "searchUrl": "",
+            "ok": False,
+            "needsSignIn": acc_signin,
+            "error": err,
+            "message": message,
+        }
+        if action:
+            box["action"] = action
+        inboxes.append(box)
 
     if not payloads and errors:
         err = errors[0] if len(errors) == 1 else "all accounts failed: " + "; ".join(errors)

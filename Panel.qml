@@ -37,6 +37,8 @@ Panel {
   property string email: ""
   property string searchUrl: ""
   property var inboxes: []
+  // Failed accounts, each with a short message and maybe a fix action.
+  property var failures: []
   property bool reachable: true
   property bool needsSignIn: false
   property string errorText: ""
@@ -86,6 +88,34 @@ Panel {
 
   function validUrl(url) {
     return /^https:\/\/[A-Za-z0-9.-]+(?::\d+)?(?:[/?#][^\s]*)?$/.test(String(url))
+  }
+
+  function validAccountId(id) {
+    return /^[A-Za-z0-9][A-Za-z0-9_-]{0,31}$/.test(String(id))
+  }
+
+  readonly property bool hasSignInAction: {
+    for (var i = 0; i < failures.length; i++) {
+      var action = (failures[i] || {}).action || {}
+      if (action.kind === "signin") return true
+    }
+    return false
+  }
+
+  // `accounts login` needs a TTY, so it runs in a floating terminal. The
+  // launcher hands its args to `bash -c`: the script path is quoted and the
+  // id must match ACCOUNT_ID_RE, so nothing from a payload reaches the shell.
+  function runSignIn(id) {
+    if (!validAccountId(id)) return
+    Util.execArgv(["omarchy-launch-floating-terminal-with-presentation",
+                   Util.shellQuote(root.script) + " accounts login " + id])
+    close()
+  }
+
+  function copyCommand(text) {
+    var value = String(text || "")
+    if (value === "") return
+    Util.execArgv(["wl-copy", "--", value])
   }
 
   function openBrowser(url) {
@@ -332,6 +362,12 @@ Panel {
       errorText = data.error || ""
       warningText = reachable ? (data.warning || "") : ""
       needsSignIn = data.needsSignIn === true
+      var failed = []
+      var reported = data.inboxes || []
+      for (var f = 0; f < reported.length; f++) {
+        if (reported[f] && reported[f].ok === false) failed.push(reported[f])
+      }
+      failures = failed
       if (!needsSignIn) {
         var boxes = data.inboxes || []
         for (var b = 0; b < boxes.length; b++) {
@@ -363,6 +399,7 @@ Panel {
     } catch (e) {
       if (!root.refreshPending) root.reconciling = false
       reachable = false
+      failures = []
       errorText = "unexpected output from you-got-mail"
     }
   }
@@ -609,8 +646,8 @@ Panel {
 
         Item {
           width: parent.width
-          height: root.reachable ? 0 : staleWarning.implicitHeight + Style.space(6)
-          visible: !root.reachable
+          height: staleWarning.visible ? staleWarning.implicitHeight + Style.space(6) : 0
+          visible: !root.reachable && root.failures.length === 0
 
           Text {
             id: staleWarning
@@ -627,22 +664,28 @@ Panel {
           }
         }
 
-        Item {
+        Column {
+          id: failureList
           width: parent.width
-          height: (root.reachable && root.warningText !== "")
-            ? partialWarning.implicitHeight + Style.space(6) : 0
-          visible: root.reachable && root.warningText !== ""
+          visible: root.failures.length > 0
+          spacing: Style.space(6)
+          bottomPadding: visible ? Style.space(3) : 0
 
-          Text {
-            id: partialWarning
-            anchors.verticalCenter: parent.verticalCenter
-            width: parent.width
-            text: root.warningText
-            textFormat: Text.PlainText
-            wrapMode: Text.WordWrap
-            font.family: root.fontFamily
-            font.pixelSize: Style.font.body
-            color: bar ? bar.urgent : Color.urgent
+          Repeater {
+            model: root.failures
+
+            FailureNotice {
+              required property var modelData
+              width: failureList.width
+              failure: modelData
+              foreground: root.foreground
+              urgent: bar ? bar.urgent : Color.urgent
+              accent: root.accent
+              fontFamily: root.fontFamily
+              onRunSignIn: function(accountId) { root.runSignIn(accountId) }
+              onCopyCommand: function(text) { root.copyCommand(text) }
+              onOpenUrl: function(url) { if (root.openBrowser(url)) root.close() }
+            }
           }
         }
 
@@ -722,9 +765,8 @@ Panel {
           readonly property int cap: {
             var chrome = Style.space(70)
             if (root.hasPrev || root.hasNext) chrome += Style.space(38)
-            if (!root.reachable) chrome += staleWarning.implicitHeight + Style.space(6)
-            if (root.reachable && root.warningText !== "")
-              chrome += partialWarning.implicitHeight + Style.space(6)
+            if (staleWarning.visible) chrome += staleWarning.implicitHeight + Style.space(6)
+            if (failureList.visible) chrome += failureList.height + Style.space(6)
             if (root.actionWarning !== "" && !root.markAllBusy && !root.reconciling)
               chrome += Style.space(24)
             if (root.markAllArmed)
@@ -950,7 +992,9 @@ Panel {
             wrapMode: Text.WordWrap
             text: root.reachable
               ? "You're all caught up."
-              : "Fix sign-in from a terminal, then middle-click the icon."
+              : (root.hasSignInAction
+                ? "Sign in above, then middle-click the icon to refresh."
+                : "Fix sign-in from a terminal, then middle-click the icon.")
             textFormat: Text.PlainText
             font.family: root.fontFamily
             font.pixelSize: Style.font.body

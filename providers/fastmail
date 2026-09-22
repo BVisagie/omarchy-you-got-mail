@@ -374,7 +374,7 @@ def main() -> None:
     sec = _bootstrap.secret()
     token = str(sec.get("token") or "")
     if not token:
-        die("Fastmail API token missing; run: you-got-mail accounts add fastmail")
+        die(account_error(acc, "Fastmail API token missing", provider="fastmail"))
     cmd, rest, flags = _bootstrap.parse_args(sys.argv[1:])
     limit = _bootstrap.list_limit(flags)
     if cmd == "list":
