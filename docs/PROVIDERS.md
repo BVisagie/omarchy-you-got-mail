@@ -21,6 +21,11 @@ Always print **one JSON object** to stdout and exit 0, even on failure:
 
 Do not print secrets. Do not write secrets to stderr.
 
+The orchestrator rejects a successful JSON response if the provider exits
+with a nonzero status. The panel checks both the CLI exit status and the
+`ok` field before accepting a read action; failed reads restore the row
+and unread count.
+
 ## Environment
 
 | Variable | Meaning |
@@ -74,6 +79,8 @@ return one JSON object. `_bootstrap.run(main)` is the last-resort wrap.
 - `ts` is unix seconds, UTC.
 - `url` must be `https://…` or empty. The panel rejects anything else.
   Empty is allowed (IMAP without webmail).
+- `searchUrl` is the account's webmail URL, also HTTPS or empty. Accounts
+  uses it for Open inbox, including when `unread` is zero.
 - `unread` is the mailbox total (folder counts, JMAP `calculateTotal`,
   Gmail matching-id count, HEY envelope `unseen_count`, or extra unseen
   pages), not just `len(messages)`. Do not use Gmail
@@ -90,15 +97,18 @@ return one JSON object. `_bootstrap.run(main)` is the last-resort wrap.
   (Gmail user labels, IMAP folders). HEY’s attention box is the Imbox;
   Feed, Paper Trail, and the Screener are not unread.
 
-The orchestrator adds `account` (the label), `accountCount`, and an
-`inboxes` array (`id`, `account`, `unread`, `searchUrl`, `ok`, `needsSignIn`)
-per account on the merged payload, including accounts that failed.
+The orchestrator adds `account` (the label) to each message, plus top-level
+`accountCount` and `inboxes`. Each inbox has `id`, `account`, `unread`,
+`searchUrl`, `ok`, and `needsSignIn`, including accounts that failed.
 Successful inboxes also have `checkedAt` (Unix seconds, recorded when that
-provider finishes). Failed rows have no new `checkedAt` and also have `error`.
+provider finishes). Failed inboxes have no `checkedAt`; their `unread: 0`
+is a placeholder, and the panel shows Unavailable. They also have `error`,
+a display `message`, and an optional recovery `action`.
 A top-level `needsSignIn` is set when any account is an auth failure.
-You do not add those fields. With more than
-one account the panel opens every inbox whose `unread` is greater than
-zero.
+You do not add those fields. The header's Open inbox action, `i`, and
+right-clicking the bar icon open inboxes with unread mail, deduplicated by
+URL. Accounts (`m`) lets the user open one successful account's inbox,
+including at zero unread. Both require a valid HTTPS `searchUrl`.
 
 ## `read` success
 

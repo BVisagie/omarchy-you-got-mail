@@ -3,6 +3,10 @@
 You've Got Mail shows **one unread pile** across every account you add.
 The panel does not change: unread only, click to open.
 
+Open **Accounts (`m`) → Add account** in the panel to launch the setup
+wizard in a floating terminal. **Setup guide** opens this page. You can
+also run the same commands yourself:
+
 ```bash
 PLUGIN=~/.config/omarchy/plugins/bvisagie.you-got-mail/bin/you-got-mail
 
@@ -17,7 +21,8 @@ $PLUGIN accounts login [id]
 $PLUGIN accounts remove <id>
 ```
 
-Run these from a **terminal**, not from the bar. The plugin does not
+These commands run in a **terminal**; the panel launches it for Add account
+and sign-in actions without handling credentials itself. The plugin does not
 install a `you-got-mail` command. For the short name, link it:
 `ln -s "$PLUGIN" ~/.local/bin/you-got-mail`. The panel's sign-in hint
 uses the short name only when it finds that link, and the full path
@@ -101,8 +106,9 @@ omarchy-mise-install npm:@googleworkspace/cli gws gws
   **Desktop app** → save the JSON as `~/.config/gws/client_secret.json`
 
   **Testing** apps revoke refresh tokens after **7 days**. That is the
-  usual reason the panel says `invalid_grant` / `Token has been expired
-  or revoked`. Publish the OAuth client to **Production** (a personal
+  usual reason the panel says **Gmail needs you to sign in again**
+  (the underlying error may be `invalid_grant` or `Token has been expired
+  or revoked`). Publish the OAuth client to **Production** (a personal
   unverified Desktop app is enough; the 100-user cap is fine). Until
   then, re-login after each revocation:
 
@@ -158,11 +164,14 @@ run both; they share hey-cli’s login.
 ## Outlook
 
 Personal `outlook.com` / `live.com` / `hotmail.com` mailboxes (including
-[outlook.live.com](https://outlook.live.com/)) **cannot use IMAP with a
-password or app password**. Microsoft retired that path. Use Graph.
+[outlook.live.com](https://outlook.live.com/)) require
+[OAuth2/Modern Authentication for IMAP](https://support.microsoft.com/en-us/outlook/pop-imap-and-smtp-settings-for-outlook-com).
+This plugin's IMAP provider uses passwords; choose **Outlook + Graph** here.
 
-Microsoft does not let a desktop mail app ship a shared client id. You
-register a tiny public-client app in Azure. That app can live on a
+This plugin does not bundle a Microsoft client id, so you register a
+[public-client app](https://learn.microsoft.com/en-us/entra/identity-platform/msal-client-applications)
+in Azure. The client id identifies the app; it is not a client secret.
+That app can live on a
 **different** Microsoft account than the mailbox you read; the mailbox
 signs in later.
 
@@ -347,6 +356,12 @@ external-link (and a right-click on the bar icon) opens **each inbox
 that currently has unread**, one browser tab per account. Accounts at
 zero unread, and IMAP accounts with no webmail URL, are skipped.
 
+To open just one inbox, use **Accounts (`m`) → Open inbox**. This also
+works at zero unread and does not mark messages read. The Accounts view
+shows each mailbox's unread count and last successful check. Failed
+accounts say **Unavailable** and retain their previous check time; accounts
+without a valid HTTPS webmail URL have no Open inbox action.
+
 ## Troubleshooting
 
 | What you see | What it usually is | What to do |
@@ -362,10 +377,12 @@ zero unread, and IMAP accounts with no webmail URL, are skipped.
 | HEY lists nothing | Looking at Feed / Paper Trail | Only Imbox unseen is unread. Confirm `hey box imbox --json`. |
 | Outlook signed in but rows wrap into a wall of text | Old plugin build | Update: Graph `bodyPreview` has line breaks; current builds flatten them. |
 | Warning naming a mailbox at the top of the panel | That account failed; others still listed | Fix that provider (auth, PATH, token); middle-click to retry |
-| `{Provider} needs you to sign in again` / `invalid_grant` / `Token has been expired or revoked` | Refresh token revoked. Gmail Testing OAuth clients last 7 days. | `$PLUGIN accounts login <id>` (the panel prints the exact command to paste). Publish a Gmail Desktop client to Production so this stops weekly. |
+| `{Provider} needs you to sign in again` / `invalid_grant` / `Token has been expired or revoked` | Refresh token revoked. Gmail Testing OAuth clients last 7 days. | Click the panel's sign-in command or ▶ to open a terminal, or run `$PLUGIN accounts login <id>`. Publish a Gmail Desktop client to Production so this stops weekly. |
 | Panel says caught up, Gmail web still has unread | Expired `gws` token that older builds treated as zero messages. Folders/labels are already in the pile (`in:inbox OR has:userlabels`). | Update to 2.6.2+. The bar shows `!` and **Sign-in needed**, not an empty pile. Then `$PLUGIN accounts login gmail`. |
 | `Couldn't reach {Provider}` | TLS, DNS, or the host refused the connection | Check the network; for IMAP confirm host/port. Middle-click to retry. |
 | `accounts add` or `accounts login` refuses to run | Needs a real terminal | Run `$PLUGIN accounts login …` in a terminal, not piped. |
+| A message returns after marking it read, with an action error | The provider did not confirm the read; the row and count were restored | Fix the reported problem, then retry. Dismiss the notice with × or `x`; a clean mark-all success also clears it. |
+| Last full check stays old while another account refreshes | Only some accounts refreshed successfully | Check Accounts (`m`) for an unavailable mailbox and fix its error. Press `r` to retry. |
 
 Test without the panel:
 
@@ -375,7 +392,9 @@ $PLUGIN list
 ```
 
 `list` prints one JSON object. `unread` is the badge; each message has
-`account`, `subject`, `from`, `snippet`, and an `https` `url`.
+`account`, `subject`, `from`, `snippet`, and an HTTPS `url` or an empty URL
+(for example, IMAP without webmail). The `inboxes` array identifies each
+account and includes `checkedAt` Unix seconds only for successful checks.
 
 ## Revoking access
 
