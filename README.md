@@ -11,10 +11,10 @@ there for Outlook.com, Gmail OAuth, or HEY.
 
 ## Preview
 
-Version 2.8.0, rendered with sample mail only.
+Version 2.8.0 overview, composed from screenshots with sample mail only.
 
 <p align="center">
-  <img src="preview.png" alt="You've Got Mail — unread pile, account and help controls, and last full check" width="400">
+  <img src="preview.png" alt="You've Got Mail — unread mailbox, Accounts, and Shortcuts overview" width="960">
 </p>
 
 <p align="center">
