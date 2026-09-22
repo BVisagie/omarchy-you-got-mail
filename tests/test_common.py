@@ -78,6 +78,48 @@ class CommonHelpersTests(unittest.TestCase):
         )
         self.assertEqual(down, "work: Couldn't reach IMAP.")
 
+    def test_classifier_gives_sign_in_action_for_every_provider(self) -> None:
+        cases = [
+            ("gmail", "gmail", "invalid_grant: Token has been expired or revoked."),
+            ("gmail", "gmail", "Gmail needs you to sign in again. In a terminal: x"),
+            ("hey", "hey", "HEY is not signed in; run: hey auth login"),
+            ("work", "outlook", "AADSTS70000: The provided grant has expired"),
+            ("box", "imap", "IMAP login failed"),
+            ("fm", "fastmail", "Fastmail API token missing"),
+        ]
+        for acc_id, provider, raw in cases:
+            with self.subTest(provider=provider, raw=raw):
+                message, action = common.classify_account_error(
+                    {"id": acc_id, "provider": provider}, raw
+                )
+                name = common.PROVIDER_LABELS[provider]
+                self.assertEqual(message, f"{acc_id}: {name} needs you to sign in again.")
+                self.assertEqual(action["kind"], "signin")
+                self.assertEqual(action["command"], common.login_command(provider, acc_id))
+                self.assertTrue(action["command"].endswith(f" accounts login {acc_id}"))
+
+    def test_classifier_setup_and_plain_failures(self) -> None:
+        message, action = common.classify_account_error(
+            {"id": "gmail", "provider": "gmail"}, "gws not found on PATH"
+        )
+        self.assertEqual(message, "gmail: Gmail isn't installed for this bar.")
+        self.assertEqual(action, {"kind": "setup", "url": common.SETUP_GUIDE_URL + "#gmail"})
+        self.assertTrue(action["url"].startswith("https://"))
+        _, action = common.classify_account_error({"id": "h", "provider": "hey"}, "hey-cli not found")
+        self.assertTrue(action["url"].endswith("/docs/ACCOUNTS.md#hey"))
+        message, action = common.classify_account_error(
+            {"id": "work", "provider": "imap"}, "IMAP TLS handshake failed"
+        )
+        self.assertEqual((message, action), ("work: Couldn't reach IMAP.", None))
+        message, action = common.classify_account_error({"id": "work", "provider": "imap"}, "timed out")
+        self.assertEqual((message, action), ("work: timed out", None))
+
+    def test_fastmail_missing_token_hint_is_runnable(self) -> None:
+        msg = common.account_error({"id": "fm", "provider": "fastmail"}, "Fastmail API token missing")
+        self.assertIn("In a terminal: ", msg)
+        self.assertTrue(msg.endswith(" accounts login fm"), msg)
+        self.assertNotIn("accounts add", msg)
+
     def test_non_auth_error_is_prefixed_only(self) -> None:
         msg = common.account_error({"id": "work", "provider": "imap"}, "timed out")
         self.assertEqual(msg, "work: timed out")
@@ -356,7 +398,7 @@ class AccountsFileTests(unittest.TestCase):
 class ManifestAndHelpTests(unittest.TestCase):
     def test_manifest_widget_settings(self) -> None:
         data = json.loads((ROOT / "manifest.json").read_text(encoding="utf-8"))
-        self.assertEqual(data["version"], "2.6.3")
+        self.assertEqual(data["version"], "2.7.0")
         for name in ("Gmail", "Outlook", "Fastmail", "IMAP", "HEY"):
             self.assertIn(name, data["description"])
             self.assertIn(name, data["barWidget"]["description"])

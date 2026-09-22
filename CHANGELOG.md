@@ -2,6 +2,23 @@
 
 Versions match `manifest.json`. Git tags are created at release time.
 
+## 2.7.0
+
+Sign-in hints in the panel are buttons, not text to retype.
+
+- A failed account shows its message and, under it, the exact sign-in
+  command. Click the command or ▶ to run it in a floating Omarchy
+  terminal; ⧉ copies it. It works for Gmail, Outlook, Fastmail, IMAP
+  and HEY, including when every account has failed.
+- "isn't installed for this bar" now comes with **Open setup guide**,
+  which opens that provider's section of `docs/ACCOUNTS.md`.
+- A missing Fastmail token said `run: you-got-mail accounts add fastmail`,
+  which doesn't run (and would add a second account). It is now a
+  sign-in failure with the working `accounts login <id>` command.
+- `list` gives each failed inbox an `id`, a short `message` and, when
+  there is a fix, an `action`: `signin` with the command, or `setup`
+  with the guide URL. `error` and `warning` are unchanged.
+
 ## 2.6.3
 
 The sign-in hint is a command you can actually run.

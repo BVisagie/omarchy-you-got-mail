@@ -179,6 +179,9 @@ _NEEDS_SIGNIN = "needs you to sign in again"
 _MISSING_TOOL = "isn't installed for this bar"
 _UNREACHABLE = "couldn't reach"
 
+SETUP_GUIDE_URL = "https://github.com/BVisagie/omarchy-you-got-mail/blob/main/docs/ACCOUNTS.md"
+_SETUP_ANCHORS = {"gmail": "#gmail", "hey": "#hey"}
+
 _AUTH_NEEDLES = (
     "invalid_grant",
     "token has been expired or revoked",
@@ -197,6 +200,7 @@ _AUTH_NEEDLES = (
     "authenticationfailed",
     "aadsts",
     "http 401",
+    "token missing",
 )
 
 _MISSING_TOOL_NEEDLES = (
@@ -274,8 +278,15 @@ def needs_sign_in(raw: str) -> bool:
     return is_auth_failure(raw)
 
 
-def account_error(account: dict | str, raw: str, *, provider: str = "") -> str:
-    """Prefix an account failure, and replace OAuth soup with a login command."""
+def classify_account_error(
+    account: dict | str, raw: str, *, provider: str = ""
+) -> tuple[str, dict | None]:
+    """A short account failure message, plus the action that fixes it, if any.
+
+    The action is `{"kind": "signin", "command": ...}` for an expired or
+    missing sign-in, `{"kind": "setup", "url": ...}` for a missing tool, or
+    None. The panel draws the action; the tooltip uses `account_error`.
+    """
     if isinstance(account, dict):
         acc_id = str(account.get("id") or "")
         provider = provider or str(account.get("provider") or "")
@@ -291,14 +302,27 @@ def account_error(account: dict | str, raw: str, *, provider: str = "") -> str:
         rest = text
     if is_auth_failure(text):
         return (
-            f"{prefix}{name} needs you to sign in again. "
-            f"In a terminal: {login_command(provider, acc_id)}"
+            f"{prefix}{name} needs you to sign in again.",
+            {"kind": "signin", "command": login_command(provider, acc_id)},
         )
     if is_missing_tool(text):
-        return f"{prefix}{name} isn't installed for this bar. See the setup guide."
+        return (
+            f"{prefix}{name} isn't installed for this bar.",
+            {"kind": "setup", "url": SETUP_GUIDE_URL + _SETUP_ANCHORS.get(provider, "")},
+        )
     if is_unreachable(text):
-        return f"{prefix}Couldn't reach {name}."
-    return prefix + rest
+        return f"{prefix}Couldn't reach {name}.", None
+    return prefix + rest, None
+
+
+def account_error(account: dict | str, raw: str, *, provider: str = "") -> str:
+    """Prefix an account failure, and replace OAuth soup with a login command."""
+    message, action = classify_account_error(account, raw, provider=provider)
+    if action and action["kind"] == "signin":
+        return f"{message} In a terminal: {action['command']}"
+    if action and action["kind"] == "setup":
+        return f"{message} See the setup guide."
+    return message
 
 
 def ensure_config_dirs() -> None:
