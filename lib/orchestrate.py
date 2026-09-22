@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import os
 import subprocess
+import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from common import (
@@ -57,6 +58,8 @@ def _run_provider(account: dict, args: list[str], timeout: int = LIST_TIMEOUT) -
         return {"ok": False, "error": f"{account['id']}: provider returned invalid JSON"}
     if not isinstance(payload, dict):
         return {"ok": False, "error": f"{account['id']}: provider returned invalid JSON"}
+    if proc.returncode != 0 and payload.get("ok"):
+        return {"ok": False, "error": f"{account['id']}: provider exited {proc.returncode}"}
     return payload
 
 
@@ -96,19 +99,22 @@ def cmd_list(page_token: str) -> None:
     emails = []
     payloads: dict[str, dict] = {}
 
-    def work(acc: dict) -> tuple[dict, dict]:
-        return acc, _run_provider(acc, ["list", "--limit", fetch])
+    def work(acc: dict) -> tuple[dict, dict, float]:
+        payload = _run_provider(acc, ["list", "--limit", fetch])
+        return acc, payload, time.time()
 
+    checked_at: dict[str, float] = {}
     with ThreadPoolExecutor(max_workers=min(8, len(accounts))) as pool:
         futures = [pool.submit(work, acc) for acc in accounts]
         for fut in as_completed(futures):
-            acc, payload = fut.result()
+            acc, payload, finished_at = fut.result()
             if not payload.get("ok"):
                 msg = account_error(acc, str(payload.get("error") or "failed"))
                 errors.append(msg)
                 error_by_id[acc["id"]] = msg
                 continue
             payloads[acc["id"]] = payload
+            checked_at[acc["id"]] = finished_at
             unread += int(payload.get("unread") or 0)
             if payload.get("email"):
                 emails.append(str(payload["email"]))
@@ -122,7 +128,9 @@ def cmd_list(page_token: str) -> None:
         if payload:
             inboxes.append(
                 {
+                    "id": acc["id"],
                     "account": label,
+                    "checkedAt": checked_at[acc["id"]],
                     "unread": int(payload.get("unread") or 0),
                     "searchUrl": str(payload.get("searchUrl") or ""),
                     "ok": True,

@@ -54,6 +54,7 @@ Panel {
   property string readOutput: ""
   property bool readOutputReady: false
   property bool readExited: false
+  property bool readStarted: false
   property int readExitCode: 0
   property bool markAllArmed: false
   property bool markAllBusy: false
@@ -70,6 +71,118 @@ Panel {
   readonly property bool hasNext: nextPage !== ""
 
   property double now: 0
+  property string auxiliaryView: ""
+  property int menuCursor: -1
+  property string savedMessageId: ""
+  property var accountChecks: ({})
+  property double allCheckedAt: 0
+  property string accountSignature: ""
+  readonly property var accountMenu: MailState.accountEntries(inboxes, accountChecks, now)
+  readonly property var shortcutHelp: MailState.shortcuts()
+
+  function showView(view) {
+    cancelMarkAllConfirm()
+    if (auxiliaryView === view) view = ""
+    if (auxiliaryView === "" && cursor >= 0 && cursor < messages.length)
+      savedMessageId = messages[cursor].id
+    auxiliaryView = view
+    if (view === "accounts") {
+      menuCursor = MailState.moveMenu(accountMenu, -1, 1)
+    } else if (view === "") {
+      var found = messages.findIndex(function(message) { return message.id === root.savedMessageId })
+      if (found >= 0) cursor = found
+    }
+    auxiliaryMenu.contentY = 0
+    keyCatcher.forceActiveFocus()
+  }
+
+  function addAccount() {
+    Util.execArgv(["omarchy-launch-floating-terminal-with-presentation",
+                   Util.shellQuote(root.script) + " accounts add"])
+    close()
+  }
+
+  function activateMenu(entry) {
+    if (!entry || !entry.enabled) return
+    if (entry.kind === "inbox") {
+      if (openBrowser(entry.url)) close()
+    } else if (entry.kind === "add") addAccount()
+    else if (entry.kind === "guide") {
+      if (openBrowser("https://github.com/BVisagie/omarchy-you-got-mail/blob/main/docs/ACCOUNTS.md")) close()
+    }
+  }
+
+  function moveSelection(delta) {
+    if (auxiliaryView === "accounts") {
+      menuCursor = MailState.moveMenu(accountMenu, menuCursor, delta)
+      auxiliaryMenu.revealCursor()
+    } else if (auxiliaryView === "help") {
+      auxiliaryMenu.contentY = Math.max(0, Math.min(
+        Math.max(0, auxiliaryMenu.contentHeight - auxiliaryMenu.height),
+        auxiliaryMenu.contentY + delta * Style.space(40)))
+    } else moveCursor(delta)
+  }
+
+  function activateSelection() {
+    if (auxiliaryView === "accounts") activateMenu(accountMenu[menuCursor])
+    else if (auxiliaryView === "") activateCursor()
+  }
+
+  function closeRequested() {
+    if (auxiliaryView !== "") showView("")
+    else if (markAllArmed) cancelMarkAllConfirm()
+    else close()
+  }
+
+  function handleTextKey(t) {
+    if (t === "?") { showView("help"); return }
+    if (t === "m") { showView("accounts"); return }
+    if (t === "r") { refresh(); return }
+    if (auxiliaryView !== "") {
+      if (t === "o") activateSelection()
+      return
+    }
+    var onCursor = root.cursor >= 0 && root.cursor < root.messages.length
+    if (t === "o" && onCursor)
+      root.openMessage(root.messages[root.cursor])
+    else if (t === "i" && root.hasOpenableInbox)
+      root.openSearch()
+    else if (t === "a")
+      root.markCursorRead()
+    else if (t === "A")
+      root.requestMarkAll()
+    else if (t === "n")
+      root.goNextPage()
+    else if (t === "p")
+      root.goPrevPage()
+  }
+
+  function freshnessText() {
+    return allCheckedAt > 0
+      ? "Last full check: " + MailState.checkLabel(allCheckedAt, now).replace(/^Checked /, "")
+      : "No successful check of all accounts yet"
+  }
+
+  function updateAccounts(reported) {
+    var menuKey = (accountMenu[menuCursor] || {}).key
+    var signature = reported.map(function(box) { return box.id || "" }).sort().join(":")
+    if (signature !== accountSignature) allCheckedAt = 0
+    accountSignature = signature
+    var result = MailState.updateChecks(accountChecks, reported)
+    accountChecks = result.checks
+    if (result.allCheckedAt > 0) allCheckedAt = result.allCheckedAt
+    inboxes = reported
+    if (auxiliaryView === "accounts") {
+      var found = accountMenu.findIndex(function(entry) { return entry.key === menuKey && entry.enabled })
+      menuCursor = found >= 0 ? found : MailState.moveMenu(accountMenu, -1, 1)
+    }
+  }
+
+  function staleAccounts(message) {
+    updateAccounts(inboxes.map(function(box) {
+      return Object.assign({}, box, {ok: false, unread: 0, searchUrl: "", message: message})
+    }))
+  }
 
   readonly property int badgeCount: unread
   readonly property bool hasUnread: unread > 0
@@ -88,7 +201,7 @@ Panel {
   implicitHeight: bar && bar.vertical ? barSlot : (bar ? bar.barSize : Style.bar.sizeHorizontal)
 
   function validToken(t) {
-    return /^[A-Za-z0-9_-]{1,512}$/.test(String(t))
+    return typeof t === "string" && /^[A-Za-z0-9_-]{1,512}$/.test(t)
   }
 
   function validId(id) {
@@ -96,7 +209,7 @@ Panel {
   }
 
   function validUrl(url) {
-    return /^https:\/\/[A-Za-z0-9.-]+(?::\d+)?(?:[/?#][^\s]*)?$/.test(String(url))
+    return MailState.validUrl(url)
   }
 
   function validAccountId(id) {
@@ -201,7 +314,7 @@ Panel {
     return root.unread + " unread"
   }
 
-  function barTooltip() {
+  function mailTooltip() {
     if (root.actionWarning !== "") return root.actionWarning
     if (!root.reachable)
       return root.errorText !== "" ? root.errorText : "Mail unreachable"
@@ -210,6 +323,16 @@ Panel {
       return warn !== "" ? (countLabel() + " · " + warn) : countLabel()
     if (warn !== "") return warn
     return "No unread mail"
+  }
+
+  function barTooltip() {
+    var parts = [mailTooltip(), freshnessText()]
+    for (var i = 0; i < inboxes.length; i++) {
+      var box = inboxes[i]
+      if (box.ok === false)
+        parts.push((box.account || box.id) + ": " + MailState.checkLabel(accountChecks[box.id], now))
+    }
+    return parts.join("\n")
   }
 
   function dismissLocal(id) {
@@ -221,6 +344,11 @@ Panel {
     dismissedIds = result.dismissed
     if (cursor > messages.length - 1) cursor = messages.length - 1
     return true
+  }
+
+  function showActionWarning(message) {
+    if (!message || root.actionWarning.split("\n").indexOf(message) >= 0) return
+    root.actionWarning = root.actionWarning ? root.actionWarning + "\n" + message : message
   }
 
   function finishRead() {
@@ -237,7 +365,7 @@ Panel {
     if (error) {
       var account = saved ? saved.message.account : id.split(":")[0]
       var notice = (account || id.split(":")[0]) + ": " + error
-      root.actionWarning = root.actionWarning ? root.actionWarning + "\n" + notice : notice
+      showActionWarning(notice)
     }
     root.pendingId = ""
     root.readExited = false
@@ -245,6 +373,16 @@ Panel {
     if (cursor < 0 && messages.length > 0) cursor = 0
     if (root.readQueue.length > 0) root.pumpRead()
     else root.refresh()
+  }
+
+  function readStartFailed(id) {
+    // Quickshell emits runningChanged, but no exited signal, on exec failure.
+    // The captured ID prevents a deferred callback from settling the next read.
+    if (root.pendingId !== id || root.readStarted || readProc.running) return
+    root.readOutputReady = true
+    root.readExited = true
+    root.readExitCode = -1
+    root.finishRead()
   }
 
   function openableInboxUrls() {
@@ -283,6 +421,7 @@ Panel {
     root.readOutput = ""
     root.readOutputReady = false
     root.readExited = false
+    root.readStarted = false
     root.readExitCode = 0
     readProc.command = [root.script, "read", id]
     readProc.running = true
@@ -346,20 +485,20 @@ Panel {
       var marked = parseInt(data.marked, 10)
       if (!(marked > 0)) marked = 0
       if (data.ok === true) {
-        if (data.warning) root.actionWarning = data.warning
+        showActionWarning(data.warning)
         root.reconciling = true
         firstPage()
         refresh()
         return
       }
-      root.actionWarning = data.error || "could not mark all as read"
+      showActionWarning(data.error || "could not mark all as read")
       if (marked > 0) {
         root.reconciling = true
         firstPage()
         refresh()
       }
     } catch (e) {
-      root.actionWarning = "unexpected output from you-got-mail"
+      showActionWarning("unexpected output from you-got-mail")
     }
   }
 
@@ -406,6 +545,9 @@ Panel {
       needsSignIn = data.needsSignIn === true
       var failed = []
       var reported = data.inboxes || []
+      root.now = Date.now() / 1000
+      updateAccounts(reported)
+      accountCount = data.accountCount || reported.length
       for (var f = 0; f < reported.length; f++) {
         if (reported[f] && reported[f].ok === false) failed.push(reported[f])
       }
@@ -429,12 +571,13 @@ Panel {
         if (row && root.dismissedIds[row.id]) dropped += 1
         else kept.push(row)
       }
+      var selectedId = cursor >= 0 && cursor < messages.length ? messages[cursor].id : ""
       messages = kept
+      var selectedIndex = messages.findIndex(function(message) { return message.id === selectedId })
+      if (selectedIndex >= 0) cursor = selectedIndex
       unread = Math.max(0, (data.unread || 0) - dropped)
       email = data.email || ""
       searchUrl = data.searchUrl || ""
-      inboxes = data.inboxes || []
-      accountCount = data.accountCount || 0
       nextPage = validToken(data.nextPage) ? data.nextPage : ""
       if (cursor > messages.length - 1) cursor = messages.length - 1
       if (cursor < 0 && messages.length > 0) cursor = 0
@@ -443,6 +586,7 @@ Panel {
       reachable = false
       failures = []
       errorText = "unexpected output from you-got-mail"
+      staleAccounts(errorText)
     }
   }
 
@@ -451,6 +595,8 @@ Panel {
       now = Date.now() / 1000
       refresh()
     } else {
+      auxiliaryView = ""
+      menuCursor = -1
       cursor = -1
       firstPage()
       cancelMarkAllConfirm()
@@ -469,6 +615,11 @@ Panel {
 
   Process {
     id: readProc
+    onStarted: root.readStarted = true
+    onRunningChanged: if (!running && root.pendingId !== "") {
+      var id = root.pendingId
+      Qt.callLater(function() { root.readStartFailed(id) })
+    }
     stdout: StdioCollector {
       onStreamFinished: {
         root.readOutput = text
@@ -499,6 +650,13 @@ Panel {
       root.now = Date.now() / 1000
       root.refresh()
     }
+  }
+
+  Timer {
+    interval: 15000
+    running: true
+    repeat: true
+    onTriggered: root.now = Date.now() / 1000
   }
 
   Timer {
@@ -580,32 +738,12 @@ Panel {
     PanelKeyCatcher {
       id: keyCatcher
       anchors.fill: parent
-      onCloseRequested: {
-        if (root.markAllArmed) {
-          root.cancelMarkAllConfirm()
-          return
-        }
-        root.close()
-      }
-      onMoveRequested: function(dx, dy) { if (dy !== 0) root.moveCursor(dy) }
-      onActivateRequested: root.activateCursor()
+      onCloseRequested: root.closeRequested()
+      onMoveRequested: function(dx, dy) { if (dy !== 0) root.moveSelection(dy) }
+      onActivateRequested: root.activateSelection()
       onDeleteRequested: root.actionWarning = ""
       onTabRequested: function(direction) { root.switchPanel(direction) }
-      onTextKey: function(t) {
-        var onCursor = root.cursor >= 0 && root.cursor < root.messages.length
-        if (t === "o" && onCursor)
-          root.openMessage(root.messages[root.cursor])
-        else if (t === "i" && root.hasOpenableInbox)
-          root.openSearch()
-        else if (t === "a")
-          root.markCursorRead()
-        else if (t === "A")
-          root.requestMarkAll()
-        else if (t === "n")
-          root.goNextPage()
-        else if (t === "p")
-          root.goPrevPage()
-      }
+      onTextKey: function(t) { root.handleTextKey(t) }
 
       Column {
         id: content
@@ -613,8 +751,9 @@ Panel {
         spacing: Style.space(6)
 
         Item {
+          id: panelHeading
           width: parent.width
-          height: Math.max(heading.implicitHeight, openMailButton.height)
+          height: Math.max(heading.implicitHeight, headerActions.implicitHeight)
 
           Column {
             id: heading
@@ -626,7 +765,8 @@ Panel {
 
             PanelSectionHeader {
               width: parent.width
-              text: root.titleText()
+              text: root.auxiliaryView === "help" ? "Shortcuts"
+                : (root.auxiliaryView === "accounts" ? "Accounts" : root.titleText())
               textFormat: Text.PlainText
               elide: Text.ElideRight
               foreground: root.foreground
@@ -635,7 +775,7 @@ Panel {
 
             Text {
               width: parent.width
-              visible: root.email !== ""
+              visible: root.email !== "" && root.auxiliaryView === ""
               text: root.email
               textFormat: Text.PlainText
               elide: Text.ElideRight
@@ -652,8 +792,33 @@ Panel {
             spacing: Style.space(2)
 
             PanelActionButton {
+              visible: root.auxiliaryView !== ""
+              iconText: root.iconPrev
+              tooltipText: "Back to unread mail (Esc)"
+              foreground: root.foreground
+              hoverColor: root.accent
+              onClicked: root.showView("")
+            }
+
+            PanelActionButton {
+              iconText: "\uF0C0"
+              tooltipText: "Accounts and setup (m)"
+              foreground: root.foreground
+              hoverColor: root.accent
+              onClicked: root.showView("accounts")
+            }
+
+            PanelActionButton {
+              iconText: "\uF128"
+              tooltipText: "Keyboard shortcuts (?)"
+              foreground: root.foreground
+              hoverColor: root.accent
+              onClicked: root.showView("help")
+            }
+
+            PanelActionButton {
               id: markAllButton
-              visible: root.hasUnread && root.reachable
+              visible: root.auxiliaryView === "" && root.hasUnread && root.reachable
               enabled: root.hasUnread && root.reachable
                 && !listProc.running && !root.readBusy && !root.markAllBusy && !root.reconciling
               iconText: root.markAllArmed || root.markAllBusy
@@ -672,7 +837,7 @@ Panel {
 
             PanelActionButton {
               id: openMailButton
-              visible: root.hasOpenableInbox
+              visible: root.auxiliaryView === "" && root.hasOpenableInbox
               enabled: root.hasOpenableInbox && !root.markAllBusy
               iconText: root.iconExternal
               tooltipText: root.accountCount > 1
@@ -687,376 +852,436 @@ Panel {
           }
         }
 
-        PanelSeparator { width: parent.width }
-
         Item {
+          id: freshnessRow
           width: parent.width
-          height: staleWarning.visible ? staleWarning.implicitHeight + Style.space(6) : 0
-          visible: !root.reachable && root.failures.length === 0
+          height: Math.max(freshnessLabel.implicitHeight, refreshButton.height)
 
           Text {
-            id: staleWarning
+            id: freshnessLabel
+            anchors.left: parent.left
+            anchors.right: refreshButton.left
+            anchors.rightMargin: Style.space(6)
             anchors.verticalCenter: parent.verticalCenter
-            width: parent.width
-            text: root.errorText !== ""
-              ? root.errorText
-              : "Could not reach mail. Showing the last list."
+            text: listProc.running ? "Checking mail…" : root.freshnessText()
             textFormat: Text.PlainText
             wrapMode: Text.WordWrap
             font.family: root.fontFamily
-            font.pixelSize: Style.font.body
-            color: bar ? bar.urgent : Color.urgent
-          }
-        }
-
-        Column {
-          id: failureList
-          width: parent.width
-          visible: root.failures.length > 0
-          spacing: Style.space(6)
-          bottomPadding: visible ? Style.space(3) : 0
-
-          Repeater {
-            model: root.failures
-
-            FailureNotice {
-              required property var modelData
-              width: failureList.width
-              failure: modelData
-              foreground: root.foreground
-              urgent: bar ? bar.urgent : Color.urgent
-              accent: root.accent
-              fontFamily: root.fontFamily
-              onRunSignIn: function(accountId) { root.runSignIn(accountId) }
-              onCopyCommand: function(text) { root.copyCommand(text) }
-              onOpenUrl: function(url) { if (root.openBrowser(url)) root.close() }
-            }
-          }
-        }
-
-        Item {
-          width: parent.width
-          height: (root.actionWarning !== "" && !root.markAllBusy && !root.reconciling)
-            ? Math.max(actionWarningLabel.implicitHeight, dismissWarning.height) + Style.space(6) : 0
-          visible: root.actionWarning !== "" && !root.markAllBusy && !root.reconciling
-
-          Text {
-            id: actionWarningLabel
-            anchors.verticalCenter: parent.verticalCenter
-            anchors.left: parent.left
-            anchors.right: dismissWarning.left
-            anchors.rightMargin: Style.space(6)
-            text: root.actionWarning
-            textFormat: Text.PlainText
-            wrapMode: Text.WrapAnywhere
-            font.family: root.fontFamily
             font.pixelSize: Style.font.caption
-            color: bar ? bar.urgent : Color.urgent
+            color: root.foreground
+            opacity: 0.65
           }
 
           PanelActionButton {
-            id: dismissWarning
+            id: refreshButton
             anchors.right: parent.right
             anchors.verticalCenter: parent.verticalCenter
-            iconText: "\uF00D"
-            tooltipText: "Dismiss action error (x)"
+            iconText: "\uF021"
+            tooltipText: "Refresh mail (r)"
+            enabled: !root.markAllBusy
             foreground: root.foreground
-            onClicked: root.actionWarning = ""
+            hoverColor: root.accent
+            onClicked: root.refresh()
           }
         }
 
-        Item {
-          width: parent.width
-          height: root.markAllArmed
-            ? markAllConfirmLabel.implicitHeight + Style.space(6) : 0
-          visible: root.markAllArmed
+        PanelSeparator { width: parent.width }
 
-          Text {
-            id: markAllConfirmLabel
-            anchors.verticalCenter: parent.verticalCenter
+        PanelMenu {
+          id: auxiliaryMenu
+          width: parent.width
+          visible: root.auxiliaryView !== ""
+          help: root.auxiliaryView === "help"
+          model: help ? root.shortcutHelp : root.accountMenu
+          cursor: root.menuCursor
+          foreground: root.foreground
+          accent: root.accent
+          fontFamily: root.fontFamily
+          maximumHeight: Math.max(Style.space(60), panel.availableCardHeight
+            - panel.verticalContentInset - panelHeading.height - freshnessRow.height - Style.space(24))
+          onActivated: function(entry) { root.activateMenu(entry) }
+          onHovered: function(index) { root.menuCursor = index }
+        }
+
+        Column {
+          id: mailContent
+          width: parent.width
+          spacing: Style.space(6)
+          visible: root.auxiliaryView === ""
+
+
+          Item {
             width: parent.width
-            text: "Press A again to mark " + root.unread + " unread as read"
-            textFormat: Text.PlainText
-            elide: Text.ElideRight
-            font.family: root.fontFamily
-            font.pixelSize: Style.font.caption
-            color: bar ? bar.urgent : Color.urgent
+            height: staleWarning.visible ? staleWarning.implicitHeight + Style.space(6) : 0
+            visible: !root.reachable && root.failures.length === 0
+
+            Text {
+              id: staleWarning
+              anchors.verticalCenter: parent.verticalCenter
+              width: parent.width
+              text: root.errorText !== ""
+                ? root.errorText
+                : "Could not reach mail. Showing the last list."
+              textFormat: Text.PlainText
+              wrapMode: Text.WordWrap
+              font.family: root.fontFamily
+              font.pixelSize: Style.font.body
+              color: bar ? bar.urgent : Color.urgent
+            }
           }
-        }
 
-        Item {
-          width: parent.width
-          height: (root.markAllBusy || root.reconciling)
-            ? markAllBusyLabel.implicitHeight + Style.space(6) : 0
-          visible: root.markAllBusy || root.reconciling
-
-          Text {
-            id: markAllBusyLabel
-            anchors.verticalCenter: parent.verticalCenter
+          Column {
+            id: failureList
             width: parent.width
-            text: root.markAllBusy
-              ? "Marking unread mail as read…"
-              : "Refreshing unread mail…"
-            textFormat: Text.PlainText
-            elide: Text.ElideRight
-            font.family: root.fontFamily
-            font.pixelSize: Style.font.caption
-            color: Qt.darker(root.foreground, 1.6)
+            visible: root.failures.length > 0
+            spacing: Style.space(6)
+            bottomPadding: visible ? Style.space(3) : 0
+
+            Repeater {
+              model: root.failures
+
+              FailureNotice {
+                required property var modelData
+                width: failureList.width
+                failure: Object.assign({}, modelData, {
+                  message: (modelData.message || modelData.error || "Could not reach mail.")
+                    + "\n" + MailState.checkLabel(root.accountChecks[modelData.id], root.now)
+                })
+                foreground: root.foreground
+                urgent: bar ? bar.urgent : Color.urgent
+                accent: root.accent
+                fontFamily: root.fontFamily
+                onRunSignIn: function(accountId) { root.runSignIn(accountId) }
+                onCopyCommand: function(text) { root.copyCommand(text) }
+                onOpenUrl: function(url) { if (root.openBrowser(url)) root.close() }
+              }
+            }
           }
-        }
 
-        ListView {
-          id: list
-          width: parent.width
-          visible: root.messages.length > 0
-          clip: true
-          opacity: (root.markAllBusy || root.reconciling) ? 0.4 : 1
-          enabled: !root.markAllBusy && !root.reconciling
-          model: root.messages
-          spacing: Style.space(1)
-          boundsBehavior: Flickable.StopAtBounds
-          flickableDirection: Flickable.VerticalFlick
-          interactive: contentHeight > height && !root.markAllBusy && !root.reconciling
-          ScrollBar.vertical: ScrollBar { policy: ScrollBar.AsNeeded }
+          Item {
+            width: parent.width
+            height: (root.actionWarning !== "" && !root.markAllBusy && !root.reconciling)
+              ? Math.max(actionWarningLabel.implicitHeight, dismissWarning.height) + Style.space(6) : 0
+            visible: root.actionWarning !== "" && !root.markAllBusy && !root.reconciling
 
-          readonly property int cap: {
-            var chrome = Style.space(70)
-            if (root.hasPrev || root.hasNext) chrome += Style.space(38)
-            if (staleWarning.visible) chrome += staleWarning.implicitHeight + Style.space(6)
-            if (failureList.visible) chrome += failureList.height + Style.space(6)
-            if (root.actionWarning !== "" && !root.markAllBusy && !root.reconciling)
-              chrome += Math.max(actionWarningLabel.implicitHeight, dismissWarning.height) + Style.space(6)
-            if (root.markAllArmed)
-              chrome += markAllConfirmLabel.implicitHeight + Style.space(6)
-            if (root.markAllBusy || root.reconciling)
-              chrome += markAllBusyLabel.implicitHeight + Style.space(6)
-            return Math.max(Style.space(200),
-                            panel.availableCardHeight - panel.verticalContentInset - chrome)
-          }
-          height: Math.min(contentHeight, cap)
-
-          delegate: Rectangle {
-            id: row
-            required property var modelData
-            required property int index
-
-            readonly property bool active: root.cursor === row.index || rowMouse.containsMouse
-
-            width: list.width - (list.interactive ? Style.space(10) : 0)
-            height: rowContent.implicitHeight + Style.space(10)
-            radius: Style.cornerRadius
-            opacity: root.pendingId === modelData.id ? 0.4 : 1
-            color: active
-              ? Qt.rgba(root.foreground.r, root.foreground.g, root.foreground.b, 0.08)
-              : "transparent"
-
-            Behavior on color { ColorAnimation { duration: 80 } }
-
-            MouseArea {
-              id: rowMouse
-              anchors.fill: parent
-              hoverEnabled: true
-              cursorShape: Qt.PointingHandCursor
-              onContainsMouseChanged: if (containsMouse) root.cursor = row.index
-              onClicked: if (!root.markAllBusy) root.openMessage(row.modelData)
+            Text {
+              id: actionWarningLabel
+              anchors.verticalCenter: parent.verticalCenter
+              anchors.left: parent.left
+              anchors.right: dismissWarning.left
+              anchors.rightMargin: Style.space(6)
+              text: root.actionWarning
+              textFormat: Text.PlainText
+              wrapMode: Text.Wrap
+              font.family: root.fontFamily
+              font.pixelSize: Style.font.caption
+              color: bar ? bar.urgent : Color.urgent
             }
 
-            Column {
-              id: rowContent
-              anchors.left: parent.left
+            PanelActionButton {
+              id: dismissWarning
               anchors.right: parent.right
               anchors.verticalCenter: parent.verticalCenter
-              anchors.leftMargin: Style.space(6)
-              anchors.rightMargin: Style.space(6)
-              spacing: Style.space(2)
+              iconText: "\uF00D"
+              tooltipText: "Dismiss action error (x)"
+              foreground: root.foreground
+              onClicked: root.actionWarning = ""
+            }
+          }
 
-              Item {
-                width: parent.width
-                height: subject.implicitHeight
+          Item {
+            width: parent.width
+            height: root.markAllArmed
+              ? markAllConfirmLabel.implicitHeight + Style.space(6) : 0
+            visible: root.markAllArmed
 
-                Row {
-                  id: line
-                  anchors.left: parent.left
-                  anchors.right: age.left
-                  anchors.rightMargin: Style.space(6)
-                  anchors.verticalCenter: parent.verticalCenter
-                  spacing: Style.space(5)
+            Text {
+              id: markAllConfirmLabel
+              anchors.verticalCenter: parent.verticalCenter
+              width: parent.width
+              text: "Press A again to mark " + root.unread + " unread as read"
+              textFormat: Text.PlainText
+              elide: Text.ElideRight
+              font.family: root.fontFamily
+              font.pixelSize: Style.font.caption
+              color: bar ? bar.urgent : Color.urgent
+            }
+          }
+
+          Item {
+            width: parent.width
+            height: (root.markAllBusy || root.reconciling)
+              ? markAllBusyLabel.implicitHeight + Style.space(6) : 0
+            visible: root.markAllBusy || root.reconciling
+
+            Text {
+              id: markAllBusyLabel
+              anchors.verticalCenter: parent.verticalCenter
+              width: parent.width
+              text: root.markAllBusy
+                ? "Marking unread mail as read…"
+                : "Refreshing unread mail…"
+              textFormat: Text.PlainText
+              elide: Text.ElideRight
+              font.family: root.fontFamily
+              font.pixelSize: Style.font.caption
+              color: Qt.darker(root.foreground, 1.6)
+            }
+          }
+
+          ListView {
+            id: list
+            width: parent.width
+            visible: root.messages.length > 0
+            clip: true
+            opacity: (root.markAllBusy || root.reconciling) ? 0.4 : 1
+            enabled: !root.markAllBusy && !root.reconciling
+            model: root.messages
+            spacing: Style.space(1)
+            boundsBehavior: Flickable.StopAtBounds
+            flickableDirection: Flickable.VerticalFlick
+            interactive: contentHeight > height && !root.markAllBusy && !root.reconciling
+            ScrollBar.vertical: ScrollBar { policy: ScrollBar.AsNeeded }
+
+            readonly property int cap: {
+              var chrome = panelHeading.height + freshnessRow.height + Style.space(30)
+              if (root.hasPrev || root.hasNext) chrome += Style.space(38)
+              if (staleWarning.visible) chrome += staleWarning.implicitHeight + Style.space(6)
+              if (failureList.visible) chrome += failureList.height + Style.space(6)
+              if (root.actionWarning !== "" && !root.markAllBusy && !root.reconciling)
+                chrome += Math.max(actionWarningLabel.implicitHeight, dismissWarning.height) + Style.space(6)
+              if (root.markAllArmed)
+                chrome += markAllConfirmLabel.implicitHeight + Style.space(6)
+              if (root.markAllBusy || root.reconciling)
+                chrome += markAllBusyLabel.implicitHeight + Style.space(6)
+              return Math.max(Style.space(40),
+                              panel.availableCardHeight - panel.verticalContentInset - chrome)
+            }
+            height: Math.min(contentHeight, cap)
+
+            delegate: Rectangle {
+              id: row
+              required property var modelData
+              required property int index
+
+              readonly property bool active: root.cursor === row.index || rowMouse.containsMouse
+
+              width: list.width - (list.interactive ? Style.space(10) : 0)
+              height: rowContent.implicitHeight + Style.space(10)
+              radius: Style.cornerRadius
+              opacity: root.pendingId === modelData.id ? 0.4 : 1
+              color: active
+                ? Qt.rgba(root.foreground.r, root.foreground.g, root.foreground.b, 0.08)
+                : "transparent"
+
+              Behavior on color { ColorAnimation { duration: 80 } }
+
+              MouseArea {
+                id: rowMouse
+                anchors.fill: parent
+                hoverEnabled: true
+                cursorShape: Qt.PointingHandCursor
+                onContainsMouseChanged: if (containsMouse) root.cursor = row.index
+                onClicked: if (!root.markAllBusy) root.openMessage(row.modelData)
+              }
+
+              Column {
+                id: rowContent
+                anchors.left: parent.left
+                anchors.right: parent.right
+                anchors.verticalCenter: parent.verticalCenter
+                anchors.leftMargin: Style.space(6)
+                anchors.rightMargin: Style.space(6)
+                spacing: Style.space(2)
+
+                Item {
+                  width: parent.width
+                  height: subject.implicitHeight
 
                   Row {
-                    id: chips
+                    id: line
+                    anchors.left: parent.left
+                    anchors.right: age.left
+                    anchors.rightMargin: Style.space(6)
                     anchors.verticalCenter: parent.verticalCenter
-                    spacing: Style.space(3)
-                    visible: {
-                      var labs = row.modelData.labels || []
-                      var acc = row.modelData.account || ""
-                      return labs.length > 0 || (root.accountCount > 1 && acc !== "")
-                    }
+                    spacing: Style.space(5)
 
-                    Repeater {
-                      model: {
-                        var labs = (row.modelData.labels || []).slice()
+                    Row {
+                      id: chips
+                      anchors.verticalCenter: parent.verticalCenter
+                      spacing: Style.space(3)
+                      visible: {
+                        var labs = row.modelData.labels || []
                         var acc = row.modelData.account || ""
-                        if (acc && root.accountCount > 1) labs.unshift(acc)
-                        return labs.slice(0, 2)
+                        return labs.length > 0 || (root.accountCount > 1 && acc !== "")
                       }
 
-                      Rectangle {
-                        required property string modelData
-                        anchors.verticalCenter: parent.verticalCenter
-                        height: chipText.implicitHeight + Style.space(3)
-                        width: chipText.width + Style.space(8)
-                        radius: Style.space(3)
-                        color: Qt.rgba(root.foreground.r, root.foreground.g,
-                                       root.foreground.b, 0.14)
+                      Repeater {
+                        model: {
+                          var labs = (row.modelData.labels || []).slice()
+                          var acc = row.modelData.account || ""
+                          if (acc && root.accountCount > 1) labs.unshift(acc)
+                          return labs.slice(0, 2)
+                        }
 
-                        Text {
-                          id: chipText
-                          anchors.centerIn: parent
-                          text: parent.modelData
-                          textFormat: Text.PlainText
-                          elide: Text.ElideRight
-                          wrapMode: Text.NoWrap
-                          maximumLineCount: 1
-                          width: Math.min(implicitWidth, Style.space(64))
-                          font.family: root.fontFamily
-                          font.pixelSize: Style.font.caption
-                          color: Qt.darker(root.foreground, 1.35)
+                        Rectangle {
+                          required property string modelData
+                          anchors.verticalCenter: parent.verticalCenter
+                          height: chipText.implicitHeight + Style.space(3)
+                          width: chipText.width + Style.space(8)
+                          radius: Style.space(3)
+                          color: Qt.rgba(root.foreground.r, root.foreground.g,
+                                         root.foreground.b, 0.14)
+
+                          Text {
+                            id: chipText
+                            anchors.centerIn: parent
+                            text: parent.modelData
+                            textFormat: Text.PlainText
+                            elide: Text.ElideRight
+                            wrapMode: Text.NoWrap
+                            maximumLineCount: 1
+                            width: Math.min(implicitWidth, Style.space(64))
+                            font.family: root.fontFamily
+                            font.pixelSize: Style.font.caption
+                            color: Qt.darker(root.foreground, 1.35)
+                          }
                         }
                       }
+                    }
+
+                    Text {
+                      id: subject
+                      anchors.verticalCenter: parent.verticalCenter
+                      width: Math.max(Style.space(40),
+                                      line.width - (chips.visible ? chips.width + line.spacing : 0))
+                      text: root.oneLine(row.modelData.subject)
+                      textFormat: Text.PlainText
+                      wrapMode: Text.NoWrap
+                      maximumLineCount: 1
+                      elide: Text.ElideRight
+                      font.family: root.fontFamily
+                      font.pixelSize: Style.font.body
+                      font.bold: true
+                      color: root.foreground
                     }
                   }
 
                   Text {
-                    id: subject
+                    id: age
+                    anchors.right: parent.right
                     anchors.verticalCenter: parent.verticalCenter
-                    width: Math.max(Style.space(40),
-                                    line.width - (chips.visible ? chips.width + line.spacing : 0))
-                    text: root.oneLine(row.modelData.subject)
+                    text: root.ageLabel(row.modelData.ts)
+                    textFormat: Text.PlainText
+                    font.family: root.fontFamily
+                    font.pixelSize: Style.font.caption
+                    color: Qt.darker(root.foreground, 1.7)
+                  }
+                }
+
+                Row {
+                  width: parent.width
+                  spacing: 0
+
+                  Text {
+                    id: fromLabel
+                    text: row.modelData.from || ""
+                    textFormat: Text.PlainText
+                    elide: Text.ElideRight
+                    width: Math.min(implicitWidth, parent.width * 0.5)
+                    font.family: root.fontFamily
+                    font.pixelSize: Style.font.caption
+                    font.bold: true
+                    color: Qt.darker(root.foreground, 1.15)
+                  }
+
+                  Text {
+                    text: {
+                      var body = root.oneLine(row.modelData.snippet)
+                      if (body === "") return ""
+                      return (fromLabel.text !== "" ? "  -  " : "") + body
+                    }
                     textFormat: Text.PlainText
                     wrapMode: Text.NoWrap
                     maximumLineCount: 1
                     elide: Text.ElideRight
+                    width: parent.width - fromLabel.width
                     font.family: root.fontFamily
-                    font.pixelSize: Style.font.body
-                    font.bold: true
-                    color: root.foreground
+                    font.pixelSize: Style.font.caption
+                    color: Qt.darker(root.foreground, 1.7)
                   }
-                }
-
-                Text {
-                  id: age
-                  anchors.right: parent.right
-                  anchors.verticalCenter: parent.verticalCenter
-                  text: root.ageLabel(row.modelData.ts)
-                  textFormat: Text.PlainText
-                  font.family: root.fontFamily
-                  font.pixelSize: Style.font.caption
-                  color: Qt.darker(root.foreground, 1.7)
-                }
-              }
-
-              Row {
-                width: parent.width
-                spacing: 0
-
-                Text {
-                  id: fromLabel
-                  text: row.modelData.from || ""
-                  textFormat: Text.PlainText
-                  elide: Text.ElideRight
-                  width: Math.min(implicitWidth, parent.width * 0.5)
-                  font.family: root.fontFamily
-                  font.pixelSize: Style.font.caption
-                  font.bold: true
-                  color: Qt.darker(root.foreground, 1.15)
-                }
-
-                Text {
-                  text: {
-                    var body = root.oneLine(row.modelData.snippet)
-                    if (body === "") return ""
-                    return (fromLabel.text !== "" ? "  -  " : "") + body
-                  }
-                  textFormat: Text.PlainText
-                  wrapMode: Text.NoWrap
-                  maximumLineCount: 1
-                  elide: Text.ElideRight
-                  width: parent.width - fromLabel.width
-                  font.family: root.fontFamily
-                  font.pixelSize: Style.font.caption
-                  color: Qt.darker(root.foreground, 1.7)
                 }
               }
             }
           }
-        }
 
-        Item {
-          width: parent.width
-          height: (root.hasPrev || root.hasNext) ? pagerRow.implicitHeight + Style.space(8) : 0
-          visible: root.hasPrev || root.hasNext
+          Item {
+            width: parent.width
+            height: (root.hasPrev || root.hasNext) ? pagerRow.implicitHeight + Style.space(8) : 0
+            visible: root.hasPrev || root.hasNext
 
-          Row {
-            id: pagerRow
-            anchors.centerIn: parent
-            spacing: Style.space(10)
+            Row {
+              id: pagerRow
+              anchors.centerIn: parent
+              spacing: Style.space(10)
 
-            PanelActionButton {
-              iconText: root.iconPrev
-              tooltipText: "Previous page"
-              enabled: root.hasPrev && !root.readBusy && !root.markAllBusy && !root.reconciling
-              opacity: enabled ? 1 : 0.3
-              foreground: root.foreground
-              hoverColor: root.accent
-              fontFamily: root.fontFamily
-              fontSize: Style.font.iconSmall
-              onClicked: root.goPrevPage()
+              PanelActionButton {
+                iconText: root.iconPrev
+                tooltipText: "Previous page"
+                enabled: root.hasPrev && !root.readBusy && !root.markAllBusy && !root.reconciling
+                opacity: enabled ? 1 : 0.3
+                foreground: root.foreground
+                hoverColor: root.accent
+                fontFamily: root.fontFamily
+                fontSize: Style.font.iconSmall
+                onClicked: root.goPrevPage()
+              }
+
+              Text {
+                anchors.verticalCenter: parent.verticalCenter
+                text: "page " + (root.pageStack.length + 1)
+                textFormat: Text.PlainText
+                font.family: root.fontFamily
+                font.pixelSize: Style.font.caption
+                color: Qt.darker(root.foreground, 1.7)
+              }
+
+              PanelActionButton {
+                iconText: root.iconNext
+                tooltipText: "Next page"
+                enabled: root.hasNext && !root.readBusy && !root.markAllBusy && !root.reconciling
+                opacity: enabled ? 1 : 0.3
+                foreground: root.foreground
+                hoverColor: root.accent
+                fontFamily: root.fontFamily
+                fontSize: Style.font.iconSmall
+                onClicked: root.goNextPage()
+              }
             }
+          }
+
+          Item {
+            width: parent.width
+            height: root.messages.length === 0 && (root.warningText === "" || !root.reachable)
+              ? Style.space(60) : 0
+            visible: root.messages.length === 0 && (root.warningText === "" || !root.reachable)
 
             Text {
-              anchors.verticalCenter: parent.verticalCenter
-              text: "page " + (root.pageStack.length + 1)
+              anchors.centerIn: parent
+              width: parent.width - Style.space(20)
+              horizontalAlignment: Text.AlignHCenter
+              wrapMode: Text.WordWrap
+              text: root.reachable
+                ? "You're all caught up."
+                : (root.hasSignInAction
+                  ? "Sign in above, then middle-click the icon to refresh."
+                  : "Fix sign-in from a terminal, then middle-click the icon.")
               textFormat: Text.PlainText
               font.family: root.fontFamily
-              font.pixelSize: Style.font.caption
-              color: Qt.darker(root.foreground, 1.7)
+              font.pixelSize: Style.font.body
+              color: root.foreground
+              opacity: 0.6
             }
-
-            PanelActionButton {
-              iconText: root.iconNext
-              tooltipText: "Next page"
-              enabled: root.hasNext && !root.readBusy && !root.markAllBusy && !root.reconciling
-              opacity: enabled ? 1 : 0.3
-              foreground: root.foreground
-              hoverColor: root.accent
-              fontFamily: root.fontFamily
-              fontSize: Style.font.iconSmall
-              onClicked: root.goNextPage()
-            }
-          }
-        }
-
-        Item {
-          width: parent.width
-          height: root.messages.length === 0 && (root.warningText === "" || !root.reachable)
-            ? Style.space(60) : 0
-          visible: root.messages.length === 0 && (root.warningText === "" || !root.reachable)
-
-          Text {
-            anchors.centerIn: parent
-            width: parent.width - Style.space(20)
-            horizontalAlignment: Text.AlignHCenter
-            wrapMode: Text.WordWrap
-            text: root.reachable
-              ? "You're all caught up."
-              : (root.hasSignInAction
-                ? "Sign in above, then middle-click the icon to refresh."
-                : "Fix sign-in from a terminal, then middle-click the icon.")
-            textFormat: Text.PlainText
-            font.family: root.fontFamily
-            font.pixelSize: Style.font.body
-            color: root.foreground
-            opacity: 0.6
           }
         }
       }

@@ -16,7 +16,12 @@ module.exports = function panelHarness() {
     nextPage: '', accountCount: 0, cursor: 0, opened: true,
     markAllBusy: false, markAllArmed: false, reconciling: false,
     readExited: false, readOutputReady: false, readOutput: '', readExitCode: 0,
+    readStarted: false,
     refreshPending: false, actionWarning: '', warningText: '', failures: [],
+    inboxes: [], accountChecks: {}, allCheckedAt: 0, accountSignature: '', now: 0,
+    auxiliaryView: '', menuCursor: -1, savedMessageId: '',
+    auxiliaryMenu: {contentY: 0, contentHeight: 500, height: 100, revealCursor() {}},
+    keyCatcher: {forceActiveFocus() {}}, Style: {space(value) {return value;}},
     reachable: true, hasUnread: true, pageSize: 25, script: '/test/you-got-mail',
     listProc: {running: false}, readProc: {running: false}, readAllProc: {running: false},
     markAllArmTimer: {running: false, stop() {}, restart() {}},
@@ -27,6 +32,9 @@ module.exports = function panelHarness() {
   panel.root = panel;
   Object.defineProperty(panel, 'readBusy', {get() { return panel.pendingId !== '' || panel.readQueue.length > 0; }});
   Object.defineProperty(panel, 'hasPrev', {get() { return panel.pageStack.length > 0; }});
+  Object.defineProperty(panel, 'accountMenu', {get() {
+    return state.accountEntries(panel.inboxes, panel.accountChecks, panel.now);
+  }});
   const methods = [...source.matchAll(/^  function \w+\([^\n]*\) \{[\s\S]*?^  \}/gm)]
     .map(match => match[0]).join('\n');
   vm.runInContext(methods, panel);

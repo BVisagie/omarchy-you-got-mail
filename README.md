@@ -88,9 +88,11 @@ $PLUGIN accounts login gmail
 $PLUGIN accounts
 ```
 
-Run `accounts add` and `accounts login` in a **terminal**, not from the
-bar. Outlook opens a browser tab; Gmail and HEY sign in through their
-own CLIs. `accounts login` re-authenticates an existing id in place
+Use **Accounts (`m`) → Add account** to open the existing setup wizard in
+a floating terminal. You can also run `accounts add` and `accounts login`
+in a **terminal**. The panel never handles credentials. Outlook opens a
+browser tab; Gmail and HEY sign in through their own CLIs.
+`accounts login` re-authenticates an existing id in place
 when a token expires.
 
 If you never add an account, a single Gmail account is assumed. The first
@@ -103,20 +105,33 @@ If you never add an account, a single Gmail account is assumed. The first
 |---|---|
 | Click the bar icon | open the panel |
 | Right-click the bar icon | open each inbox that currently has unread (one tab per account) |
-| Middle-click the bar icon | refresh now |
+| Middle-click the bar icon, refresh button, or `r` | refresh now |
+| Accounts button or `m` | account counts, individual inbox links, Add account, setup guide |
+| Help button or `?` | keyboard and mouse controls |
 | Header envelope-open or `A` | mark all unread as read (click or press twice to confirm) |
 | `a` | mark the message under the cursor as read, without opening it |
 | Header external-link or `i` | same as right-click |
 | Click a message | open **that** thread in the browser and take it off the pile |
-| `↑` `↓` or `j` `k` | move through the list |
-| `Enter`, `Space` or `o` | open the message under the cursor |
+| `↑` `↓` or `j` `k` | move through mail or account actions; scroll help |
+| `Enter`, `Space` or `o` | open the selected message or account action |
 | `n` / `p` | next page, previous page |
 | `Tab` / `Shift+Tab` | switch to the next or previous bar panel |
 | `x` or action-error × | dismiss an action error |
-| `Esc` | cancel mark-all confirm, or close |
+| `Esc` | return from Accounts/Help, cancel mark-all confirm, or close |
 
 The bar tooltip shows the unread count, or why mail needs attention. A
-`!` on the mailbox means sign-in or a fetch failure, not unread mail.
+`!` on the mailbox means mail needs attention, not unread mail.
+
+**Accounts** keeps the merged unread list as your main view. It shows each
+account's current count and opens just that inbox, even if it has no unread
+mail. Accounts without a webmail URL cannot be opened. Failed accounts say
+**Unavailable** rather than displaying a zero count.
+
+The panel and tooltip show the **last full check**. Accounts lists each
+mailbox's last successful check; a failed mailbox keeps its previous time.
+Partial success never advances the full-check time. These times are held in
+memory and start fresh when the plugin reloads. Press `r` or the refresh button
+to check again; changing relative time labels does not fetch mail.
 
 The panel refreshes on the interval from widget settings (default one
 minute), and again when you open it or click a row. With more than one

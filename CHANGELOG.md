@@ -2,6 +2,25 @@
 
 Versions match `manifest.json`. Git tags are created at release time.
 
+## 2.8.0
+
+Small controls for the same unread-only pile.
+
+- Accounts (`m`) shows unread totals and last successful checks per account,
+  with individual Open inbox actions, Add account, and the setup guide.
+  Add account opens the existing wizard in a floating terminal.
+- Help (`?`) lists keyboard and mouse controls inside the panel. Escape
+  returns from either view to unread mail; Tab still switches bar panels.
+- `r` and the refresh button check mail. Relative check times update without
+  fetching. Failed accounts retain their last successful time and say
+  Unavailable; a partial success never advances the last full check.
+- `list` adds stable `id` fields on every inbox and Unix-seconds `checkedAt`
+  timestamps on successful inboxes. Credentials and settings are unchanged.
+- Read actions also recover when the CLI cannot start. A provider process
+  that exits unsuccessfully cannot report a successful action. Repeated identical
+  action errors share one dismissible notice.
+- No notification service or notification settings are added.
+
 ## 2.7.1
 
 Single-message mark-as-read failures stay visible and recover the unread row.

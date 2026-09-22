@@ -19,7 +19,9 @@ jobs:
           node-version: "22"
 
       - name: Panel behavior
-        run: node --test tests/*.cjs
+        run: |
+          node tests/test_mail_state.cjs
+          node tests/test_panel_behavior.cjs
 
       - name: Contract tests
         run: python3 -m unittest discover -s tests -v
