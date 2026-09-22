@@ -11,7 +11,8 @@ there for Outlook.com, Gmail OAuth, or HEY.
 
 ## Preview
 
-Version 2.8.0 overview, composed from screenshots with sample mail only.
+Version 2.8.0 in the **Tokyo Night** theme, using sample mail only.
+The overview is composed from the individual screenshots below.
 
 <p align="center">
   <img src="preview.png" alt="You've Got Mail — unread mailbox, Accounts, and Shortcuts overview" width="960">
