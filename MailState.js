@@ -73,6 +73,63 @@ function updateChecks(previous, inboxes) {
   return { checks: checks, allCheckedAt: complete ? allCheckedAt : 0 }
 }
 
+// Decides which rows of a reachable page-1 list are new mail. State is kept
+// per account ID (the part of a row ID before ":"), as { seen, mark }, plus
+// the shared floor: the oldest ts of the previous page 1 when it was full.
+function arrivals(state, inboxes, messages, pageFull, now) {
+  var before = state && state.accounts ? state.accounts : {}
+  var floor = state && typeof state.floor === "number" ? state.floor : null
+  function baseline(accountId) {
+    return Object.prototype.hasOwnProperty.call(before, accountId) ? before[accountId] : null
+  }
+  var fresh = []
+  var pages = Object.create(null)
+  var oldest = null
+  for (var i = 0; i < messages.length; i++) {
+    var row = messages[i]
+    if (!row || !row.id) continue
+    var id = String(row.id)
+    var accountId = id.split(":")[0]
+    var ts = Number(row.ts)
+    if (!isFinite(ts)) ts = 0
+    var known = baseline(accountId)
+    if (known && known.seen.indexOf(id) < 0
+        && (known.mark === null || ts >= known.mark)
+        && (floor === null || ts > floor))
+      fresh.push(id)
+    var page = pages[accountId] || (pages[accountId] = { ids: [], newest: ts })
+    page.ids.push(id)
+    page.newest = Math.max(page.newest, ts)
+    oldest = oldest === null ? ts : Math.min(oldest, ts)
+  }
+  var accounts = {}
+  for (var b = 0; b < inboxes.length; b++) {
+    var box = inboxes[b]
+    if (!box || !box.id) continue
+    var old = baseline(box.id)
+    // A failed account keeps its state; one never ok yet gets no baseline.
+    if (box.ok === true) accounts[box.id] = remember(old, pages[box.id], now)
+    else if (old) accounts[box.id] = old
+  }
+  return {
+    state: { accounts: accounts, floor: pageFull && oldest !== null ? oldest : null },
+    fresh: fresh
+  }
+}
+
+// Moves an ok account's page-1 IDs to the recent end of the 200 it keeps and
+// raises its mark to its newest row, never above now + 300 s.
+function remember(entry, page, now) {
+  var seen = entry ? entry.seen : []
+  var mark = entry ? entry.mark : null
+  if (page) {
+    seen = seen.filter(function(id) { return page.ids.indexOf(id) < 0 }).concat(page.ids)
+    var newest = Math.min(page.newest, now + 300)
+    mark = mark === null ? newest : Math.max(mark, newest)
+  }
+  return { seen: seen.slice(-200), mark: mark }
+}
+
 function checkLabel(checkedAt, now) {
   if (!(checkedAt > 0)) return "Not checked successfully yet"
   var age = Math.max(0, now - checkedAt)
