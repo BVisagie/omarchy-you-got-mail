@@ -234,7 +234,8 @@ it prints that with Do Not Disturb off, `omarchy-shell notifications isDnd`
 is failing; the sound needs Omarchy 4.0 or later.
 
 The sound comes with the next refresh, so it can lag new mail by up to one
-refresh interval. Mail you read elsewhere before then never plays it.
+refresh interval, or until the quiet time is up. Mail you read elsewhere
+before then never plays it.
 
 The bundled voice is AI-generated; see [sounds/README.md](sounds/README.md).
 

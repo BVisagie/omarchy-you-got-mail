@@ -33,7 +33,7 @@ MAX_COOLDOWN = 3600
 ANNOUNCED_TTL = 24 * 60 * 60
 DND_TIMEOUT = 2
 PLAY_TIMEOUT = 15
-STALE_AFTER = 60  # a waiting chime this far past due has lost its process
+STALE_AFTER = 60  # a waiting chime this far past due is presumed gone (or is sleeping through a suspend)
 
 _sleep = time.sleep  # the tests wait without waiting
 
@@ -222,8 +222,9 @@ def _players(path: str, volume: int | None) -> list[list[str]]:
 def _play(path: str, volume: int | None) -> dict:
     """Try pw-play, then paplay only if pw-play cannot start (never twice).
 
-    If the player rejects a file other than the bundled clip, play the bundled
-    clip the same way instead. Not after a timeout: the file played all along.
+    If the player rejects a file other than the bundled clip (exits with an
+    error), play the bundled clip the same way instead. Not after a timeout or
+    a signal: the file played, or someone stopped it.
     """
     for argv in _players(path, volume):
         try:
@@ -235,7 +236,7 @@ def _play(path: str, volume: int | None) -> dict:
         if proc.returncode != 0:
             stderr = one_line(proc.stderr.decode("utf-8", "replace"))
             detail = f": {stderr}" if stderr else ""
-            if path != str(BUNDLED_SOUND):
+            if proc.returncode > 0 and path != str(BUNDLED_SOUND):
                 return _noted(_play(str(BUNDLED_SOUND), volume), f"{argv[0]} could not play {path}{detail}")
             return _fail(f"{argv[0]} exited {proc.returncode}{detail}")
         return {"ok": True, "played": argv[0]}

@@ -534,6 +534,11 @@ class FallbackTests(ChimeTestCase):
                 pw_play = ["pw-play", "--media-role", "Notification", "--volume", "0.5"]
                 self.assertEqual(self.fake.players, [pw_play + [str(self.sound)], pw_play + [BUNDLED]])
 
+    def test_player_killed_by_a_signal_is_not_retried(self) -> None:
+        self.fake.player_code = -15  # e.g. `pkill pw-play` mid-clip: the file was playing
+        self.assertEqual(chime.run(["--file", str(self.sound)]), {"ok": False, "error": "pw-play exited -15: boom"})
+        self.assertEqual(self.fake.players, [["pw-play", "--media-role", "Notification", str(self.sound)]])
+
     def test_retry_uses_the_same_player_selection(self) -> None:
         self.fake.missing = {"pw-play"}
         self.fake.unplayable = {str(self.sound)}
