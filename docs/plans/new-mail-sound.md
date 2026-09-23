@@ -1,6 +1,6 @@
 # Plan: "You've got mail" sound on new mail
 
-Status: **planned.** The clip is in `sounds/`; nothing else is
+Status: **ready to implement.** The clip is in `sounds/`; nothing else is
 implemented yet. This file goes away (or moves into the README/CHANGELOG)
 once the feature ships.
 
@@ -114,7 +114,7 @@ leaves it unchanged, and mark-read failures move it.
   across widget copies.
 - **Do Not Disturb**: skipped while notifications are silenced.
 - **After sleep or a network outage**: mail that arrived meanwhile chimes
-  once, when the next refresh succeeds (see open question 2).
+  once, when the next refresh succeeds.
 - **Off by default.** Surprise audio from a bar widget is unwelcome; the
   README explains how to turn it on.
 
@@ -283,15 +283,17 @@ already use `boolean` (the Indicators widget's `alwaysShow`) and `path`.
   every screen (plus a zero-size placeholder for anchored centre modules),
   hence the de-duplication in `chime`.
 
-## Open questions
+## Decisions
 
-1. **Default on or off?** The plan says off.
-2. **Chime after sleep?** This design chimes once for mail that arrived
-   during sleep or a network outage, when the next refresh succeeds. The
-   alternative is to re-baseline after any failure, which makes the result
-   depend on whether the network is back before the first refresh.
-3. **A "Play test sound" entry** in the Accounts view? Proposed: no, the CLI
-   command is enough for a first version.
+Settled by the maintainer on 2026-09-23:
+
+1. **Off by default.**
+2. **Chime after sleep:** mail that arrived during sleep or a network
+   outage chimes once, when the next refresh succeeds. Accounts are not
+   re-baselined after a failure, since that would make the result depend
+   on whether the network is back before the first refresh.
+3. **No "Play test sound" entry** in the Accounts view. Running
+   `you-got-mail chime` in a terminal is the test.
 
 ## Out of scope
 
