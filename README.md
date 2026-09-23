@@ -4,14 +4,14 @@ An Omarchy bar widget for **unread mail only**. One pile, across every
 account you add. Click a row to open that message in the browser. Read
 mail is never listed.
 
-Gmail, Outlook, Fastmail, generic IMAP, and HEY are built in. Adding
+Gmail, HEY, Outlook, Fastmail and generic IMAP are built in. Adding
 another provider is documented in [docs/PROVIDERS.md](docs/PROVIDERS.md).
 **Account setup lives in [docs/ACCOUNTS.md](docs/ACCOUNTS.md)** — start
 there for Outlook.com, Gmail OAuth, or HEY.
 
 ## Preview
 
-Version 2.8.0 in the **Tokyo Night** theme, using sample mail only.
+Version 2.8.0 using sample mail only.
 The overview is composed from the individual screenshots below.
 
 <p align="center">
