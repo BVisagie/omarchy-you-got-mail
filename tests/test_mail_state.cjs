@@ -156,7 +156,7 @@ test('older rows raised from page 2 by reading the busy account are not new', ()
     ['quiet:q']);
 });
 
-test('a future-dated row cannot raise the mark past now + 300 s', () => {
+test('a future-dated row is new mail once but does not raise the mark', () => {
   const boxes = [inbox('work')];
   const base = state.arrivals(null, boxes, [mail('work:a', 900)], false, NOW);
   const misdated = state.arrivals(base.state, boxes,
@@ -166,6 +166,26 @@ test('a future-dated row cannot raise the mark past now + 300 s', () => {
     [mail('work:future', 99999), mail('work:real', NOW + 330), mail('work:a', 900)],
     false, NOW + 360);
   assert.deepEqual(fresh(real), ['work:real']);
+});
+
+test('a future-dated row left on page 1 across refreshes does not silence its account', () => {
+  const boxes = [inbox('work')];
+  const page = [mail('work:future', 99999), mail('work:a', 900)];
+  let result = state.arrivals(null, boxes, page, false, NOW);
+  for (let now = NOW + 60; now <= NOW + 600; now += 60)
+    result = state.arrivals(result.state, boxes, page, false, now);
+  const real = state.arrivals(result.state, boxes,
+    [mail('work:future', 99999), mail('work:real', NOW + 630), mail('work:a', 900)],
+    false, NOW + 660);
+  assert.deepEqual(fresh(real), ['work:real']);
+});
+
+test('rows up to 300 s ahead, as from a fast server clock, still raise the mark', () => {
+  const boxes = [inbox('work')];
+  const base = state.arrivals(null, boxes, [mail('work:a', NOW + 120)], false, NOW);
+  const again = state.arrivals(base.state, boxes,
+    [mail('work:a', NOW + 120), mail('work:old', NOW + 60)], false, NOW + 60);
+  assert.deepEqual(fresh(again), []);
 });
 
 test('an account that fails and recovers counts only mail that arrived meanwhile', () => {

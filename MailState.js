@@ -97,9 +97,11 @@ function arrivals(state, inboxes, messages, pageFull, now) {
         && (known.mark === null || ts >= known.mark)
         && (floor === null || ts > floor))
       fresh.push(id)
-    var page = pages[accountId] || (pages[accountId] = { ids: [], newest: ts })
+    var page = pages[accountId] || (pages[accountId] = { ids: [], newest: null })
     page.ids.push(id)
-    page.newest = Math.max(page.newest, ts)
+    // A row dated after now + 300 s is misdated; left on page 1, it would
+    // hold the mark ahead of real time and silence the account.
+    if (ts <= now + 300 && (page.newest === null || ts > page.newest)) page.newest = ts
     oldest = oldest === null ? ts : Math.min(oldest, ts)
   }
   var accounts = {}
@@ -108,7 +110,7 @@ function arrivals(state, inboxes, messages, pageFull, now) {
     if (!box || !box.id) continue
     var old = baseline(box.id)
     // A failed account keeps its state; one never ok yet gets no baseline.
-    if (box.ok === true) accounts[box.id] = remember(old, pages[box.id], now)
+    if (box.ok === true) accounts[box.id] = remember(old, pages[box.id])
     else if (old) accounts[box.id] = old
   }
   return {
@@ -118,14 +120,13 @@ function arrivals(state, inboxes, messages, pageFull, now) {
 }
 
 // Moves an ok account's page-1 IDs to the recent end of the 200 it keeps and
-// raises its mark to its newest row, never above now + 300 s.
-function remember(entry, page, now) {
+// raises its mark to its newest row dated no later than now + 300 s.
+function remember(entry, page) {
   var seen = entry ? entry.seen : []
   var mark = entry ? entry.mark : null
   if (page) {
     seen = seen.filter(function(id) { return page.ids.indexOf(id) < 0 }).concat(page.ids)
-    var newest = Math.min(page.newest, now + 300)
-    mark = mark === null ? newest : Math.max(mark, newest)
+    if (page.newest !== null) mark = mark === null ? page.newest : Math.max(mark, page.newest)
   }
   return { seen: seen.slice(-200), mark: mark }
 }
