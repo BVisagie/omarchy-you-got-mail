@@ -11,10 +11,17 @@ there for Outlook.com, Gmail OAuth, or HEY.
 
 ## Preview
 
-Sample mail only — not a real inbox.
+Version 2.8.0 in the **Tokyo Night** theme, using sample mail only.
+The overview is composed from the individual screenshots below.
 
 <p align="center">
-  <img src="preview.png" alt="You've Got Mail — unread pile across Gmail, Outlook, Fastmail, and HEY" width="720">
+  <img src="preview.png" alt="You've Got Mail — unread mailbox, Accounts, and Shortcuts overview" width="960">
+</p>
+
+<p align="center">
+  <img src="docs/screenshots/accounts.png" alt="Accounts with unread totals, check times, individual inbox links, and Add account" width="360">
+  &nbsp;&nbsp;
+  <img src="docs/screenshots/help.png" alt="In-panel keyboard and mouse shortcut help" width="360">
 </p>
 
 <p align="center">
@@ -33,7 +40,8 @@ Sample mail only — not a real inbox.
   Full steps in [docs/ACCOUNTS.md](docs/ACCOUNTS.md#gmail).
 - **HEY:** [hey-cli][hey-cli] — `hey auth login`
 - **Outlook:** a Microsoft Graph app registration *you* own. Personal
-  `outlook.com` mailboxes cannot use IMAP. Creating the Azure directory
+  `outlook.com` mailboxes need OAuth; this plugin supports it through Graph,
+  not its password-based IMAP provider. Creating the Azure directory
   usually asks for a card; app registration itself is free. Details in
   [docs/ACCOUNTS.md](docs/ACCOUNTS.md#outlook).
 - **Fastmail / IMAP:** an API token or app password
@@ -74,6 +82,10 @@ That fast-forwards the git checkout in
 `~/.config/omarchy-you-got-mail/` (accounts and secrets). See
 [CHANGELOG.md](CHANGELOG.md) for what changed in each release.
 
+Version 2.8.0 uses your existing accounts and widget settings; no migration
+or new sign-in is required unless a provider's login has expired. Plugin
+changes reload automatically. Last-check times start fresh after a reload.
+
 ## Accounts
 
 ```bash
@@ -103,7 +115,7 @@ If you never add an account, a single Gmail account is assumed. The first
 
 | | |
 |---|---|
-| Click the bar icon | open the panel |
+| Click the bar icon | open or close the panel |
 | Right-click the bar icon | open each inbox that currently has unread (one tab per account) |
 | Middle-click the bar icon, refresh button, or `r` | refresh now |
 | Accounts button or `m` | account counts, individual inbox links, Add account, setup guide |
