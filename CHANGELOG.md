@@ -8,7 +8,8 @@ An optional "You've got mail!" sound when new unread mail arrives.
 
 - Off by default. Turn it on with the `soundEnabled` widget setting.
   `soundCooldownSec`, `soundVolume` and `soundFile` set the quiet time
-  between sounds, the volume, and your own sound file. A `soundFile` that
+  between sounds, the volume, and your own sound file. Mail that arrives
+  during the quiet time gets one sound when it is up. A `soundFile` that
   can't be played falls back to the bundled clip.
 - It plays once per refresh that finds new mail, and only once even with a
   bar on several monitors. Starting or reloading the plugin, paging, and

@@ -209,7 +209,8 @@ arrived, and only once even with a bar on several monitors. It stays quiet
 when the plugin starts or reloads, when you page, and when reading mail
 brings older unread into view. Mail that arrived while the computer slept
 or was offline gets one sound, on the next successful refresh. It plays at
-most once every `soundCooldownSec` seconds, and never while Do Not Disturb
+most once every `soundCooldownSec` seconds; mail that arrives in between
+gets one sound when that time is up. It never plays while Do Not Disturb
 is on.
 
 To use your own sound, set `soundFile` to a local audio file. Use a full

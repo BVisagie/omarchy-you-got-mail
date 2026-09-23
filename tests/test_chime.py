@@ -3,12 +3,14 @@ from __future__ import annotations
 import fcntl
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
 import tempfile
 import threading
 import unittest
+from collections.abc import Callable
 from contextlib import redirect_stdout
 from io import StringIO
 from pathlib import Path
@@ -22,6 +24,8 @@ T0 = 1_800_000_000
 DAY = 24 * 60 * 60
 REAL_RUN = subprocess.run  # the tests patch subprocess.run itself
 BUNDLED = str(ROOT / "sounds" / "you-got-mail.oga")
+TOKEN = "0123456789abcdef"
+TOKEN_RE = re.compile(r"[0-9a-f]{16}")
 
 
 def _workdir() -> Path:
@@ -87,6 +91,30 @@ class ChimeTestCase(unittest.TestCase):
         clock = patch.object(chime.time, "time", lambda: self.now)
         clock.start()
         self.addCleanup(clock.stop)
+        self.sleeps: list[float] = []
+        self.while_waiting: Callable[[], None] | None = None
+        sleep = patch.object(chime, "_sleep", self.fake_sleep)
+        sleep.start()
+        self.addCleanup(sleep.stop)
+
+    def fake_sleep(self, seconds: float) -> None:
+        """Wait without waiting: run `while_waiting` (once), then move the clock on."""
+        self.assert_unlocked()
+        self.sleeps.append(seconds)
+        end = self.now + seconds
+        action, self.while_waiting = self.while_waiting, None
+        if action is not None:
+            action()
+        self.now = max(self.now, end)  # unless the action moved the clock further
+
+    def assert_unlocked(self) -> None:
+        fd = os.open(self.state_dir / "chime.lock", os.O_RDWR)
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            self.fail("the chime lock is held during the wait")
+        finally:
+            os.close(fd)
 
     @property
     def state_dir(self) -> Path:
@@ -184,29 +212,183 @@ class CooldownTests(ChimeTestCase):
     def test_cooldown_applies_across_calls(self) -> None:
         self.assertEqual(self.chime("work:a"), {"ok": True, "played": "pw-play"})
         self.now += 59
-        self.assertEqual(self.chime("work:b"), {"ok": True, "skipped": "cooldown"})
-        self.assertEqual(len(self.fake.players), 1)
-        self.assertIn("work:b", self.state()["announced"])
-        self.assertEqual(self.state()["lastChime"], T0)
-        self.now += 1
+        self.assertEqual(self.chime("work:b"), {"ok": True, "played": "pw-play", "deferred": True})
+        self.assertEqual(self.sleeps, [1])
+        self.assertEqual(len(self.fake.players), 2)
+        self.assertEqual(self.state(), {"announced": {"work:a": T0, "work:b": T0 + 59}, "lastChime": T0 + 60})
+        self.now += 60
         self.assertEqual(self.chime("work:c"), {"ok": True, "played": "pw-play"})
-        self.assertEqual(self.state()["lastChime"], T0 + 60)
+        self.assertEqual(self.sleeps, [1])
+        self.assertEqual(self.state()["lastChime"], T0 + 120)
 
     def test_cooldown_is_clamped_and_defaults_to_sixty(self) -> None:
         cases = [("99999", 3600), ("-5", 0), ("0", 0), ("soon", 60), ("", 60)]
         for raw, seconds in cases:
             with self.subTest(raw=raw):
+                self.now = T0
+                self.sleeps.clear()
                 self.write_state({"announced": {}, "lastChime": T0 - seconds})
                 self.assertEqual(self.chime("work:a", cooldown=raw), {"ok": True, "played": "pw-play"})
+                self.assertEqual(self.sleeps, [])
                 if seconds:
                     self.write_state({"announced": {}, "lastChime": T0 - seconds + 1})
-                    self.assertEqual(self.chime("work:a", cooldown=raw), {"ok": True, "skipped": "cooldown"})
+                    self.assertEqual(
+                        self.chime("work:a", cooldown=raw), {"ok": True, "played": "pw-play", "deferred": True}
+                    )
+                    self.assertEqual(self.sleeps, [1])
 
     def test_omitted_cooldown_is_sixty(self) -> None:
-        self.write_state({"announced": {}, "lastChime": T0 - 59})
-        self.assertEqual(chime.run(["--", "work:a"]), {"ok": True, "skipped": "cooldown"})
         self.write_state({"announced": {}, "lastChime": T0 - 60})
-        self.assertEqual(chime.run(["--", "work:b"]), {"ok": True, "played": "pw-play"})
+        self.assertEqual(chime.run(["--", "work:a"]), {"ok": True, "played": "pw-play"})
+        self.write_state({"announced": {}, "lastChime": T0 - 59})
+        self.assertEqual(chime.run(["--", "work:b"]), {"ok": True, "played": "pw-play", "deferred": True})
+        self.assertEqual(self.sleeps, [1])
+
+    def test_cooldown_zero_never_waits(self) -> None:
+        self.write_state({"announced": {}, "lastChime": T0, "pending": {"due": T0 + 30, "token": TOKEN}})
+        self.assertEqual(self.chime("work:a", cooldown="0"), {"ok": True, "played": "pw-play"})
+        self.assertEqual(self.sleeps, [])
+        self.assertEqual(self.state(), {"announced": {"work:a": T0}, "lastChime": T0})
+
+    def test_a_last_chime_in_the_future_reads_as_now(self) -> None:
+        # The clock went back: wait one cooldown at most, and never with cooldown 0.
+        self.write_state({"announced": {}, "lastChime": T0 + 7200})
+        self.assertEqual(self.chime("work:a", cooldown="0"), {"ok": True, "played": "pw-play"})
+        self.write_state({"announced": {}, "lastChime": T0 + 7200})
+        self.assertEqual(self.chime("work:b"), {"ok": True, "played": "pw-play", "deferred": True})
+        self.assertEqual(self.sleeps, [60])
+        self.assertEqual(self.state()["lastChime"], T0 + 60)
+
+
+class DeferredChimeTests(ChimeTestCase):
+    """Mail inside the cooldown gets one chime when it ends."""
+
+    DEFERRED = {"ok": True, "played": "pw-play", "deferred": True}
+
+    def setUp(self) -> None:
+        super().setUp()
+        # The last chime was 10 s ago, so the 60 s cooldown ends at T0 + 50.
+        self.write_state({"announced": {"work:a": T0 - 10}, "lastChime": T0 - 10})
+
+    def test_mail_inside_the_cooldown_plays_once_when_it_ends(self) -> None:
+        pending: list[dict] = []
+        self.while_waiting = lambda: pending.append(self.state()["pending"])
+        self.assertEqual(self.chime("work:b"), self.DEFERRED)
+        self.assertEqual(self.sleeps, [50])
+        self.assertEqual(len(pending), 1)
+        self.assertEqual(pending[0]["due"], T0 + 50)
+        self.assertTrue(TOKEN_RE.fullmatch(pending[0]["token"]), pending[0])
+        self.assertEqual(self.fake.players, [["pw-play", "--media-role", "Notification", "--volume", "1", BUNDLED]])
+        self.assertEqual(self.state(), {"announced": {"work:a": T0 - 10, "work:b": T0}, "lastChime": T0 + 50})
+
+    def test_new_mail_while_waiting_is_queued_behind_the_waiting_chime(self) -> None:
+        seen: list[object] = []
+
+        def during_wait() -> None:
+            self.now += 5
+            seen.extend([self.chime("work:c"), list(self.sleeps), len(self.fake.players)])
+            seen.append(self.state()["announced"].get("work:c"))
+
+        self.while_waiting = during_wait
+        self.assertEqual(self.chime("work:b"), self.DEFERRED)
+        self.assertEqual(seen, [{"ok": True, "skipped": "queued"}, [50], 0, T0 + 5])
+        self.assertEqual(len(self.fake.players), 1)
+        self.assertEqual(self.state()["lastChime"], T0 + 50)
+        self.assertNotIn("pending", self.state())
+
+    def test_same_mail_from_another_copy_while_waiting_is_announced(self) -> None:
+        seen: list[dict] = []
+        self.while_waiting = lambda: seen.append(self.chime("work:b"))
+        self.assertEqual(self.chime("work:b"), self.DEFERRED)
+        self.assertEqual(seen, [{"ok": True, "skipped": "announced"}])
+        self.assertEqual(self.sleeps, [50])
+        self.assertEqual(len(self.fake.players), 1)
+
+    def test_do_not_disturb_when_the_wait_ends_stays_quiet(self) -> None:
+        self.while_waiting = lambda: setattr(self.fake, "dnd", b"on\n")
+        self.assertEqual(self.chime("work:b"), {"ok": True, "skipped": "dnd"})
+        self.assertEqual(self.fake.players, [])
+        self.assertEqual(self.state(), {"announced": {"work:a": T0 - 10, "work:b": T0}, "lastChime": T0 - 10})
+
+    def test_do_not_disturb_while_waiting_leaves_the_waiting_chime_alone(self) -> None:
+        seen: list[object] = []
+
+        def during_wait() -> None:
+            seen.append(self.state()["pending"])
+            self.fake.dnd = b"on\n"
+            seen.append(self.chime("work:c"))
+            self.fake.dnd = b"off\n"
+            seen.append(self.state()["pending"])
+
+        self.while_waiting = during_wait
+        self.assertEqual(self.chime("work:b"), self.DEFERRED)
+        self.assertEqual(seen[1], {"ok": True, "skipped": "dnd"})
+        self.assertEqual(seen[2], seen[0])
+        self.assertEqual(len(self.fake.players), 1)
+
+    def test_a_chime_after_the_due_time_supersedes_the_waiting_one(self) -> None:
+        seen: list[object] = []
+
+        def during_wait() -> None:
+            self.now = T0 + 51
+            seen.extend([self.chime("work:c"), list(self.sleeps), self.state()])
+            seen.append(self.state_file.read_bytes())
+
+        self.while_waiting = during_wait
+        self.assertEqual(self.chime("work:b"), {"ok": True, "skipped": "superseded"})
+        announced = {"work:a": T0 - 10, "work:b": T0, "work:c": T0 + 51}
+        self.assertEqual(seen[:3], [{"ok": True, "played": "pw-play"}, [50], {"announced": announced, "lastChime": T0 + 51}])
+        self.assertEqual(self.state_file.read_bytes(), seen[3])  # the waiter wrote nothing
+        self.assertEqual(len(self.fake.players), 1)
+
+    def test_a_waiting_chime_more_than_a_minute_overdue_is_replaced(self) -> None:
+        self.write_state({"announced": {}, "lastChime": T0 - 10, "pending": {"due": T0 - 61, "token": TOKEN}})
+        pending: list[dict] = []
+        self.while_waiting = lambda: pending.append(self.state()["pending"])
+        self.assertEqual(self.chime("work:b"), self.DEFERRED)
+        self.assertEqual(self.sleeps, [50])
+        self.assertEqual(pending[0]["due"], T0 + 50)
+        self.assertNotEqual(pending[0]["token"], TOKEN)
+        self.assertEqual(len(self.fake.players), 1)
+
+    def test_a_waiting_chime_up_to_a_minute_overdue_still_counts(self) -> None:
+        self.write_state({"announced": {}, "lastChime": T0 - 10, "pending": {"due": T0 - 60, "token": TOKEN}})
+        self.assertEqual(self.chime("work:b"), {"ok": True, "skipped": "queued"})
+        self.assertEqual(self.sleeps, [])
+        self.assertEqual(self.fake.players, [])
+        self.assertEqual(self.state()["pending"], {"due": T0 - 60, "token": TOKEN})
+
+    def test_malformed_pending_reads_as_none(self) -> None:
+        cases = [
+            "soon",
+            [],
+            {"token": TOKEN},
+            {"due": "soon", "token": TOKEN},
+            {"due": True, "token": TOKEN},
+            {"due": float("nan"), "token": TOKEN},
+            {"due": T0 + 30},
+            {"due": T0 + 30, "token": 123},
+            {"due": T0 + 30, "token": TOKEN.upper()},
+            {"due": T0 + 30, "token": TOKEN[:15]},
+            {"due": T0 + 30, "token": TOKEN + "0"},
+            {"due": T0 + 30, "token": TOKEN + "\n"},
+        ]
+        for pending in cases:
+            with self.subTest(pending=pending):
+                self.now = T0
+                self.sleeps.clear()
+                self.fake.calls.clear()
+                self.write_state({"announced": {}, "lastChime": T0 - 10, "pending": pending})
+                self.assertEqual(self.chime("work:b"), self.DEFERRED)
+                self.assertEqual(self.sleeps, [50])
+                self.assertEqual(len(self.fake.players), 1)
+
+    def test_a_deferred_chime_still_reports_the_fallback(self) -> None:
+        missing = str(self.home / "nope.oga")
+        self.assertEqual(
+            self.chime("work:b", file=missing), {**self.DEFERRED, "fallback": f"not a sound file: {missing}"}
+        )
+        self.assertEqual([argv[-1] for argv in self.fake.players], [BUNDLED])
 
 
 class DoNotDisturbTests(ChimeTestCase):
@@ -396,9 +578,10 @@ class FallbackTests(ChimeTestCase):
 
 class ManualTestTests(ChimeTestCase):
     def test_without_ids_plays_inside_cooldown_and_leaves_state_untouched(self) -> None:
-        self.write_state({"announced": {"work:abc": T0}, "lastChime": T0})
+        self.write_state({"announced": {"work:abc": T0}, "lastChime": T0, "pending": {"due": T0 + 60, "token": TOKEN}})
         before = self.state_file.read_bytes()
         self.assertEqual(chime.run([]), {"ok": True, "played": "pw-play"})
+        self.assertEqual(self.sleeps, [])
         self.assertEqual(self.state_file.read_bytes(), before)
         self.assertFalse((self.state_dir / "chime.lock").exists())
 

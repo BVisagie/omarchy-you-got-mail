@@ -3,7 +3,8 @@
 Omarchy runs one copy of the bar widget per monitor, and each copy polls on
 its own. Every copy passes its new message IDs here; a shared record of the
 IDs already announced, and of the last chime, makes the sound play once per
-arrival and at most once per cooldown. Do Not Disturb silences it.
+arrival and at most once per cooldown. Mail that arrives during the cooldown
+gets one chime when it ends. Do Not Disturb silences it.
 """
 
 from __future__ import annotations
@@ -13,8 +14,11 @@ import json
 import math
 import os
 import re
+import secrets
 import subprocess
 import time
+from collections.abc import Iterator
+from contextlib import contextmanager
 from pathlib import Path
 
 from common import ROOT, clamp_int, emit, one_line, write_private
@@ -22,12 +26,16 @@ from common import ROOT, clamp_int, emit, one_line, write_private
 USAGE = "usage: you-got-mail chime [--file PATH] [--volume 0-100] [--cooldown SEC] [-- ID ...]"
 BUNDLED_SOUND = ROOT / "sounds" / "you-got-mail.oga"
 ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,32}:[A-Za-z0-9_-]{1,512}$")
+TOKEN_RE = re.compile(r"[0-9a-f]{16}")
 OPTIONS = ("--file", "--volume", "--cooldown")
 DEFAULT_COOLDOWN = 60
 MAX_COOLDOWN = 3600
 ANNOUNCED_TTL = 24 * 60 * 60
 DND_TIMEOUT = 2
 PLAY_TIMEOUT = 15
+STALE_AFTER = 60  # a waiting chime this far past due has lost its process
+
+_sleep = time.sleep  # the tests wait without waiting
 
 
 def _fail(message: str) -> dict:
@@ -103,8 +111,18 @@ def _is_time(value: object) -> bool:
     return isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(value)
 
 
-def _load_state(path: Path, now: int) -> tuple[dict[str, int], int]:
-    """Announced IDs younger than a day, and the last chime; junk reads as empty."""
+def _pending(raw: object) -> dict | None:
+    """The chime waiting for the cooldown to end, or None when there is none or it is junk."""
+    if not isinstance(raw, dict):
+        return None
+    due, token = raw.get("due"), raw.get("token")
+    if not _is_time(due) or not isinstance(token, str) or not TOKEN_RE.fullmatch(token):
+        return None
+    return {"due": int(due), "token": token}
+
+
+def _load_state(path: Path, now: int) -> tuple[dict[str, int], int, dict | None]:
+    """Announced IDs younger than a day, the last chime and the pending one; junk reads as empty."""
     try:
         data = json.loads(path.read_bytes())
     except (OSError, ValueError):
@@ -118,32 +136,77 @@ def _load_state(path: Path, now: int) -> tuple[dict[str, int], int]:
         if _is_time(when) and now - when < ANNOUNCED_TTL
     }
     last = data.get("lastChime")
-    return announced, int(last) if _is_time(last) else 0
+    # A last chime in the future (the clock went back) reads as now, so no wait
+    # is ever longer than the cooldown.
+    last = min(int(last), now) if _is_time(last) else 0
+    return announced, last, _pending(data.get("pending"))
 
 
-def _claim(ids: list[str], silenced: bool, cooldown: int) -> str | None:
-    """Record the IDs under the lock; return why not to play, or None to play."""
+def _save_state(path: Path, announced: dict[str, int], last: int, pending: dict | None) -> None:
+    data: dict[str, object] = {"announced": announced, "lastChime": last}
+    if pending:
+        data["pending"] = pending
+    write_private(path, json.dumps(data) + "\n")
+
+
+@contextmanager
+def _locked() -> Iterator[Path]:
+    """Hold the lock shared by every copy; yields the state file it guards."""
     state_dir = _state_dir()
     fd = os.open(state_dir / "chime.lock", os.O_RDWR | os.O_CREAT, 0o600)
     try:
         fcntl.flock(fd, fcntl.LOCK_EX)
-        state_file = state_dir / "chime.json"
+        yield state_dir / "chime.json"
+    finally:
+        os.close(fd)
+
+
+def _claim(ids: list[str], silenced: bool, cooldown: int) -> str | dict | None:
+    """Record the IDs under the lock.
+
+    Return why not to play, the pending chime to wait for, or None to play now.
+    """
+    with _locked() as state_file:
         now = int(time.time())
-        announced, last = _load_state(state_file, now)
+        announced, last, pending = _load_state(state_file, now)
         if all(msg_id in announced for msg_id in ids):
             return "announced"
         for msg_id in ids:
             announced.setdefault(msg_id, now)
         if silenced:
-            skipped = "dnd"
+            claim = "dnd"
         elif now - last < cooldown:
-            skipped = "cooldown"
+            if pending and pending["due"] >= now - STALE_AFTER:
+                claim = "queued"  # the chime already waiting covers these IDs
+            else:
+                claim = pending = {"due": last + cooldown, "token": secrets.token_hex(8)}
         else:
-            skipped, last = None, now
-        write_private(state_file, json.dumps({"announced": announced, "lastChime": last}) + "\n")
-        return skipped
-    finally:
-        os.close(fd)
+            claim, last, pending = None, now, None  # this chime covers anything queued
+        _save_state(state_file, announced, last, pending)
+        return claim
+
+
+def _claim_pending(token: str, silenced: bool) -> str | None:
+    """Once the wait is over, take the pending chime if it is still this one.
+
+    Return why not to play, or None to play now.
+    """
+    with _locked() as state_file:
+        now = int(time.time())
+        announced, last, pending = _load_state(state_file, now)
+        if pending is None or pending["token"] != token:
+            return "superseded"  # another chime played meanwhile
+        if not silenced:
+            last = now
+        _save_state(state_file, announced, last, None)
+        return "dnd" if silenced else None
+
+
+def _wait_for(pending: dict) -> str | None:
+    """Sleep, holding no lock, until the pending chime is due; then claim it."""
+    _sleep(max(0, pending["due"] - time.time()))
+    silenced = _dnd_on()  # before the lock, as in _chime
+    return _claim_pending(pending["token"], silenced)
 
 
 def _players(path: str, volume: int | None) -> list[list[str]]:
@@ -180,23 +243,27 @@ def _play(path: str, volume: int | None) -> dict:
 
 
 def _chime(path: str, ids: list[str] | None, opts: dict[str, str]) -> dict:
-    """Play `path` now, unless Do Not Disturb or the shared record says not to."""
+    """Play `path` now or when the cooldown ends, unless Do Not Disturb or the shared record says not to."""
     if not os.path.isfile(path):  # _sound checked a chosen file, not the bundled clip
         return _fail(f"not a sound file: {path}")
     # Ask before taking the lock, so the lock is never held across the timeout.
     silenced = _dnd_on()
+    deferred = False
     if ids is None:
         if silenced:
             return {"ok": True, "skipped": "dnd"}
     else:
         cooldown = clamp_int(opts.get("--cooldown"), DEFAULT_COOLDOWN, 0, MAX_COOLDOWN)
         try:
-            skipped = _claim(ids, silenced, cooldown)
+            claim = _claim(ids, silenced, cooldown)
+            deferred = isinstance(claim, dict)
+            skipped = _wait_for(claim) if deferred else claim
         except OSError as exc:
             return _fail(f"chime state unavailable: {exc}")
         if skipped:
             return {"ok": True, "skipped": skipped}
-    return _play(path, _volume(opts.get("--volume")))
+    result = _play(path, _volume(opts.get("--volume")))
+    return {**result, "deferred": True} if deferred else result
 
 
 def run(args: list[str]) -> dict:
