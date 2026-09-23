@@ -21,6 +21,7 @@ import chime
 T0 = 1_800_000_000
 DAY = 24 * 60 * 60
 REAL_RUN = subprocess.run  # the tests patch subprocess.run itself
+BUNDLED = str(ROOT / "sounds" / "you-got-mail.oga")
 
 
 def _workdir() -> Path:
@@ -38,7 +39,9 @@ class FakeRun:
         self.dnd_code = 0
         self.missing: set[str] = set()
         self.player_code = 0
+        self.player_stderr = b"boom\n"
         self.player_error: Exception | None = None
+        self.unplayable: set[str] = set()  # files the player rejects with exit 1
 
     def __call__(self, argv: list[str], **kwargs: object) -> subprocess.CompletedProcess:
         self.calls.append((list(argv), kwargs))
@@ -51,7 +54,8 @@ class FakeRun:
             return subprocess.CompletedProcess(argv, self.dnd_code, self.dnd, b"")
         if self.player_error is not None:
             raise self.player_error
-        return subprocess.CompletedProcess(argv, self.player_code, b"", b"boom\n")
+        code = 1 if argv[-1] in self.unplayable else self.player_code
+        return subprocess.CompletedProcess(argv, code, b"", self.player_stderr)
 
     @property
     def players(self) -> list[list[str]]:
@@ -245,17 +249,8 @@ class DoNotDisturbTests(ChimeTestCase):
 
 class SoundFileTests(ChimeTestCase):
     def test_bundled_clip_is_the_default(self) -> None:
-        self.chime("work:abc")
-        self.assertEqual(self.fake.players[0][-1], str(ROOT / "sounds" / "you-got-mail.oga"))
-
-    def test_missing_or_non_regular_file_is_an_error(self) -> None:
-        for path in (str(self.home / "nope.oga"), str(self.home), "/dev/null"):
-            with self.subTest(path=path):
-                result = self.chime("work:abc", file=path)
-                self.assertFalse(result["ok"])
-                self.assertIn("error", result)
-                self.assertEqual(self.fake.calls, [])
-                self.assertFalse(self.state_dir.exists())
+        self.assertEqual(self.chime("work:abc"), {"ok": True, "played": "pw-play"})
+        self.assertEqual(self.fake.players[0][-1], BUNDLED)
 
     def test_leading_tilde_is_expanded(self) -> None:
         self.assertEqual(self.chime("work:abc", file="~/sound.oga"), {"ok": True, "played": "pw-play"})
@@ -306,17 +301,14 @@ class PlayerTests(ChimeTestCase):
             self.assertNotIn("shell", kwargs)
             self.assertTrue(kwargs.get("capture_output") or kwargs.get("stdout") is not None)
 
-    def test_pw_play_failure_does_not_fall_back(self) -> None:
+    def test_pw_play_failure_on_the_bundled_clip_is_final(self) -> None:
         self.fake.player_code = 1
-        result = chime.run(["--file", str(self.sound)])
-        self.assertFalse(result["ok"])
-        self.assertIn("pw-play", result["error"])
-        self.assertEqual([argv[0] for argv in self.fake.players], ["pw-play"])
+        self.assertEqual(chime.run([]), {"ok": False, "error": "pw-play exited 1: boom"})
+        self.assertEqual(self.fake.players, [["pw-play", "--media-role", "Notification", BUNDLED]])
 
-    def test_player_timeout_is_an_error(self) -> None:
+    def test_player_timeout_is_an_error_and_is_not_retried(self) -> None:
         self.fake.player_error = subprocess.TimeoutExpired(["pw-play"], 15)
-        result = chime.run(["--file", str(self.sound)])
-        self.assertFalse(result["ok"])
+        self.assertEqual(chime.run(["--file", str(self.sound)]), {"ok": False, "error": "pw-play timed out"})
         self.assertEqual([argv[0] for argv in self.fake.players], ["pw-play"])
 
     def test_no_player_found(self) -> None:
@@ -325,6 +317,81 @@ class PlayerTests(ChimeTestCase):
             chime.run(["--file", str(self.sound)]),
             {"ok": False, "error": "no audio player found (pw-play or paplay)"},
         )
+
+
+class FallbackTests(ChimeTestCase):
+    def test_missing_or_non_regular_file_plays_the_bundled_clip(self) -> None:
+        for n, path in enumerate((str(self.home / "nope.oga"), str(self.home), "/dev/null")):
+            with self.subTest(path=path):
+                self.fake.calls.clear()
+                self.assertEqual(
+                    self.chime(f"work:{n}", cooldown="0", file=path),
+                    {"ok": True, "played": "pw-play", "fallback": f"not a sound file: {path}"},
+                )
+                self.assertEqual(self.fake.players, [["pw-play", "--media-role", "Notification", "--volume", "1", BUNDLED]])
+
+    @unittest.skipIf(os.geteuid() == 0, "root can read a mode-000 file")
+    def test_unreadable_file_plays_the_bundled_clip(self) -> None:
+        self.sound.chmod(0)
+        self.assertEqual(
+            self.chime("work:abc", file=str(self.sound)),
+            {"ok": True, "played": "pw-play", "fallback": f"cannot read: {self.sound}"},
+        )
+        self.assertEqual([argv[-1] for argv in self.fake.players], [BUNDLED])
+
+    def test_file_the_player_rejects_is_retried_once_with_the_bundled_clip(self) -> None:
+        self.fake.unplayable = {str(self.sound)}
+        for stderr, detail in ((b"bad format\n", ": bad format"), (b"", "")):
+            with self.subTest(stderr=stderr):
+                self.fake.calls.clear()
+                self.fake.player_stderr = stderr
+                self.assertEqual(
+                    chime.run(["--volume", "50", "--file", str(self.sound)]),
+                    {"ok": True, "played": "pw-play", "fallback": f"pw-play could not play {self.sound}{detail}"},
+                )
+                pw_play = ["pw-play", "--media-role", "Notification", "--volume", "0.5"]
+                self.assertEqual(self.fake.players, [pw_play + [str(self.sound)], pw_play + [BUNDLED]])
+
+    def test_retry_uses_the_same_player_selection(self) -> None:
+        self.fake.missing = {"pw-play"}
+        self.fake.unplayable = {str(self.sound)}
+        self.assertEqual(
+            chime.run(["--file", str(self.sound)]),
+            {"ok": True, "played": "paplay", "fallback": f"paplay could not play {self.sound}: boom"},
+        )
+        self.assertEqual(
+            [(argv[0], argv[-1]) for argv in self.fake.players],
+            [("pw-play", str(self.sound)), ("paplay", str(self.sound)), ("pw-play", BUNDLED), ("paplay", BUNDLED)],
+        )
+
+    def test_bundled_retry_that_fails_too_is_an_error_with_the_fallback(self) -> None:
+        self.fake.player_code = 1
+        self.assertEqual(
+            chime.run(["--file", str(self.sound)]),
+            {"ok": False, "error": "pw-play exited 1: boom", "fallback": f"pw-play could not play {self.sound}: boom"},
+        )
+        self.assertEqual([argv[-1] for argv in self.fake.players], [str(self.sound), BUNDLED])
+
+    def test_skipped_results_report_the_fallback_too(self) -> None:
+        missing = str(self.home / "nope.oga")
+        reason = f"not a sound file: {missing}"
+        self.chime("work:abc", file=missing)
+        self.assertEqual(self.chime("work:abc", file=missing), {"ok": True, "skipped": "announced", "fallback": reason})
+        self.fake.dnd = b"on\n"
+        self.assertEqual(chime.run(["--file", missing]), {"ok": True, "skipped": "dnd", "fallback": reason})
+        self.assertEqual(len(self.fake.players), 1)
+
+    def test_missing_bundled_clip_is_an_error(self) -> None:
+        bundled = self.tmp / "gone.oga"
+        missing = str(self.home / "nope.oga")
+        with patch.object(chime, "BUNDLED_SOUND", bundled):
+            self.assertEqual(self.chime("work:abc"), {"ok": False, "error": f"not a sound file: {bundled}"})
+            self.assertEqual(
+                self.chime("work:abc", file=missing),
+                {"ok": False, "error": f"not a sound file: {bundled}", "fallback": f"not a sound file: {missing}"},
+            )
+        self.assertEqual(self.fake.calls, [])
+        self.assertFalse(self.state_dir.exists())
 
 
 class ManualTestTests(ChimeTestCase):

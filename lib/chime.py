@@ -48,9 +48,22 @@ def _parse(args: list[str]) -> tuple[dict[str, str], list[str] | None] | None:
     return opts, None
 
 
-def _sound_path(raw: str | None) -> str:
+def _noted(result: dict, fallback: str | None) -> dict:
+    """`result`, saying why the bundled clip stood in for the chosen file, if it did."""
+    return {**result, "fallback": fallback} if fallback else result
+
+
+def _sound(raw: str | None) -> tuple[str, str | None]:
+    """The file to play, and why the bundled clip replaces `raw`, if it does."""
+    if raw is None:
+        return str(BUNDLED_SOUND), None
     # Absolute, so a name like "-q.oga" can never read as a player option.
-    return os.path.abspath(os.path.expanduser(raw)) if raw is not None else str(BUNDLED_SOUND)
+    path = os.path.abspath(os.path.expanduser(raw))
+    if not os.path.isfile(path):
+        return str(BUNDLED_SOUND), f"not a sound file: {path}"
+    if not os.access(path, os.R_OK):
+        return str(BUNDLED_SOUND), f"cannot read: {path}"
+    return path, None
 
 
 def _volume(raw: str | None) -> int | None:
@@ -144,7 +157,11 @@ def _players(path: str, volume: int | None) -> list[list[str]]:
 
 
 def _play(path: str, volume: int | None) -> dict:
-    """Try pw-play, then paplay only if pw-play cannot start (never twice)."""
+    """Try pw-play, then paplay only if pw-play cannot start (never twice).
+
+    If the player rejects a file other than the bundled clip, play the bundled
+    clip the same way instead. Not after a timeout: the file played all along.
+    """
     for argv in _players(path, volume):
         try:
             proc = subprocess.run(argv, capture_output=True, timeout=PLAY_TIMEOUT, check=False)
@@ -153,24 +170,19 @@ def _play(path: str, volume: int | None) -> dict:
         except OSError:
             continue
         if proc.returncode != 0:
-            detail = one_line(proc.stderr.decode("utf-8", "replace"))
-            return _fail(f"{argv[0]} exited {proc.returncode}" + (f": {detail}" if detail else ""))
+            stderr = one_line(proc.stderr.decode("utf-8", "replace"))
+            detail = f": {stderr}" if stderr else ""
+            if path != str(BUNDLED_SOUND):
+                return _noted(_play(str(BUNDLED_SOUND), volume), f"{argv[0]} could not play {path}{detail}")
+            return _fail(f"{argv[0]} exited {proc.returncode}{detail}")
         return {"ok": True, "played": argv[0]}
     return _fail("no audio player found (pw-play or paplay)")
 
 
-def run(args: list[str]) -> dict:
-    parsed = _parse(args)
-    if parsed is None:
-        return _fail(USAGE)
-    opts, ids = parsed
-    path = _sound_path(opts.get("--file"))
-    if not os.path.isfile(path):
+def _chime(path: str, ids: list[str] | None, opts: dict[str, str]) -> dict:
+    """Play `path` now, unless Do Not Disturb or the shared record says not to."""
+    if not os.path.isfile(path):  # _sound checked a chosen file, not the bundled clip
         return _fail(f"not a sound file: {path}")
-    if ids is not None:
-        ids = [msg_id for msg_id in ids if ID_RE.fullmatch(msg_id)]
-        if not ids:
-            return _fail("no valid message IDs")
     # Ask before taking the lock, so the lock is never held across the timeout.
     silenced = _dnd_on()
     if ids is None:
@@ -185,6 +197,19 @@ def run(args: list[str]) -> dict:
         if skipped:
             return {"ok": True, "skipped": skipped}
     return _play(path, _volume(opts.get("--volume")))
+
+
+def run(args: list[str]) -> dict:
+    parsed = _parse(args)
+    if parsed is None:
+        return _fail(USAGE)
+    opts, ids = parsed
+    if ids is not None:
+        ids = [msg_id for msg_id in ids if ID_RE.fullmatch(msg_id)]
+        if not ids:
+            return _fail("no valid message IDs")
+    path, fallback = _sound(opts.get("--file"))
+    return _noted(_chime(path, ids, opts), fallback)
 
 
 def main(args: list[str]) -> None:
