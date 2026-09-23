@@ -77,6 +77,8 @@ Panel {
   property var accountChecks: ({})
   property double allCheckedAt: 0
   property string accountSignature: ""
+  // New-mail detection state from MailState.arrivals; null until the first page 1.
+  property var arrivalState: null
   readonly property var accountMenu: MailState.accountEntries(inboxes, accountChecks, now)
   readonly property var shortcutHelp: MailState.shortcuts()
 
@@ -248,6 +250,17 @@ Panel {
     return true
   }
 
+  // One call per refresh with every new ID; `chime` dedupes across widget
+  // copies and applies the cooldown and Do Not Disturb.
+  function playChime(ids) {
+    var valid = ids.filter(function(id) { return validId(id) })
+    if (!root.soundEnabled || valid.length === 0) return
+    var argv = [root.script, "chime", "--cooldown", String(root.soundCooldownSec),
+                "--volume", String(root.soundVolume)]
+    if (root.soundFile !== "") argv.push("--file", root.soundFile)
+    Util.execArgv(argv.concat(["--"], valid))
+  }
+
   readonly property int pageSize: {
     var n = parseInt(setting("max", 25), 10)
     if (!(n > 0)) n = 25
@@ -258,6 +271,22 @@ Panel {
     if (!(n > 0)) n = 60
     return Math.max(15, Math.min(3600, n)) * 1000
   }
+  // shell.json is edited by hand, so accept the usual spellings of "on".
+  readonly property bool soundEnabled: {
+    var value = setting("soundEnabled", false)
+    return value === true || value === "true" || value === 1
+  }
+  readonly property int soundCooldownSec: {
+    var n = parseInt(setting("soundCooldownSec", 60), 10)
+    if (!(n >= 0)) n = 60
+    return Math.max(0, Math.min(3600, n))
+  }
+  readonly property int soundVolume: {
+    var n = parseInt(setting("soundVolume", 100), 10)
+    if (!(n >= 0)) n = 100
+    return Math.max(0, Math.min(100, n))
+  }
+  readonly property string soundFile: String(setting("soundFile", "") || "").trim()
 
   function refresh() {
     if (root.markAllBusy) return
@@ -582,6 +611,13 @@ Panel {
       nextPage = validToken(data.nextPage) ? data.nextPage : ""
       if (cursor > messages.length - 1) cursor = messages.length - 1
       if (cursor < 0 && messages.length > 0) cursor = 0
+      // Only page 1 shows what is new; paging never chimes or moves the state.
+      if (root.listPage === "") {
+        var arrived = MailState.arrivals(root.arrivalState, reported, kept,
+                                         validToken(data.nextPage), root.now)
+        root.arrivalState = arrived.state
+        playChime(arrived.fresh)
+      }
     } catch (e) {
       if (!root.refreshPending) root.reconciling = false
       reachable = false

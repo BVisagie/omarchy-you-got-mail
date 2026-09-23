@@ -403,7 +403,8 @@ class ManifestAndHelpTests(unittest.TestCase):
             self.assertIn(name, data["description"])
             self.assertIn(name, data["barWidget"]["description"])
         keys = {item["key"] for item in data["barWidget"]["schema"]}
-        self.assertEqual(keys, {"max", "refreshIntervalSec"})
+        self.assertEqual(keys, {"max", "refreshIntervalSec", "soundEnabled",
+                                "soundCooldownSec", "soundVolume", "soundFile"})
         self.assertEqual(data["barWidget"]["defaults"]["max"], 25)
 
     def test_cli_help_documents_limit(self) -> None:

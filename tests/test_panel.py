@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import math
+import re
 import unittest
 
 from support import ROOT
@@ -17,6 +18,45 @@ class PanelContractTests(unittest.TestCase):
         self.assertIn('setting("max", 25)', self.qml)
         self.assertIn('setting("refreshIntervalSec", 60)', self.qml)
         self.assertIn('"--limit"', self.qml)
+
+    def _property(self, name: str) -> str:
+        # A readonly property's binding: a `{ ... }` block or the rest of its line.
+        pattern = rf"^  readonly property \w+ {name}: (\{{.*?^  \}}|.*?$)"
+        found = re.search(pattern, self.qml, re.M | re.S)
+        self.assertIsNotNone(found, name)
+        return found.group(1)
+
+    def test_reads_and_clamps_sound_settings(self) -> None:
+        enabled = self._property("soundEnabled")
+        self.assertIn('setting("soundEnabled", false)', enabled)
+        self.assertIn('value === true || value === "true" || value === 1', enabled)
+        cooldown = self._property("soundCooldownSec")
+        self.assertIn('parseInt(setting("soundCooldownSec", 60), 10)', cooldown)
+        self.assertIn("if (!(n >= 0)) n = 60", cooldown)
+        self.assertIn("Math.max(0, Math.min(3600, n))", cooldown)
+        volume = self._property("soundVolume")
+        self.assertIn('parseInt(setting("soundVolume", 100), 10)', volume)
+        self.assertIn("if (!(n >= 0)) n = 100", volume)
+        self.assertIn("Math.max(0, Math.min(100, n))", volume)
+        self.assertIn('String(setting("soundFile", "") || "").trim()', self._property("soundFile"))
+
+    def test_manifest_declares_sound_settings(self) -> None:
+        widget = self.manifest["barWidget"]
+        schema = {item["key"]: item for item in widget["schema"]}
+        self.assertEqual(schema["soundEnabled"]["type"], "boolean")
+        self.assertEqual(schema["soundCooldownSec"]["type"], "integer")
+        self.assertEqual(schema["soundVolume"]["type"], "integer")
+        self.assertEqual(schema["soundFile"]["type"], "path")
+        cooldown = schema["soundCooldownSec"]
+        self.assertEqual((cooldown["min"], cooldown["max"], cooldown["step"]), (0, 3600, 15))
+        volume = schema["soundVolume"]
+        self.assertEqual((volume["min"], volume["max"], volume["step"]), (0, 100, 1))
+        expected = {"soundEnabled": False, "soundCooldownSec": 60, "soundVolume": 100,
+                    "soundFile": ""}
+        for key, value in expected.items():
+            self.assertIs(type(widget["defaults"][key]), type(value), key)
+            self.assertEqual(widget["defaults"][key], value, key)
+            self.assertEqual(schema[key]["defaultValue"], value, key)
 
     def test_surfaces_partial_warning(self) -> None:
         self.assertIn("property string warningText", self.qml)

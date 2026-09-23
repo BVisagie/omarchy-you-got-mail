@@ -251,3 +251,132 @@ test('an omitted paging token is not the string undefined', () => {
   assert.equal(p.nextPage, '');
   assert.equal(p.reachable, true);
 });
+
+// New-mail sound: the panel feeds page-1 rows to MailState.arrivals and hands
+// the fresh IDs to `you-got-mail chime`.
+const accounts = [{id: 'work', ok: true, checkedAt: 100}, {id: 'home', ok: true, checkedAt: 100}];
+
+function soundPanel(settings = {}) {
+  const p = panelHarness();
+  Object.assign(p, {soundEnabled: true}, settings);
+  const chimes = [];
+  p.Util.execArgv = argv => chimes.push(Array.from(argv));
+  return {p, chimes};
+}
+
+function list(rows, extra = {}) {
+  return JSON.stringify(Object.assign({ok: true, unread: rows.length, inboxes: accounts,
+    messages: rows.map(([id, ts]) => ({id, ts, subject: 'Hello'}))}, extra));
+}
+
+const chimed = argv => argv.slice(argv.indexOf('--') + 1);
+
+test('the panel calls chime with the arrival IDs, only on page 1', () => {
+  const {p, chimes} = soundPanel();
+  p.applyPayload(list([['work:old', 10]]));
+  p.applyPayload(list([['work:new', 20], ['work:old', 10]]));
+  assert.deepEqual(chimes, [
+    ['/test/you-got-mail', 'chime', '--cooldown', '60', '--volume', '100', '--', 'work:new'],
+  ]);
+  p.listPage = p.pageToken = 'page2';
+  p.applyPayload(list([['work:newer', 30]]));
+  assert.equal(chimes.length, 1);
+});
+
+test('paging returns none and leaves the arrival state unchanged', () => {
+  const {p, chimes} = soundPanel();
+  p.applyPayload(list([['work:old', 10]]));
+  const before = p.arrivalState;
+  p.listPage = p.pageToken = 'page2';
+  p.applyPayload(list([['work:new', 20]], {nextPage: 'page3'}));
+  assert.deepEqual(Array.from(p.messages, row => row.id), ['work:new']); // Accepted and shown.
+  assert.equal(p.arrivalState, before);
+  assert.equal(chimes.length, 0);
+});
+
+test('nothing is called while soundEnabled is off, but the state still updates', () => {
+  const {p, chimes} = soundPanel({soundEnabled: false});
+  p.applyPayload(list([['work:old', 10]]));
+  const baseline = p.arrivalState;
+  assert.notEqual(baseline, null);
+  p.applyPayload(list([['work:new', 20], ['work:old', 10]]));
+  assert.equal(chimes.length, 0);
+  assert.notEqual(p.arrivalState, baseline);
+  p.soundEnabled = true;
+  p.applyPayload(list([['work:new', 20], ['work:old', 10]]));
+  assert.equal(chimes.length, 0); // work:new was recorded while the sound was off.
+});
+
+test('a payload rejected by acceptsList leaves the arrival state unchanged', () => {
+  const {p, chimes} = soundPanel();
+  p.applyPayload(list([['work:old', 10]]));
+  const before = p.arrivalState;
+  p.mailboxRevision += 1; // A read finished while this list was in flight.
+  p.applyPayload(list([['work:new', 20], ['work:old', 10]]));
+  assert.equal(p.refreshPending, true);
+  assert.equal(p.arrivalState, before);
+  assert.equal(chimes.length, 0);
+  p.listRevision = p.mailboxRevision; // The follow-up refresh is accepted.
+  p.applyPayload(list([['work:new', 20], ['work:old', 10]]));
+  assert.deepEqual(chimes.map(chimed), [['work:new']]);
+});
+
+test('a dismissed ID is neither announced nor passed to chime', () => {
+  const {p, chimes} = soundPanel();
+  p.applyPayload(list([['work:old', 10]]));
+  p.dismissedIds = {'work:gone': {message: {id: 'work:gone', ts: 20}, index: 0}};
+  p.applyPayload(list([['work:gone', 20], ['work:old', 10]]));
+  assert.equal(chimes.length, 0);
+  p.applyPayload(list([['work:new', 30], ['work:gone', 20], ['work:old', 10]]));
+  assert.deepEqual(chimes.map(chimed), [['work:new']]);
+});
+
+test('two accounts that each receive one message still mean one chime', () => {
+  const {p, chimes} = soundPanel();
+  p.applyPayload(list([['work:old', 10], ['home:old', 5]]));
+  p.applyPayload(list([['home:new', 40], ['work:new', 30], ['work:old', 10], ['home:old', 5]]));
+  assert.deepEqual(chimes.map(chimed), [['home:new', 'work:new']]);
+});
+
+test('chime gets --cooldown and --volume from the settings, and --file only when set', () => {
+  const {p, chimes} = soundPanel({soundCooldownSec: 0, soundVolume: 35, soundFile: '~/Sounds/mail.ogg'});
+  p.applyPayload(list([['work:old', 10]]));
+  p.applyPayload(list([['work:new', 20], ['work:old', 10]]));
+  assert.deepEqual(chimes, [['/test/you-got-mail', 'chime', '--cooldown', '0', '--volume', '35',
+    '--file', '~/Sounds/mail.ogg', '--', 'work:new']]);
+  p.soundFile = '';
+  p.applyPayload(list([['work:newer', 30], ['work:new', 20], ['work:old', 10]]));
+  assert.deepEqual(chimes[1], ['/test/you-got-mail', 'chime', '--cooldown', '0', '--volume', '35',
+    '--', 'work:newer']);
+});
+
+test('IDs that fail validId are not passed, and no valid ID means no call', () => {
+  const {p, chimes} = soundPanel();
+  p.applyPayload(list([['work:old', 10]]));
+  p.applyPayload(list([['work:bad id', 30], ['work:good', 20], ['work:old', 10]]));
+  assert.deepEqual(chimes.map(chimed), [['work:good']]);
+  p.applyPayload(list([['work:bad!', 40], ['work:bad id', 30], ['work:good', 20], ['work:old', 10]]));
+  assert.equal(chimes.length, 1);
+});
+
+test('the first payload after start records a baseline and makes no call', () => {
+  const {p, chimes} = soundPanel();
+  assert.equal(p.arrivalState, null);
+  p.applyPayload(list([['work:one', 20], ['home:two', 10]]));
+  assert.equal(chimes.length, 0);
+  assert.deepEqual(Object.keys(p.arrivalState.accounts).sort(), ['home', 'work']);
+});
+
+test('unreachable and unparsable payloads leave the arrival state unchanged', () => {
+  const {p, chimes} = soundPanel();
+  p.applyPayload(list([['work:old', 10]]));
+  const before = p.arrivalState;
+  p.applyPayload(JSON.stringify({ok: false, error: 'offline', inboxes: [{id: 'work', ok: false}],
+    messages: [{id: 'work:new', ts: 20}]}));
+  assert.equal(p.arrivalState, before);
+  p.applyPayload('not JSON');
+  assert.equal(p.arrivalState, before);
+  assert.equal(chimes.length, 0);
+  p.applyPayload(list([['work:new', 20], ['work:old', 10]])); // Mail from the outage chimes once.
+  assert.deepEqual(chimes.map(chimed), [['work:new']]);
+});

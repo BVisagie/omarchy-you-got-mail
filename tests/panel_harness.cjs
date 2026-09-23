@@ -23,6 +23,7 @@ module.exports = function panelHarness() {
     auxiliaryMenu: {contentY: 0, contentHeight: 500, height: 100, revealCursor() {}},
     keyCatcher: {forceActiveFocus() {}}, Style: {space(value) {return value;}},
     reachable: true, hasUnread: true, pageSize: 25, script: '/test/you-got-mail',
+    arrivalState: null, soundEnabled: false, soundCooldownSec: 60, soundVolume: 100, soundFile: '',
     listProc: {running: false}, readProc: {running: false}, readAllProc: {running: false},
     markAllArmTimer: {running: false, stop() {}, restart() {}},
     list: {positionViewAtIndex() {}}, ListView: {Contain: 0},
