@@ -271,7 +271,7 @@ Panel {
     if (!(n > 0)) n = 60
     return Math.max(15, Math.min(3600, n)) * 1000
   }
-  // shell.json is edited by hand, so accept the usual spellings of "on".
+  // shell.json is edited by hand: accept true, "true" and 1.
   readonly property bool soundEnabled: {
     var value = setting("soundEnabled", false)
     return value === true || value === "true" || value === 1

@@ -23,8 +23,8 @@ you-got-mail read-all
 you-got-mail chime [--file PATH] [--volume 0-100] [--cooldown SEC] [-- ID ...]
 you-got-mail accounts ...
 
-The panel calls list, read, read-all, and chime. Accounts are added in a
-terminal:
+The panel calls list, read, read-all, and chime.
+Accounts are added in a terminal:
 
   you-got-mail accounts add
   you-got-mail accounts login [id]

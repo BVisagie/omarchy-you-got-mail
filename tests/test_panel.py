@@ -56,6 +56,7 @@ class PanelContractTests(unittest.TestCase):
         for key, value in expected.items():
             self.assertIs(type(widget["defaults"][key]), type(value), key)
             self.assertEqual(widget["defaults"][key], value, key)
+            self.assertIs(type(schema[key]["defaultValue"]), type(value), key)
             self.assertEqual(schema[key]["defaultValue"], value, key)
 
     def test_surfaces_partial_warning(self) -> None:

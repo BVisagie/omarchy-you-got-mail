@@ -212,9 +212,10 @@ or was offline gets one sound, on the next successful refresh. It plays at
 most once every `soundCooldownSec` seconds, and never while Do Not Disturb
 is on.
 
-To use your own sound, set `soundFile` to a local audio file, such as
-`~/Music/ding.oga`. Leave it empty for the bundled clip. Playback uses
-`pw-play` (PipeWire), or `paplay` if `pw-play` is missing.
+To use your own sound, set `soundFile` to a local audio file. Use a full
+path or one starting with `~`, such as `~/Music/ding.oga`. Sounds longer
+than 15 seconds are cut off. Leave it empty for the bundled clip. Playback
+uses `pw-play` (PipeWire), or `paplay` if `pw-play` is missing.
 
 To hear it now, run:
 
@@ -223,8 +224,11 @@ To hear it now, run:
 ```
 
 (`you-got-mail chime` once you have linked it onto PATH.) It plays the
-bundled clip; add `--file PATH` or `--volume 0-100` to try your own. While
-Do Not Disturb is on it prints `{"ok": true, "skipped": "dnd"}` instead.
+bundled clip, not your `soundFile`: add `--file` with the same path to test
+that, or `--volume 0-100` to try a different volume. While Do Not Disturb
+is on it prints `{"ok": true, "skipped": "dnd"}` instead. If it prints that
+with Do Not Disturb off, `omarchy-shell notifications isDnd` is failing;
+the sound needs Omarchy 4.0 or later.
 
 The sound comes with the next refresh, so it can lag new mail by up to one
 refresh interval. Mail you read elsewhere before then never plays it.
