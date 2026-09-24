@@ -76,7 +76,9 @@ return one JSON object. `_bootstrap.run(main)` is the last-resort wrap.
 
 - `id` is **local to this account**. The orchestrator prefixes it so the
   panel can route `read` back to you.
-- `ts` is unix seconds, UTC.
+- `ts` is unix seconds, UTC: when the server received the message, not
+  the sender's `Date:` header, which can lag or run ahead. New-mail
+  detection compares it across refreshes.
 - `url` must be `https://…` or empty. The panel rejects anything else.
   Empty is allowed (IMAP without webmail).
 - `searchUrl` is the account's webmail URL, also HTTPS or empty. Accounts

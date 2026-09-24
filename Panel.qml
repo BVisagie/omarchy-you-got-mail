@@ -28,6 +28,8 @@ Panel {
   readonly property string iconConfirm: "\uF00C"
   readonly property string iconPrev: "\uF053"
   readonly property string iconNext: "\uF054"
+  readonly property string iconSoundOn: "\uF028"
+  readonly property string iconSoundOff: "\uF026"
 
   readonly property color foreground: bar ? bar.foreground : Color.foreground
   readonly property color accent: Color.accent
@@ -77,6 +79,10 @@ Panel {
   property var accountChecks: ({})
   property double allCheckedAt: 0
   property string accountSignature: ""
+  // New-mail detection state from MailState.arrivals; null until the first page 1.
+  property var arrivalState: null
+  // Date.now() of the last sound toggle request; see toggleSound.
+  property double lastSoundToggle: 0
   readonly property var accountMenu: MailState.accountEntries(inboxes, accountChecks, now)
   readonly property var shortcutHelp: MailState.shortcuts()
 
@@ -137,6 +143,7 @@ Panel {
   function handleTextKey(t) {
     if (t === "?") { showView("help"); return }
     if (t === "m") { showView("accounts"); return }
+    if (t === "s") { toggleSound(); return }
     if (t === "r") { refresh(); return }
     if (auxiliaryView !== "") {
       if (t === "o") activateSelection()
@@ -248,6 +255,49 @@ Panel {
     return true
   }
 
+  // One call per refresh with every new ID; `chime` dedupes across widget
+  // copies and applies the cooldown and Do Not Disturb.
+  function playChime(ids) {
+    var valid = ids.filter(function(id) { return validId(id) })
+    if (!root.soundEnabled || valid.length === 0) return
+    var argv = [root.script, "chime", "--cooldown", String(root.soundCooldownSec),
+                "--volume", String(root.soundVolume)]
+    if (root.soundFile !== "") argv.push("--file", root.soundFile)
+    Util.execArgv(argv.concat(["--"], valid))
+  }
+
+  // Applied locally first so the panel redraws at once, then written to this
+  // widget's shell.json entry, which comes back to every copy through the bar.
+  // Without the shell API the change lasts for this session only.
+  function persistSettings(values) {
+    var entry = { id: root.moduleName }
+    for (var existing in root.settings) if (existing !== "id") entry[existing] = root.settings[existing]
+    for (var key in values) entry[key] = values[key]
+    root.settings = entry
+    if (root.bar && root.bar.shell && typeof root.bar.shell.updateEntryInline === "function")
+      root.bar.shell.updateEntryInline(root.moduleName, entry)
+  }
+
+  // Turning the sound on plays it once so you know what you will hear. No `--`
+  // makes it the manual test: Do Not Disturb applies, the cooldown does not.
+  // Turning it off also drops a chime still waiting for the cooldown or a retry.
+  // A request within 300 ms of the last one is ignored, so a held `s` flips once.
+  function toggleSound() {
+    var now = Date.now()
+    var repeated = now - root.lastSoundToggle < 300
+    root.lastSoundToggle = now
+    if (repeated) return
+    var next = !root.soundEnabled
+    persistSettings({ soundEnabled: next })
+    if (!next) {
+      Util.execArgv([root.script, "chime", "--cancel"])
+      return
+    }
+    var argv = [root.script, "chime", "--volume", String(root.soundVolume)]
+    if (root.soundFile !== "") argv.push("--file", root.soundFile)
+    Util.execArgv(argv)
+  }
+
   readonly property int pageSize: {
     var n = parseInt(setting("max", 25), 10)
     if (!(n > 0)) n = 25
@@ -258,6 +308,22 @@ Panel {
     if (!(n > 0)) n = 60
     return Math.max(15, Math.min(3600, n)) * 1000
   }
+  // shell.json is edited by hand: accept true, "true" and 1.
+  readonly property bool soundEnabled: {
+    var value = setting("soundEnabled", false)
+    return value === true || value === "true" || value === 1
+  }
+  readonly property int soundCooldownSec: {
+    var n = parseInt(setting("soundCooldownSec", 60), 10)
+    if (!(n >= 0)) n = 60
+    return Math.max(0, Math.min(3600, n))
+  }
+  readonly property int soundVolume: {
+    var n = parseInt(setting("soundVolume", 100), 10)
+    if (!(n >= 0)) n = 100
+    return Math.max(0, Math.min(100, n))
+  }
+  readonly property string soundFile: String(setting("soundFile", "") || "").trim()
 
   function refresh() {
     if (root.markAllBusy) return
@@ -582,6 +648,13 @@ Panel {
       nextPage = validToken(data.nextPage) ? data.nextPage : ""
       if (cursor > messages.length - 1) cursor = messages.length - 1
       if (cursor < 0 && messages.length > 0) cursor = 0
+      // Only page 1 shows what is new; paging never chimes or moves the state.
+      if (root.listPage === "") {
+        var arrived = MailState.arrivals(root.arrivalState, reported, kept,
+                                         validToken(data.nextPage), root.now)
+        root.arrivalState = arrived.state
+        playChime(arrived.fresh)
+      }
     } catch (e) {
       if (!root.refreshPending) root.reconciling = false
       reachable = false
@@ -799,6 +872,16 @@ Panel {
               foreground: root.foreground
               hoverColor: root.accent
               onClicked: root.showView("")
+            }
+
+            PanelActionButton {
+              iconText: root.soundEnabled ? root.iconSoundOn : root.iconSoundOff
+              tooltipText: root.soundEnabled
+                ? "Turn off the new-mail sound (s)"
+                : "Turn on the new-mail sound (s)"
+              foreground: root.soundEnabled ? root.accent : root.foreground
+              hoverColor: root.accent
+              onClicked: root.toggleSound()
             }
 
             PanelActionButton {

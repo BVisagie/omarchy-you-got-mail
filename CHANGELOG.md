@@ -2,6 +2,33 @@
 
 Versions match `manifest.json`. Git tags are created at release time.
 
+## 2.9.0
+
+An optional "You've got mail!" sound when new unread mail arrives.
+
+- Off by default. Turn it on or off with the speaker button in the panel
+  header or `s`, or with the `soundEnabled` widget setting. The button and
+  `s` play it once as you turn it on (unless Do Not Disturb is on), and
+  silence a sound still waiting as you turn it off. `soundCooldownSec`,
+  `soundVolume` and `soundFile` set the quiet time between sounds, the
+  volume, and your own sound file. Mail that arrives during the quiet time
+  gets one sound when it is up. A `soundFile` that can't be played falls
+  back to the bundled clip.
+- It plays once per refresh that finds new mail, and only once even with a
+  bar on several monitors. Starting or reloading the plugin, paging, and
+  reading other mail never play it. Do Not Disturb silences it.
+- Mail that arrived during sleep or a network outage gets one sound, on
+  the next successful refresh.
+- `you-got-mail chime` plays the sound now, as a test. It honours Do Not
+  Disturb.
+- Playback uses `pw-play`, falling back to `paplay`. If the sound can't
+  play, for example while PipeWire restarts, it tries again a few times
+  over the next minute and a half. The bundled voice is AI-generated.
+- IMAP message times now come from when the server received the mail
+  (INTERNALDATE), falling back to the `Date:` header, so the merged list
+  sorts in delivery order.
+- Accounts, credentials and existing settings are unchanged.
+
 ## 2.8.0
 
 Reliable read actions and small controls for the same unread-only pile.

@@ -82,7 +82,7 @@ That fast-forwards the git checkout in
 `~/.config/omarchy-you-got-mail/` (accounts and secrets). See
 [CHANGELOG.md](CHANGELOG.md) for what changed in each release.
 
-Version 2.8.0 uses your existing accounts and widget settings; no migration
+Version 2.9.0 uses your existing accounts and widget settings; no migration
 or new sign-in is required unless a provider's login has expired. Plugin
 changes reload automatically. Last-check times start fresh after a reload.
 
@@ -120,6 +120,7 @@ If you never add an account, a single Gmail account is assumed. The first
 | Middle-click the bar icon, refresh button, or `r` | refresh now |
 | Accounts button or `m` | account counts, individual inbox links, Add account, setup guide |
 | Help button or `?` | keyboard and mouse controls |
+| Speaker button or `s` | turn the new-mail sound on or off |
 | Header envelope-open or `A` | mark all unread as read (click or press twice to confirm) |
 | `a` | mark the message under the cursor as read, without opening it |
 | Header external-link or `i` | same as right-click |
@@ -133,6 +134,9 @@ If you never add an account, a single Gmail account is assumed. The first
 
 The bar tooltip shows the unread count, or why mail needs attention. A
 `!` on the mailbox means mail needs attention, not unread mail.
+
+The widget can also say "You've got mail!" when new mail arrives. It is
+off by default; see [Sound](#sound).
 
 **Accounts** keeps the merged unread list as your main view. It shows each
 account's current count and opens just that inbox, even if it has no unread
@@ -171,14 +175,19 @@ to the current page.
 
 ## Configuration
 
-Page size and refresh interval are **bar widget settings** on the
-`bvisagie.you-got-mail` entry in `~/.config/omarchy/shell.json` (Omarchy's
-widget settings UI writes the same keys):
+Page size, refresh interval, and the new-mail sound are **bar widget
+settings** on the `bvisagie.you-got-mail` entry in
+`~/.config/omarchy/shell.json` (Omarchy's widget settings UI writes the
+same keys):
 
 | Key | Default | Range |
 |---|---|---|
 | `max` | 25 | 1–50 (messages per panel page) |
 | `refreshIntervalSec` | 60 | 15–3600 |
+| `soundEnabled` | `false` | `true` plays the [new-mail sound](#sound) |
+| `soundCooldownSec` | 60 | 0–3600 (seconds before the sound can play again) |
+| `soundVolume` | 100 | 0–100 |
+| `soundFile` | empty | path to your own sound file (empty plays the bundled clip) |
 
 Accounts, tokens, and passwords stay in
 `~/.config/omarchy-you-got-mail/` — they do not belong in `shell.json`.
@@ -189,6 +198,52 @@ An optional leftover `~/.config/omarchy-you-got-mail/config` with
 CLI also honours `YOU_GOT_MAIL_MAX`. See [docs/ACCOUNTS.md](docs/ACCOUNTS.md)
 and [docs/PROVIDERS.md](docs/PROVIDERS.md) for `YOU_GOT_MAIL_IMAP_PASSWORD`
 and provider environment.
+
+## Sound
+
+The widget can say "You've got mail!" when new unread mail arrives. It is
+off by default. The speaker button in the panel header, or `s`, turns it on
+or off. It plays the sound once when you turn it on (unless Do Not Disturb
+is on), and turning it off also silences a sound still waiting to play. You
+can also set `soundEnabled` to `true` in the widget settings, and
+`soundVolume` to make it quieter.
+
+It plays once when a refresh finds new mail, however many messages
+arrived, and only once even with a bar on several monitors. It stays quiet
+when the plugin starts or reloads, when you page, and when reading mail
+brings older unread into view. Mail that arrived while the computer slept
+or was offline gets one sound, on the next successful refresh. It plays at
+most once every `soundCooldownSec` seconds; mail that arrives in between
+gets one sound when that time is up. It never plays while Do Not Disturb
+is on.
+
+To use your own sound, set `soundFile` to a local audio file. Use a full
+path or one starting with `~`, such as `~/Music/ding.oga`. Sounds longer
+than 15 seconds are cut off. Leave it empty for the bundled clip, which
+also stands in for a file that can't be played. Playback uses `pw-play`
+(PipeWire), or `paplay` if `pw-play` is missing. If the sound can't play,
+for example while PipeWire restarts, it tries again a few times over the
+next minute and a half.
+
+To hear it now, run:
+
+```bash
+~/.config/omarchy/plugins/bvisagie.you-got-mail/bin/you-got-mail chime
+```
+
+(`you-got-mail chime` once you have linked it onto PATH.) It plays the
+bundled clip; add `--file` with your `soundFile` path to test that, or
+`--volume 0-100` to try a different volume. If your file can't be played,
+you hear the bundled clip and the output says why under `fallback`. While
+Do Not Disturb is on it prints `{"ok": true, "skipped": "dnd"}` instead. If
+it prints that with Do Not Disturb off, `omarchy-shell notifications isDnd`
+is failing; the sound needs Omarchy 4.0 or later.
+
+The sound comes with the next refresh, so it can lag new mail by up to one
+refresh interval, or until the quiet time is up. Mail you read elsewhere
+before then never plays it.
+
+The bundled voice is AI-generated; see [sounds/README.md](sounds/README.md).
 
 ## Removing it
 

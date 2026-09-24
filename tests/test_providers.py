@@ -347,6 +347,99 @@ class ImapFolderTests(unittest.TestCase):
         fake.login.assert_called_once_with("u", "pw")
 
 
+class ImapListTimestampTests(unittest.TestCase):
+    # 1996-07-17 09:44:25 UTC; mid-July keeps the result clear of DST changes.
+    INTERNALDATE = b'INTERNALDATE "17-Jul-1996 02:44:25 -0700"'
+    INTERNALDATE_TS = 837596665
+    # The sender's Date: header: 2031-01-01 00:00:00 UTC.
+    DATE_TS = 1924992000
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        cls.imap = load_provider("imap")
+
+    def _header(self, subject: bytes = b"Hello") -> bytes:
+        # Subject first, so hostile text sits on the literal's first line.
+        return (
+            b"Subject: " + subject + b"\r\n"
+            b"From: Ada <ada@example.test>\r\n"
+            b"Date: Wed, 01 Jan 2031 00:00:00 +0000\r\n\r\n"
+        )
+
+    def _fetched(self, header: bytes, before: bytes = b"", after: bytes = b"") -> list:
+        prefix = b"1 (UID 5 " + before + b"BODY[HEADER.FIELDS (FROM SUBJECT DATE)] {%d}" % len(header)
+        return [(prefix, header), after + b")"]
+
+    def _list(self, fetched: list) -> tuple[dict, list]:
+        fetches = []
+
+        class FakeClient:
+            def select(self, folder, readonly=False):
+                return "OK", []
+
+            def uid(self, cmd, *args):
+                if cmd == "search":
+                    return "OK", [b"5"]
+                if cmd == "fetch":
+                    fetches.append(args)
+                    return "OK", fetched
+                raise AssertionError(cmd)
+
+            def logout(self):
+                return "OK", []
+
+        with patch.object(self.imap, "_connect", return_value=FakeClient()):
+            payload = capture_json(
+                self.imap.cmd_list,
+                {"host": "h", "user": "u", "folders": ["INBOX"]},
+                "pw",
+                10,
+            )
+        return payload, fetches
+
+    def test_ts_comes_from_internaldate(self) -> None:
+        payload, fetches = self._list(
+            self._fetched(self._header(), before=self.INTERNALDATE + b" ")
+        )
+        self.assertEqual(
+            fetches,
+            [("5", "(INTERNALDATE BODY.PEEK[HEADER.FIELDS (FROM SUBJECT DATE)])")],
+        )
+        [row] = payload["messages"]
+        self.assertEqual(row["ts"], self.INTERNALDATE_TS)
+        self.assertEqual(row["subject"], "Hello")
+        self.assertEqual(row["from"], "Ada")
+
+    def test_internaldate_after_the_literal_is_used(self) -> None:
+        payload, _ = self._list(
+            self._fetched(self._header(), after=b" " + self.INTERNALDATE)
+        )
+        self.assertEqual(payload["messages"][0]["ts"], self.INTERNALDATE_TS)
+
+    def test_falls_back_to_date_header_without_internaldate(self) -> None:
+        payload, _ = self._list(self._fetched(self._header()))
+        self.assertEqual(payload["messages"][0]["ts"], self.DATE_TS)
+
+    def test_unparseable_internaldate_falls_back_to_date_header(self) -> None:
+        payload, _ = self._list(
+            self._fetched(
+                self._header(), before=b'INTERNALDATE "17-Foo-1996 02:44:25 -0700" '
+            )
+        )
+        self.assertTrue(payload["ok"])
+        self.assertEqual(payload["messages"][0]["ts"], self.DATE_TS)
+
+    def test_internaldate_text_in_the_header_does_not_win(self) -> None:
+        header = self._header(b'INTERNALDATE "01-Jan-2040 00:00:00 +0000"')
+        payload, _ = self._list(self._fetched(header, after=b" " + self.INTERNALDATE))
+        self.assertEqual(payload["messages"][0]["ts"], self.INTERNALDATE_TS)
+
+    def test_internaldate_text_in_the_header_does_not_stand_in(self) -> None:
+        header = self._header(b'INTERNALDATE "01-Jan-2040 00:00:00 +0000"')
+        payload, _ = self._list(self._fetched(header))
+        self.assertEqual(payload["messages"][0]["ts"], self.DATE_TS)
+
+
 class HeyReadAllTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls) -> None:

@@ -68,6 +68,25 @@ def _timestamp(msg: Message) -> int:
         return 0
 
 
+def _internaldate(fetched: list) -> int | None:
+    """When the server received the mail, from a FETCH response.
+
+    Servers put INTERNALDATE before or after the header literal. Search only
+    the protocol text around it: the literal is the sender's header bytes.
+    """
+    for item in fetched:
+        part = item[0] if isinstance(item, tuple) else item
+        if not isinstance(part, bytes):
+            continue
+        try:
+            parsed = imaplib.Internaldate2tuple(part)
+            if parsed is not None:
+                return int(time.mktime(parsed))
+        except (KeyError, OverflowError, OSError, ValueError):
+            continue
+    return None
+
+
 def _snippet(msg: Message) -> str:
     text = ""
     if msg.is_multipart():
@@ -156,7 +175,7 @@ def cmd_list(acc: dict, password: str, limit: int) -> None:
                 typ, fetched = client.uid(
                     "fetch",
                     uid,
-                    "(BODY.PEEK[HEADER.FIELDS (FROM SUBJECT DATE)])",
+                    "(INTERNALDATE BODY.PEEK[HEADER.FIELDS (FROM SUBJECT DATE)])",
                 )
                 if typ != "OK" or not fetched:
                     continue
@@ -165,6 +184,9 @@ def cmd_list(acc: dict, password: str, limit: int) -> None:
                     if isinstance(item, tuple):
                         blob += item[1]
                 msg = email.message_from_bytes(blob)
+                ts = _internaldate(fetched)
+                if ts is None:
+                    ts = _timestamp(msg)
                 local_id = f"{folder}/{uid}"
                 web = str(acc.get("webmail") or "")
                 messages.append(
@@ -174,7 +196,7 @@ def cmd_list(acc: dict, password: str, limit: int) -> None:
                 "subject": one_line(_decode_header(msg.get("Subject"))) or "(no subject)",
                 "from": one_line(_sender(msg)),
                         "snippet": "",
-                        "ts": _timestamp(msg),
+                        "ts": ts,
                         "labels": [folder] if folder.upper() != "INBOX" else [],
                         "url": web,
                     }

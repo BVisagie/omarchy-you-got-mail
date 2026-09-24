@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "id": "bvisagie.you-got-mail",
   "name": "You've Got Mail",
-  "version": "2.8.0",
+  "version": "2.9.0",
   "author": "BVisagie",
   "description": "Unread-only mailbox for Gmail, Outlook, Fastmail, IMAP, and HEY. One pile across accounts; click a row to open it.",
   "homepage": "https://github.com/BVisagie/omarchy-you-got-mail",
@@ -21,7 +21,11 @@
     "defaultSection": "right",
     "defaults": {
       "max": 25,
-      "refreshIntervalSec": 60
+      "refreshIntervalSec": 60,
+      "soundEnabled": false,
+      "soundCooldownSec": 60,
+      "soundVolume": 100,
+      "soundFile": ""
     },
     "schema": [
       {
@@ -41,6 +45,38 @@
         "max": 3600,
         "step": 15,
         "defaultValue": 60
+      },
+      {
+        "key": "soundEnabled",
+        "type": "boolean",
+        "label": "Sound on new mail",
+        "description": "Play \"You've got mail!\" when new unread mail arrives.",
+        "defaultValue": false
+      },
+      {
+        "key": "soundCooldownSec",
+        "type": "integer",
+        "label": "Sound cooldown (seconds)",
+        "min": 0,
+        "max": 3600,
+        "step": 15,
+        "defaultValue": 60
+      },
+      {
+        "key": "soundVolume",
+        "type": "integer",
+        "label": "Sound volume",
+        "min": 0,
+        "max": 100,
+        "step": 1,
+        "defaultValue": 100
+      },
+      {
+        "key": "soundFile",
+        "type": "path",
+        "label": "Sound file",
+        "description": "Optional. Leave empty for the bundled clip.",
+        "defaultValue": ""
       }
     ]
   }
