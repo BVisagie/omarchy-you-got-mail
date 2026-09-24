@@ -76,8 +76,11 @@ function updateChecks(previous, inboxes) {
 // Decides which rows of a reachable page-1 list are new mail. State is kept
 // per account ID (the part of a row ID before ":"), as { seen, mark }, plus
 // the shared floor: the oldest ts of the previous page 1 when it was full.
-// While any account fails, its rows are missing from page 1, so the floor
-// may rise but never drops or clears.
+// A failing account's rows are missing from page 1, so the shared floor
+// can't vouch for them: from its first failed call its entry holds, as
+// held.floor (null for none), the floor that call judged by, which was set
+// by a page that still had its rows. Its rows are judged by that floor on
+// the call it is back.
 function arrivals(state, inboxes, messages, pageFull, now) {
   var before = state && state.accounts ? state.accounts : {}
   var floor = state && typeof state.floor === "number" ? state.floor : null
@@ -95,9 +98,10 @@ function arrivals(state, inboxes, messages, pageFull, now) {
     var ts = Number(row.ts)
     if (!isFinite(ts)) ts = 0
     var known = baseline(accountId)
+    var limit = known && known.held ? known.held.floor : floor
     if (known && known.seen.indexOf(id) < 0
         && (known.mark === null || ts >= known.mark)
-        && (floor === null || ts > floor))
+        && (limit === null || ts > limit))
       fresh.push(id)
     var page = pages[accountId] || (pages[accountId] = { ids: [], newest: null })
     page.ids.push(id)
@@ -111,21 +115,21 @@ function arrivals(state, inboxes, messages, pageFull, now) {
     var box = inboxes[b]
     if (!box || !box.id) continue
     var old = baseline(box.id)
-    // A failed account keeps its state; one never ok yet gets no baseline.
+    // A failed account keeps its state and the floor it holds; one never ok
+    // yet gets no baseline.
     if (box.ok === true) accounts[box.id] = remember(old, pages[box.id])
-    else if (old) accounts[box.id] = old
+    else if (old && old.held) accounts[box.id] = old
+    else if (old) accounts[box.id] = { seen: old.seen, mark: old.mark, held: { floor: floor } }
   }
-  var nextFloor = pageFull && oldest !== null ? oldest : null
-  var failing = inboxes.some(function(entry) { return !entry || entry.ok !== true })
-  if (failing && floor !== null && (nextFloor === null || nextFloor < floor)) nextFloor = floor
   return {
-    state: { accounts: accounts, floor: nextFloor },
+    state: { accounts: accounts, floor: pageFull && oldest !== null ? oldest : null },
     fresh: fresh
   }
 }
 
-// Moves an ok account's page-1 IDs to the recent end of the 200 it keeps and
-// raises its mark to its newest row dated no later than now + 300 s.
+// Moves an ok account's page-1 IDs to the recent end of the 200 it keeps,
+// raises its mark to its newest row dated no later than now + 300 s and
+// drops any floor it held while failing.
 function remember(entry, page) {
   var seen = entry ? entry.seen : []
   var mark = entry ? entry.mark : null
