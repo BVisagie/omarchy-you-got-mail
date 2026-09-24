@@ -217,7 +217,9 @@ To use your own sound, set `soundFile` to a local audio file. Use a full
 path or one starting with `~`, such as `~/Music/ding.oga`. Sounds longer
 than 15 seconds are cut off. Leave it empty for the bundled clip, which
 also stands in for a file that can't be played. Playback uses `pw-play`
-(PipeWire), or `paplay` if `pw-play` is missing.
+(PipeWire), or `paplay` if `pw-play` is missing. If the sound can't play,
+for example while PipeWire restarts, it tries again a few times over the
+next minute and a half.
 
 To hear it now, run:
 

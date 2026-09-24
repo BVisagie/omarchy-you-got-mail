@@ -4,7 +4,8 @@ Omarchy runs one copy of the bar widget per monitor, and each copy polls on
 its own. Every copy passes its new message IDs here; a shared record of the
 IDs already announced, and of the last chime, makes the sound play once per
 arrival and at most once per cooldown. Mail that arrives during the cooldown
-gets one chime when it ends. Do Not Disturb silences it.
+gets one chime when it ends. A chime the player fails to play is tried again
+a few times. Do Not Disturb silences it.
 """
 
 from __future__ import annotations
@@ -33,6 +34,8 @@ MAX_COOLDOWN = 3600
 ANNOUNCED_TTL = 24 * 60 * 60
 DND_TIMEOUT = 2
 PLAY_TIMEOUT = 15
+PLAY_RETRIES = 3
+PLAY_RETRY_DELAY = 30
 STALE_AFTER = 60  # a waiting chime this far past due is presumed gone (or is sleeping through a suspend)
 
 _sleep = time.sleep  # the tests wait without waiting
@@ -112,13 +115,18 @@ def _is_time(value: object) -> bool:
 
 
 def _pending(raw: object) -> dict | None:
-    """The chime waiting for the cooldown to end, or None when there is none or it is junk."""
+    """The chime waiting for the cooldown to end or to try again; None when there is none or it is junk."""
     if not isinstance(raw, dict):
         return None
     due, token = raw.get("due"), raw.get("token")
     if not _is_time(due) or not isinstance(token, str) or not TOKEN_RE.fullmatch(token):
         return None
     return {"due": int(due), "token": token}
+
+
+def _live(pending: dict | None, now: int) -> bool:
+    """Whether a chime is still waiting; one far past due is presumed gone."""
+    return pending is not None and pending["due"] >= now - STALE_AFTER
 
 
 def _load_state(path: Path, now: int) -> tuple[dict[str, int], int, dict | None]:
@@ -176,7 +184,7 @@ def _claim(ids: list[str], silenced: bool, cooldown: int) -> str | dict | None:
         if silenced:
             claim = "dnd"
         elif now - last < cooldown:
-            if pending and pending["due"] >= now - STALE_AFTER:
+            if _live(pending, now):
                 claim = "queued"  # the chime already waiting covers these IDs
             else:
                 claim = pending = {"due": last + cooldown, "token": secrets.token_hex(8)}
@@ -202,6 +210,21 @@ def _claim_pending(token: str, silenced: bool) -> str | None:
         return "dnd" if silenced else None
 
 
+def _claim_retry() -> dict | None:
+    """After a failed play, queue another try under the lock.
+
+    Return the pending chime to wait for, or None when a waiting chime already covers this mail.
+    """
+    with _locked() as state_file:
+        now = int(time.time())
+        announced, last, pending = _load_state(state_file, now)
+        if _live(pending, now):
+            return None
+        pending = {"due": now + PLAY_RETRY_DELAY, "token": secrets.token_hex(8)}
+        _save_state(state_file, announced, last, pending)
+        return pending
+
+
 def _wait_for(pending: dict) -> str | None:
     """Sleep, holding no lock, until the pending chime is due; then claim it."""
     _sleep(max(0, pending["due"] - time.time()))
@@ -219,52 +242,80 @@ def _players(path: str, volume: int | None) -> list[list[str]]:
     return [pw_play + [path], paplay + [path]]
 
 
-def _play(path: str, volume: int | None) -> dict:
+def _play(path: str, volume: int | None) -> tuple[dict, bool]:
     """Try pw-play, then paplay only if pw-play cannot start (never twice).
 
     If the player rejects a file other than the bundled clip (exits with an
     error), play the bundled clip the same way instead. Not after a timeout or
     a signal: the file played, or someone stopped it.
+
+    Also say whether trying again later might work: only when the player
+    exited with an error, e.g. while the sound server restarts.
     """
     for argv in _players(path, volume):
         try:
             proc = subprocess.run(argv, capture_output=True, timeout=PLAY_TIMEOUT, check=False)
         except subprocess.TimeoutExpired:
-            return _fail(f"{argv[0]} timed out")
+            return _fail(f"{argv[0]} timed out"), False
         except OSError:
             continue
         if proc.returncode != 0:
             stderr = one_line(proc.stderr.decode("utf-8", "replace"))
             detail = f": {stderr}" if stderr else ""
             if proc.returncode > 0 and path != str(BUNDLED_SOUND):
-                return _noted(_play(str(BUNDLED_SOUND), volume), f"{argv[0]} could not play {path}{detail}")
-            return _fail(f"{argv[0]} exited {proc.returncode}{detail}")
-        return {"ok": True, "played": argv[0]}
-    return _fail("no audio player found (pw-play or paplay)")
+                result, retryable = _play(str(BUNDLED_SOUND), volume)
+                return _noted(result, f"{argv[0]} could not play {path}{detail}"), retryable
+            return _fail(f"{argv[0]} exited {proc.returncode}{detail}"), proc.returncode > 0
+        return {"ok": True, "played": argv[0]}, False
+    return _fail("no audio player found (pw-play or paplay)"), False
+
+
+def _play_retrying(path: str, volume: int | None) -> tuple[dict, int]:
+    """Play; while the player exits with an error, wait and try again, at most PLAY_RETRIES times.
+
+    Each retry waits as a pending chime, so new mail meanwhile is queued behind
+    it and any chime that plays first supersedes it. Return the last result, or
+    why a retry did not play, and how many retries played.
+    """
+    result, retryable = _play(path, volume)
+    retries = 0
+    while retryable and retries < PLAY_RETRIES:
+        pending = _claim_retry()
+        if pending is None:
+            break  # the chime already waiting covers this mail
+        skipped = _wait_for(pending)
+        if skipped:
+            return {"ok": True, "skipped": skipped}, retries
+        retries += 1
+        result, retryable = _play(path, volume)
+    return result, retries
 
 
 def _chime(path: str, ids: list[str] | None, opts: dict[str, str]) -> dict:
-    """Play `path` now or when the cooldown ends, unless Do Not Disturb or the shared record says not to."""
+    """Play `path` now or when the cooldown ends, unless Do Not Disturb or the shared record says not to.
+
+    With IDs, a play the player fails is tried again later; the manual test is not.
+    """
     if not os.path.isfile(path):  # _sound checked a chosen file, not the bundled clip
         return _fail(f"not a sound file: {path}")
     # Ask before taking the lock, so the lock is never held across the timeout.
     silenced = _dnd_on()
-    deferred = False
+    volume = _volume(opts.get("--volume"))
     if ids is None:
-        if silenced:
-            return {"ok": True, "skipped": "dnd"}
-    else:
-        cooldown = clamp_int(opts.get("--cooldown"), DEFAULT_COOLDOWN, 0, MAX_COOLDOWN)
-        try:
-            claim = _claim(ids, silenced, cooldown)
-            deferred = isinstance(claim, dict)
-            skipped = _wait_for(claim) if deferred else claim
-        except OSError as exc:
-            return _fail(f"chime state unavailable: {exc}")
+        return {"ok": True, "skipped": "dnd"} if silenced else _play(path, volume)[0]
+    cooldown = clamp_int(opts.get("--cooldown"), DEFAULT_COOLDOWN, 0, MAX_COOLDOWN)
+    try:
+        claim = _claim(ids, silenced, cooldown)
+        deferred = isinstance(claim, dict)
+        skipped = _wait_for(claim) if deferred else claim
         if skipped:
             return {"ok": True, "skipped": skipped}
-    result = _play(path, _volume(opts.get("--volume")))
-    return {**result, "deferred": True} if deferred else result
+        result, retries = _play_retrying(path, volume)  # _play catches the players' OSError
+    except OSError as exc:
+        return _fail(f"chime state unavailable: {exc}")
+    if deferred:
+        result = {**result, "deferred": True}
+    return {**result, "retries": retries} if retries else result
 
 
 def run(args: list[str]) -> dict:

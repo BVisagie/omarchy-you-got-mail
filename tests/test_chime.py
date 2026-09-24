@@ -43,9 +43,11 @@ class FakeRun:
         self.dnd_code = 0
         self.missing: set[str] = set()
         self.player_code = 0
+        self.player_codes: list[int] = []  # exit codes for the next player runs, then player_code
         self.player_stderr = b"boom\n"
         self.player_error: Exception | None = None
         self.unplayable: set[str] = set()  # files the player rejects with exit 1
+        self.while_playing: Callable[[], None] | None = None  # runs as each player starts
 
     def __call__(self, argv: list[str], **kwargs: object) -> subprocess.CompletedProcess:
         self.calls.append((list(argv), kwargs))
@@ -56,9 +58,14 @@ class FakeRun:
             if isinstance(self.dnd, Exception):
                 raise self.dnd
             return subprocess.CompletedProcess(argv, self.dnd_code, self.dnd, b"")
+        if self.while_playing is not None:
+            self.while_playing()
         if self.player_error is not None:
             raise self.player_error
-        code = 1 if argv[-1] in self.unplayable else self.player_code
+        if argv[-1] in self.unplayable:
+            code = 1
+        else:
+            code = self.player_codes.pop(0) if self.player_codes else self.player_code
         return subprocess.CompletedProcess(argv, code, b"", self.player_stderr)
 
     @property
@@ -112,7 +119,7 @@ class ChimeTestCase(unittest.TestCase):
         try:
             fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
         except BlockingIOError:
-            self.fail("the chime lock is held during the wait")
+            self.fail("the chime lock is held during a wait or a play")
         finally:
             os.close(fd)
 
@@ -389,6 +396,174 @@ class DeferredChimeTests(ChimeTestCase):
             self.chime("work:b", file=missing), {**self.DEFERRED, "fallback": f"not a sound file: {missing}"}
         )
         self.assertEqual([argv[-1] for argv in self.fake.players], [BUNDLED])
+
+
+class RetryTests(ChimeTestCase):
+    """A play the player fails (exits with an error) is tried again 30 s later, up to 3 times."""
+
+    FAILED = {"ok": False, "error": "pw-play exited 1: boom"}
+    PLAYED = {"ok": True, "played": "pw-play"}
+
+    def setUp(self) -> None:
+        super().setUp()
+        self.fake.while_playing = self.assert_unlocked  # never held across playback either
+
+    def write_during_the_first_play(self, data: dict) -> None:
+        """Stand in for another copy writing the shared record while this one plays."""
+
+        def while_playing() -> None:
+            self.assert_unlocked()
+            self.fake.while_playing = self.assert_unlocked
+            self.write_state(data)
+
+        self.fake.while_playing = while_playing
+
+    def test_a_failed_play_is_tried_again_thirty_seconds_later(self) -> None:
+        self.fake.player_codes = [1]
+        pending: list[dict] = []
+        self.while_waiting = lambda: pending.append(self.state()["pending"])
+        self.assertEqual(self.chime("work:a"), {**self.PLAYED, "retries": 1})
+        self.assertEqual(self.sleeps, [30])
+        self.assertEqual(len(self.fake.players), 2)
+        self.assertEqual(pending[0]["due"], T0 + 30)
+        self.assertTrue(TOKEN_RE.fullmatch(pending[0]["token"]), pending[0])
+        self.assertEqual(self.state(), {"announced": {"work:a": T0}, "lastChime": T0 + 30})
+
+    def test_a_player_that_keeps_failing_gives_up_after_three_retries(self) -> None:
+        self.fake.player_code = 1
+        self.assertEqual(self.chime("work:a"), {**self.FAILED, "retries": 3})
+        self.assertEqual(self.sleeps, [30, 30, 30])
+        self.assertEqual(len(self.fake.players), 4)
+        self.assertEqual(self.state(), {"announced": {"work:a": T0}, "lastChime": T0 + 90})
+
+    def assert_no_retry(self, error: str, players: list[str]) -> None:
+        self.assertEqual(self.chime("work:a"), {"ok": False, "error": error})
+        self.assertEqual([argv[0] for argv in self.fake.players], players)
+        self.assertEqual(self.sleeps, [])
+        self.assertEqual(self.state(), {"announced": {"work:a": T0}, "lastChime": T0})
+
+    def test_no_retry_after_a_timeout(self) -> None:
+        self.fake.player_error = subprocess.TimeoutExpired(["pw-play"], 15)  # it played for 15 s
+        self.assert_no_retry("pw-play timed out", ["pw-play"])
+
+    def test_no_retry_after_a_signal(self) -> None:
+        self.fake.player_code = -15  # someone stopped it
+        self.assert_no_retry("pw-play exited -15: boom", ["pw-play"])
+
+    def test_no_retry_when_no_player_is_found(self) -> None:
+        self.fake.missing = {"pw-play", "paplay"}
+        self.assert_no_retry("no audio player found (pw-play or paplay)", ["pw-play", "paplay"])
+
+    def test_the_manual_test_is_never_retried(self) -> None:
+        self.fake.while_playing = None  # no lock file: the manual test takes no lock
+        self.fake.player_code = 1
+        self.assertEqual(chime.run([]), self.FAILED)
+        self.assertEqual(len(self.fake.players), 1)
+        self.assertEqual(self.sleeps, [])
+        self.assertFalse(self.state_dir.exists())
+
+    def test_do_not_disturb_before_a_retry_stays_quiet(self) -> None:
+        self.fake.player_codes = [1]
+        self.while_waiting = lambda: setattr(self.fake, "dnd", b"on\n")
+        self.assertEqual(self.chime("work:a"), {"ok": True, "skipped": "dnd"})
+        self.assertEqual(self.sleeps, [30])
+        self.assertEqual(len(self.fake.players), 1)
+        self.assertEqual(self.state(), {"announced": {"work:a": T0}, "lastChime": T0})
+
+    def test_a_later_retry_stopped_by_do_not_disturb_still_counts_the_retries(self) -> None:
+        self.fake.player_code = 1
+
+        def first_wait() -> None:
+            self.while_waiting = lambda: setattr(self.fake, "dnd", b"on\n")  # before the second retry
+
+        self.while_waiting = first_wait
+        self.assertEqual(self.chime("work:a"), {"ok": True, "skipped": "dnd", "retries": 1})
+        self.assertEqual(self.sleeps, [30, 30])
+        self.assertEqual(len(self.fake.players), 2)
+        self.assertEqual(self.state(), {"announced": {"work:a": T0}, "lastChime": T0 + 30})
+
+    def test_a_chime_during_the_retry_wait_supersedes_it(self) -> None:
+        self.fake.player_codes = [1]
+        seen: list[object] = []
+
+        def during_wait() -> None:
+            self.now = T0 + 61  # past the cooldown of the failed play, so work:b plays at once
+            seen.extend([self.chime("work:b"), self.state_file.read_bytes()])
+
+        self.while_waiting = during_wait
+        self.assertEqual(self.chime("work:a"), {"ok": True, "skipped": "superseded"})
+        self.assertEqual(seen[0], self.PLAYED)
+        self.assertEqual(self.state_file.read_bytes(), seen[1])  # the waiter wrote nothing
+        self.assertEqual(self.state(), {"announced": {"work:a": T0, "work:b": T0 + 61}, "lastChime": T0 + 61})
+        self.assertEqual(len(self.fake.players), 2)  # the failed play and work:b's
+
+    def test_mail_during_the_retry_wait_is_queued_behind_it(self) -> None:
+        self.fake.player_codes = [1]
+        seen: list[object] = []
+
+        def during_wait() -> None:
+            self.now += 5
+            seen.extend([self.chime("work:b"), len(self.fake.players)])
+
+        self.while_waiting = during_wait
+        self.assertEqual(self.chime("work:a"), {**self.PLAYED, "retries": 1})
+        self.assertEqual(seen, [{"ok": True, "skipped": "queued"}, 1])
+        self.assertEqual(len(self.fake.players), 2)
+        self.assertEqual(self.state(), {"announced": {"work:a": T0, "work:b": T0 + 5}, "lastChime": T0 + 30})
+
+    def test_no_retry_when_a_waiting_chime_already_covers_the_mail(self) -> None:
+        # Mail for another copy arrived during the play and is waiting for the cooldown.
+        waiting = {"due": T0 + 60, "token": TOKEN}
+        concurrent = {"announced": {"work:a": T0, "work:b": T0}, "lastChime": T0, "pending": waiting}
+        self.write_during_the_first_play(concurrent)
+        self.fake.player_codes = [1]
+        self.assertEqual(self.chime("work:a"), self.FAILED)
+        self.assertEqual(self.sleeps, [])
+        self.assertEqual(len(self.fake.players), 1)
+        self.assertEqual(self.state(), concurrent)
+
+    def test_a_waiting_chime_counts_until_a_minute_overdue(self) -> None:
+        for n, (overdue, retried) in enumerate(((60, False), (61, True))):
+            with self.subTest(overdue=overdue):
+                self.now = T0
+                self.sleeps.clear()
+                self.fake.calls.clear()
+                msg_id = f"work:{n}"
+                self.write_state({"announced": {}, "lastChime": 0})
+                waiting = {"due": T0 - overdue, "token": TOKEN}
+                self.write_during_the_first_play({"announced": {msg_id: T0}, "lastChime": T0, "pending": waiting})
+                self.fake.player_codes = [1]
+                self.assertEqual(self.chime(msg_id), {**self.PLAYED, "retries": 1} if retried else self.FAILED)
+                self.assertEqual(self.sleeps, [30] if retried else [])
+                self.assertEqual(self.state().get("pending"), None if retried else waiting)
+
+    def test_a_retry_still_reports_the_fallback(self) -> None:
+        missing = str(self.home / "nope.oga")
+        self.fake.player_codes = [1]
+        self.assertEqual(
+            self.chime("work:a", file=missing),
+            {**self.PLAYED, "retries": 1, "fallback": f"not a sound file: {missing}"},
+        )
+        self.assertEqual([argv[-1] for argv in self.fake.players], [BUNDLED, BUNDLED])
+
+    def test_a_retry_of_a_file_the_player_rejects_still_reports_the_fallback(self) -> None:
+        self.fake.unplayable = {str(self.sound)}
+        self.fake.player_codes = [1]  # the bundled clip fails too, the first time
+        self.assertEqual(
+            self.chime("work:a", file=str(self.sound)),
+            {**self.PLAYED, "retries": 1, "fallback": f"pw-play could not play {self.sound}: boom"},
+        )
+        self.assertEqual(
+            [argv[-1] for argv in self.fake.players], [str(self.sound), BUNDLED, str(self.sound), BUNDLED]
+        )
+
+    def test_a_deferred_chime_that_is_retried_reports_both(self) -> None:
+        self.write_state({"announced": {"work:a": T0 - 10}, "lastChime": T0 - 10})
+        self.fake.player_codes = [1]
+        self.assertEqual(self.chime("work:b"), {**self.PLAYED, "deferred": True, "retries": 1})
+        self.assertEqual(self.sleeps, [50, 30])
+        self.assertEqual(len(self.fake.players), 2)
+        self.assertEqual(self.state(), {"announced": {"work:a": T0 - 10, "work:b": T0}, "lastChime": T0 + 80})
 
 
 class DoNotDisturbTests(ChimeTestCase):

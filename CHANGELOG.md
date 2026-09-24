@@ -18,8 +18,9 @@ An optional "You've got mail!" sound when new unread mail arrives.
   the next successful refresh.
 - `you-got-mail chime` plays the sound now, as a test. It honours Do Not
   Disturb.
-- Playback uses `pw-play`, falling back to `paplay`. The bundled voice is
-  AI-generated.
+- Playback uses `pw-play`, falling back to `paplay`. If the sound can't
+  play, for example while PipeWire restarts, it tries again a few times
+  over the next minute and a half. The bundled voice is AI-generated.
 - IMAP message times now come from when the server received the mail
   (INTERNALDATE), falling back to the `Date:` header, so the merged list
   sorts in delivery order.
