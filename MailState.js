@@ -76,6 +76,8 @@ function updateChecks(previous, inboxes) {
 // Decides which rows of a reachable page-1 list are new mail. State is kept
 // per account ID (the part of a row ID before ":"), as { seen, mark }, plus
 // the shared floor: the oldest ts of the previous page 1 when it was full.
+// While any account fails, its rows are missing from page 1, so the floor
+// may rise but never drops or clears.
 function arrivals(state, inboxes, messages, pageFull, now) {
   var before = state && state.accounts ? state.accounts : {}
   var floor = state && typeof state.floor === "number" ? state.floor : null
@@ -113,8 +115,11 @@ function arrivals(state, inboxes, messages, pageFull, now) {
     if (box.ok === true) accounts[box.id] = remember(old, pages[box.id])
     else if (old) accounts[box.id] = old
   }
+  var nextFloor = pageFull && oldest !== null ? oldest : null
+  var failing = inboxes.some(function(entry) { return !entry || entry.ok !== true })
+  if (failing && floor !== null && (nextFloor === null || nextFloor < floor)) nextFloor = floor
   return {
-    state: { accounts: accounts, floor: pageFull && oldest !== null ? oldest : null },
+    state: { accounts: accounts, floor: nextFloor },
     fresh: fresh
   }
 }

@@ -201,6 +201,67 @@ test('an account that fails and recovers counts only mail that arrived meanwhile
   assert.deepEqual(fresh(recovered), ['work:new']);
 });
 
+// Page 1 holds two rows in these tests. Before home fails, both are work's,
+// and home's only unread mail, home:h, is on page 2, so home has no mark.
+const homeUp = [inbox('work'), inbox('home')];
+const homeDown = [inbox('work'), inbox('home', false)];
+
+test('old mail raised by a recovery after a page 1 that was not full is not new', () => {
+  const base = state.arrivals(null, homeUp, [mail('work:b', 900), mail('work:a', 800)], true, NOW);
+  // home fails while work:a is read, so page 1 is no longer full.
+  const failed = state.arrivals(base.state, homeDown, [mail('work:b', 900)], false, NOW + 60);
+  assert.deepEqual(fresh(failed), []);
+  const recovered = state.arrivals(failed.state, homeUp,
+    [mail('work:b', 900), mail('home:h', 700)], false, NOW + 120);
+  assert.deepEqual(fresh(recovered), []);
+});
+
+test('old mail raised by a recovery after a full page 1 of older rows is not new', () => {
+  const base = state.arrivals(null, homeUp, [mail('work:c', 900), mail('work:b', 800)], true, NOW);
+  const failed = state.arrivals(base.state, homeDown,
+    [mail('work:c', 900), mail('work:b', 800)], true, NOW + 60);
+  // Reading work:b raises work:a from page 2 while home is still failing.
+  const read = state.arrivals(failed.state, homeDown,
+    [mail('work:c', 900), mail('work:a', 700)], true, NOW + 120);
+  assert.deepEqual(fresh(read), []);
+  const recovered = state.arrivals(read.state, homeUp,
+    [mail('work:c', 900), mail('home:h', 750)], true, NOW + 180);
+  assert.deepEqual(fresh(recovered), []);
+});
+
+test('mail for an account with no mark that arrived while it failed is new on recovery', () => {
+  const base = state.arrivals(null, homeUp, [mail('work:b', 900), mail('work:a', 800)], true, NOW);
+  const failed = state.arrivals(base.state, homeDown, [mail('work:b', 900)], false, NOW + 60);
+  const recovered = state.arrivals(failed.state, homeUp,
+    [mail('home:new', 1100), mail('work:b', 900), mail('home:h', 700)], false, NOW + 600);
+  assert.deepEqual(fresh(recovered), ['home:new']);
+});
+
+test('a full page 1 of newer rows raises the floor while an account fails', () => {
+  const boxes = [inbox('work'), inbox('home'), inbox('quiet')];
+  const partial = [inbox('work'), inbox('home', false), inbox('quiet')];
+  const base = state.arrivals(null, boxes, [mail('work:b', 900), mail('work:a', 800)], true, NOW);
+  // While home fails, two newer rows fill page 1; quiet:q arrives behind them on page 2.
+  const busy = state.arrivals(base.state, partial,
+    [mail('work:d', 1100), mail('work:c', 1000)], true, NOW + 60);
+  assert.deepEqual(fresh(busy), ['work:d', 'work:c']);
+  // Reading them raises older rows from page 2, quiet:q among them.
+  const raised = state.arrivals(busy.state, partial,
+    [mail('work:b', 900), mail('quiet:q', 850)], true, NOW + 120);
+  assert.deepEqual(fresh(raised), []);
+});
+
+test('once every account is back, a page 1 that is not full clears the floor again', () => {
+  const base = state.arrivals(null, homeUp, [mail('work:b', 900), mail('work:a', 800)], true, NOW);
+  const failed = state.arrivals(base.state, homeDown, [mail('work:b', 900)], false, NOW + 60);
+  const recovered = state.arrivals(failed.state, homeUp,
+    [mail('work:b', 900), mail('home:h', 700)], false, NOW + 120);
+  // Nothing is left on page 2 to raise, so home:i can only be new mail.
+  const next = state.arrivals(recovered.state, homeUp,
+    [mail('work:b', 900), mail('home:i', 750), mail('home:h', 700)], false, NOW + 180);
+  assert.deepEqual(fresh(next), ['home:i']);
+});
+
 test('an account seen for the first time only records a baseline', () => {
   const base = state.arrivals(null, [inbox('work'), inbox('home', false)],
     [mail('work:a', 900)], false, NOW);
