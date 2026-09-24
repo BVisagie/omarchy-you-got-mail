@@ -557,6 +557,17 @@ class RetryTests(ChimeTestCase):
             [argv[-1] for argv in self.fake.players], [str(self.sound), BUNDLED, str(self.sound), BUNDLED]
         )
 
+    def test_a_retry_stopped_by_do_not_disturb_still_reports_the_fallback(self) -> None:
+        self.fake.unplayable = {str(self.sound)}
+        self.fake.player_codes = [1]  # the bundled clip fails too
+        self.while_waiting = lambda: setattr(self.fake, "dnd", b"on\n")
+        self.assertEqual(
+            self.chime("work:a", file=str(self.sound)),
+            {"ok": True, "skipped": "dnd", "fallback": f"pw-play could not play {self.sound}: boom"},
+        )
+        self.assertEqual(self.sleeps, [30])
+        self.assertEqual([argv[-1] for argv in self.fake.players], [str(self.sound), BUNDLED])
+
     def test_a_deferred_chime_that_is_retried_reports_both(self) -> None:
         self.write_state({"announced": {"work:a": T0 - 10}, "lastChime": T0 - 10})
         self.fake.player_codes = [1]
@@ -564,6 +575,89 @@ class RetryTests(ChimeTestCase):
         self.assertEqual(self.sleeps, [50, 30])
         self.assertEqual(len(self.fake.players), 2)
         self.assertEqual(self.state(), {"announced": {"work:a": T0 - 10, "work:b": T0}, "lastChime": T0 + 80})
+
+
+class CancelTests(ChimeTestCase):
+    """`chime --cancel` drops a waiting chime when the sound is turned off."""
+
+    CANCELLED = {"ok": True, "cancelled": True}
+
+    def cancel_while_waiting(self) -> list[object]:
+        """Cancel from inside the wait; record the result, whether it ran anything, and the state."""
+        seen: list[object] = []
+
+        def during_wait() -> None:
+            calls = len(self.fake.calls)
+            seen.extend([chime.run(["--cancel"]), len(self.fake.calls) - calls, self.state()])
+
+        self.while_waiting = during_wait
+        return seen
+
+    def test_cancel_drops_a_chime_waiting_for_the_cooldown(self) -> None:
+        self.write_state({"announced": {"work:a": T0 - 10}, "lastChime": T0 - 10})
+        seen = self.cancel_while_waiting()
+        self.assertEqual(self.chime("work:b"), {"ok": True, "skipped": "superseded"})
+        self.assertEqual(seen, [self.CANCELLED, 0, {"announced": {"work:a": T0 - 10, "work:b": T0}, "lastChime": T0 - 10}])
+        self.assertEqual(self.sleeps, [50])
+        self.assertEqual(self.fake.players, [])
+        self.assertNotIn("pending", self.state())
+
+    def test_cancel_drops_a_chime_waiting_to_try_again(self) -> None:
+        self.fake.player_codes = [1]
+        seen = self.cancel_while_waiting()
+        self.assertEqual(self.chime("work:a"), {"ok": True, "skipped": "superseded"})
+        self.assertEqual(seen, [self.CANCELLED, 0, {"announced": {"work:a": T0}, "lastChime": T0}])
+        self.assertEqual(self.sleeps, [30])
+        self.assertEqual(len(self.fake.players), 1)  # the failed play only
+
+    def test_cancel_keeps_announced_and_last_chime(self) -> None:
+        # A waiter more than a minute overdue may be sleeping through a suspend: drop it too.
+        for due in (T0 + 50, T0 - 61):
+            with self.subTest(due=due):
+                kept = {"announced": {"work:a": T0 - 10, "work:b": T0}, "lastChime": T0 - 10}
+                self.write_state({**kept, "pending": {"due": due, "token": TOKEN}})
+                self.assertEqual(chime.run(["--cancel"]), self.CANCELLED)
+                self.assertEqual(self.state(), kept)
+                self.assertEqual(self.fake.calls, [])
+
+    def test_cancel_with_nothing_waiting_writes_nothing(self) -> None:
+        self.assertEqual(chime.run(["--cancel"]), {"ok": True, "cancelled": False})
+        self.assertFalse(self.state_file.exists())
+        for data in (
+            {"announced": {"work:a": T0}, "lastChime": T0},
+            {"announced": {"work:a": T0}, "lastChime": T0, "pending": {"due": T0 + 30, "token": "junk"}},
+            "not json",
+        ):
+            with self.subTest(data=data):
+                self.write_state(data)
+                before = self.state_file.read_bytes()
+                self.assertEqual(chime.run(["--cancel"]), {"ok": True, "cancelled": False})
+                self.assertEqual(self.state_file.read_bytes(), before)
+        self.assertEqual(self.fake.calls, [])
+
+    def test_cancel_with_the_state_unavailable_is_an_error(self) -> None:
+        self.state_dir.write_text("not a directory", encoding="utf-8")
+        result = chime.run(["--cancel"])
+        self.assertFalse(result["ok"])
+        self.assertTrue(result["error"].startswith("chime state unavailable: "), result["error"])
+
+    def test_cancel_with_anything_else_is_a_usage_error(self) -> None:
+        for args in (
+            ["--cancel", "--volume", "50"],
+            ["--file", str(self.sound), "--cancel"],
+            ["--cancel", "--cooldown", "60"],
+            ["--cancel", "--cancel"],
+            ["--cancel", "--"],
+            ["--cancel", "--", "work:a"],
+            ["--", "--cancel"],
+        ):
+            with self.subTest(args=args):
+                result = chime.run(args)
+                self.assertFalse(result["ok"])
+                self.assertTrue(result["error"].startswith("usage: "), result["error"])
+                self.assertIn("--cancel", result["error"])
+        self.assertEqual(self.fake.calls, [])
+        self.assertFalse(self.state_dir.exists())
 
 
 class DoNotDisturbTests(ChimeTestCase):
@@ -834,6 +928,7 @@ class CliTests(ChimeTestCase):
         import cli
 
         self.assertIn("you-got-mail chime [--file PATH] [--volume 0-100] [--cooldown SEC] [-- ID ...]", cli.HELP)
+        self.assertIn("you-got-mail chime --cancel", cli.HELP)
 
     def test_wrapper_keeps_player_output_off_stdout(self) -> None:
         bindir = self.tmp / "bin"

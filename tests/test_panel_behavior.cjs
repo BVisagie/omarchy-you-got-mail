@@ -393,7 +393,10 @@ function togglePanel(settings = {}) {
   }}};
   const runs = [];
   p.Util.execArgv = argv => runs.push(Array.from(argv));
-  return {p, writes, runs};
+  // Date.now() for the panel, so the toggle debounce can be stepped past without sleeping.
+  const clock = {ms: 1_000_000};
+  p.Date = class extends Date { static now() { return clock.ms; } };
+  return {p, writes, runs, clock};
 }
 
 const plain = value => JSON.parse(JSON.stringify(value));
@@ -418,7 +421,7 @@ test('the test clip on turning the sound on passes --file only when soundFile is
     '--file', '~/Sounds/mail.ogg']]);
 });
 
-test('turning the sound off saves soundEnabled false and plays nothing', () => {
+test('turning the sound off saves soundEnabled false and drops a waiting chime, playing nothing', () => {
   const {p, writes, runs} = togglePanel({soundEnabled: true});
   assert.equal(p.soundEnabled, true);
   p.toggleSound();
@@ -426,27 +429,55 @@ test('turning the sound off saves soundEnabled false and plays nothing', () => {
     {id: 'bvisagie.you-got-mail', max: 30, soundEnabled: false}]]);
   assert.equal(p.soundEnabled, false);
   assert.equal(p.settings.soundEnabled, false);
-  assert.deepEqual(runs, []);
+  assert.deepEqual(runs, [['/test/you-got-mail', 'chime', '--cancel']]);
 });
 
 test('s turns the sound on or off from the mail, Help and Accounts views', () => {
-  const {p, writes, runs} = togglePanel();
+  const {p, writes, runs, clock} = togglePanel();
   p.handleTextKey('s');
   assert.equal(p.auxiliaryView, '');
   assert.equal(p.soundEnabled, true);
+  clock.ms += 1000;
   p.handleTextKey('?');
   p.handleTextKey('s');
   assert.equal(p.auxiliaryView, 'help');
   assert.equal(p.soundEnabled, false);
+  clock.ms += 1000;
   p.handleTextKey('m');
   p.handleTextKey('s');
   assert.equal(p.auxiliaryView, 'accounts');
   assert.equal(p.soundEnabled, true);
   assert.deepEqual(writes.map(([, entry]) => entry.soundEnabled), [true, false, true]);
-  assert.equal(runs.length, 2); // One test clip for each time it was turned on.
-  assert.ok(runs.every(argv => argv[1] === 'chime' && !argv.includes('--')));
+  const preview = ['/test/you-got-mail', 'chime', '--volume', '100'];
+  assert.deepEqual(runs, [preview, ['/test/you-got-mail', 'chime', '--cancel'], preview]);
   const keys = Array.from(p.MailState.shortcuts(), item => item.key);
   assert.ok(keys.includes('s'));
+});
+
+test('toggles within 300 ms of the last one are ignored, so a held s flips once', () => {
+  const {p, writes, runs, clock} = togglePanel();
+  p.toggleSound();
+  clock.ms += 100;
+  p.toggleSound();
+  assert.equal(p.soundEnabled, true);
+  assert.equal(writes.length, 1);
+  assert.equal(runs.length, 1);
+  clock.ms += 300; // 300 ms after the ignored toggle.
+  p.toggleSound();
+  assert.equal(p.soundEnabled, false);
+  assert.deepEqual(writes.map(([, entry]) => entry.soundEnabled), [true, false]);
+  // Omarchy's default key repeat: the first after 250 ms, then 40 a second.
+  for (let hold = 0; hold < 3; hold++) {
+    clock.ms += 1000;
+    p.handleTextKey('s');
+    clock.ms += 250;
+    p.handleTextKey('s');
+    for (let repeat = 0; repeat < 40; repeat++) {
+      clock.ms += 25;
+      p.handleTextKey('s');
+    }
+  }
+  assert.equal(writes.length, 2 + 3); // Each one-second hold flips once.
 });
 
 test('without the shell API the sound still turns on for this session', () => {

@@ -24,7 +24,7 @@ module.exports = function panelHarness() {
     keyCatcher: {forceActiveFocus() {}}, Style: {space(value) {return value;}},
     reachable: true, hasUnread: true, pageSize: 25, script: '/test/you-got-mail',
     arrivalState: null, soundCooldownSec: 60, soundVolume: 100, soundFile: '',
-    moduleName: 'bvisagie.you-got-mail', settings: {}, bar: null,
+    moduleName: 'bvisagie.you-got-mail', settings: {}, bar: null, lastSoundToggle: 0,
     listProc: {running: false}, readProc: {running: false}, readAllProc: {running: false},
     markAllArmTimer: {running: false, stop() {}, restart() {}},
     list: {positionViewAtIndex() {}}, ListView: {Contain: 0},

@@ -78,6 +78,14 @@ class PanelContractTests(unittest.TestCase):
         # No `--` and no IDs: the manual test ignores the cooldown and dedupe.
         self.assertNotIn('"--"', toggle)
         self.assertNotIn("--cooldown", toggle)
+        # Turning it off drops a chime still waiting for the cooldown or a retry.
+        self.assertIn('Util.execArgv([root.script, "chime", "--cancel"])', toggle)
+
+    def test_toggle_sound_ignores_a_repeat_within_300_ms(self) -> None:
+        self.assertIn("property double lastSoundToggle: 0", self.qml)
+        toggle = self._function("toggleSound")
+        self.assertIn("Date.now()", toggle)
+        self.assertIn("< 300", toggle)
 
     def test_settings_write_is_guarded_and_keeps_existing_keys(self) -> None:
         persist = self._function("persistSettings")

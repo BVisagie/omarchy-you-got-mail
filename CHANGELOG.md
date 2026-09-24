@@ -7,12 +7,13 @@ Versions match `manifest.json`. Git tags are created at release time.
 An optional "You've got mail!" sound when new unread mail arrives.
 
 - Off by default. Turn it on or off with the speaker button in the panel
-  header or `s`, which plays it once when you turn it on, or with the
-  `soundEnabled` widget setting. `soundCooldownSec`, `soundVolume` and
-  `soundFile` set the quiet time between sounds, the volume, and your own
-  sound file. Mail that arrives during the quiet time gets one sound when
-  it is up. A `soundFile` that can't be played falls back to the bundled
-  clip.
+  header or `s`, or with the `soundEnabled` widget setting. The button and
+  `s` play it once as you turn it on (unless Do Not Disturb is on), and
+  silence a sound still waiting as you turn it off. `soundCooldownSec`,
+  `soundVolume` and `soundFile` set the quiet time between sounds, the
+  volume, and your own sound file. Mail that arrives during the quiet time
+  gets one sound when it is up. A `soundFile` that can't be played falls
+  back to the bundled clip.
 - It plays once per refresh that finds new mail, and only once even with a
   bar on several monitors. Starting or reloading the plugin, paging, and
   reading other mail never play it. Do Not Disturb silences it.

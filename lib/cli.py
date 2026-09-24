@@ -21,6 +21,7 @@ you-got-mail list [--page OFFSET] [--limit N]
 you-got-mail read <id>
 you-got-mail read-all
 you-got-mail chime [--file PATH] [--volume 0-100] [--cooldown SEC] [-- ID ...]
+you-got-mail chime --cancel
 you-got-mail accounts ...
 
 The panel calls list, read, read-all, and chime.
@@ -36,7 +37,9 @@ pages stay complete.
 chime plays the new-mail sound (the bundled clip unless --file is given)
 once per new message ID, however many widget copies pass it, and at most
 once per --cooldown seconds (default 60). Do Not Disturb silences it. With
-no IDs it is a test: it plays now unless Do Not Disturb is on.
+no IDs it is a test: it plays now unless Do Not Disturb is on. --cancel
+drops a sound still waiting for the cooldown or a retry; the panel runs it
+when you turn the sound off.
 
 """ + ACCOUNTS_USAGE
 

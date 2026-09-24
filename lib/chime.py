@@ -5,7 +5,8 @@ its own. Every copy passes its new message IDs here; a shared record of the
 IDs already announced, and of the last chime, makes the sound play once per
 arrival and at most once per cooldown. Mail that arrives during the cooldown
 gets one chime when it ends. A chime the player fails to play is tried again
-a few times. Do Not Disturb silences it.
+a few times. Do Not Disturb silences it. `--cancel` drops a chime still
+waiting, for when the sound is turned off.
 """
 
 from __future__ import annotations
@@ -24,7 +25,10 @@ from pathlib import Path
 
 from common import ROOT, clamp_int, emit, one_line, write_private
 
-USAGE = "usage: you-got-mail chime [--file PATH] [--volume 0-100] [--cooldown SEC] [-- ID ...]"
+USAGE = (
+    "usage: you-got-mail chime [--file PATH] [--volume 0-100] [--cooldown SEC] [-- ID ...],"
+    " or you-got-mail chime --cancel"
+)
 BUNDLED_SOUND = ROOT / "sounds" / "you-got-mail.oga"
 ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,32}:[A-Za-z0-9_-]{1,512}$")
 TOKEN_RE = re.compile(r"[0-9a-f]{16}")
@@ -285,7 +289,7 @@ def _play_retrying(path: str, volume: int | None) -> tuple[dict, int]:
             break  # the chime already waiting covers this mail
         skipped = _wait_for(pending)
         if skipped:
-            return {"ok": True, "skipped": skipped}, retries
+            return _noted({"ok": True, "skipped": skipped}, result.get("fallback")), retries
         retries += 1
         result, retryable = _play(path, volume)
     return result, retries
@@ -318,7 +322,26 @@ def _chime(path: str, ids: list[str] | None, opts: dict[str, str]) -> dict:
     return {**result, "retries": retries} if retries else result
 
 
+def _cancel() -> dict:
+    """Drop the chime waiting for the cooldown or a retry, so its waiter finds it superseded.
+
+    Keeps the announced IDs and the last chime. Plays nothing and asks no Do Not Disturb.
+    """
+    try:
+        with _locked() as state_file:
+            announced, last, pending = _load_state(state_file, int(time.time()))
+            if pending is None:
+                return {"ok": True, "cancelled": False}
+            _save_state(state_file, announced, last, None)
+    except OSError as exc:
+        return _fail(f"chime state unavailable: {exc}")
+    return {"ok": True, "cancelled": True}
+
+
 def run(args: list[str]) -> dict:
+    if "--cancel" in args:
+        # A flag on its own: with any option or `--` it is a usage error.
+        return _cancel() if args == ["--cancel"] else _fail(USAGE)
     parsed = _parse(args)
     if parsed is None:
         return _fail(USAGE)

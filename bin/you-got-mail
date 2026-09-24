@@ -6,6 +6,7 @@
 #   you-got-mail read <id>
 #   you-got-mail read-all
 #   you-got-mail chime [--file PATH] [--volume 0-100] [--cooldown SEC] [-- ID ...]
+#   you-got-mail chime --cancel
 #
 # Accounts are added in a terminal:
 #   you-got-mail accounts add

@@ -81,6 +81,8 @@ Panel {
   property string accountSignature: ""
   // New-mail detection state from MailState.arrivals; null until the first page 1.
   property var arrivalState: null
+  // Date.now() of the last sound toggle request; see toggleSound.
+  property double lastSoundToggle: 0
   readonly property var accountMenu: MailState.accountEntries(inboxes, accountChecks, now)
   readonly property var shortcutHelp: MailState.shortcuts()
 
@@ -278,10 +280,19 @@ Panel {
 
   // Turning the sound on plays it once so you know what you will hear. No `--`
   // makes it the manual test: Do Not Disturb applies, the cooldown does not.
+  // Turning it off also drops a chime still waiting for the cooldown or a retry.
+  // A request within 300 ms of the last one is ignored, so a held `s` flips once.
   function toggleSound() {
+    var now = Date.now()
+    var repeated = now - root.lastSoundToggle < 300
+    root.lastSoundToggle = now
+    if (repeated) return
     var next = !root.soundEnabled
     persistSettings({ soundEnabled: next })
-    if (!next) return
+    if (!next) {
+      Util.execArgv([root.script, "chime", "--cancel"])
+      return
+    }
     var argv = [root.script, "chime", "--volume", String(root.soundVolume)]
     if (root.soundFile !== "") argv.push("--file", root.soundFile)
     Util.execArgv(argv)

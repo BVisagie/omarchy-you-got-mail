@@ -203,9 +203,10 @@ and provider environment.
 
 The widget can say "You've got mail!" when new unread mail arrives. It is
 off by default. The speaker button in the panel header, or `s`, turns it on
-or off, and plays the sound once when you turn it on. You can also set
-`soundEnabled` to `true` in the widget settings, and `soundVolume` to make
-it quieter.
+or off. It plays the sound once when you turn it on (unless Do Not Disturb
+is on), and turning it off also silences a sound still waiting to play. You
+can also set `soundEnabled` to `true` in the widget settings, and
+`soundVolume` to make it quieter.
 
 It plays once when a refresh finds new mail, however many messages
 arrived, and only once even with a bar on several monitors. It stays quiet
