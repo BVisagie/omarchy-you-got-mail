@@ -40,6 +40,57 @@ class PanelContractTests(unittest.TestCase):
         self.assertIn("Math.max(0, Math.min(100, n))", volume)
         self.assertIn('String(setting("soundFile", "") || "").trim()', self._property("soundFile"))
 
+    def _function(self, name: str) -> str:
+        # The same shape tests/panel_harness.cjs extracts.
+        found = re.search(rf"^  function {name}\([^\n]*\) \{{.*?^  \}}", self.qml, re.M | re.S)
+        self.assertIsNotNone(found, name)
+        return found.group(0)
+
+    def test_header_sound_button_sits_before_accounts_in_every_view(self) -> None:
+        self.assertIn('readonly property string iconSoundOn: "\\uF028"', self.qml)
+        self.assertIn('readonly property string iconSoundOff: "\\uF026"', self.qml)
+        row = self.qml.split("id: headerActions")[1].split("id: freshnessRow")[0]
+        buttons = row.split("PanelActionButton {")[1:]
+        sound = [i for i, b in enumerate(buttons) if "onClicked: root.toggleSound()" in b]
+        accounts = [i for i, b in enumerate(buttons) if 'root.showView("accounts")' in b]
+        self.assertEqual(len(sound), 1)
+        self.assertEqual(sound[0] + 1, accounts[0], "sound button sits right before Accounts")
+        button = buttons[sound[0]]
+        self.assertNotIn("visible:", button)  # Shown in the mail, Accounts and Help views.
+        self.assertIn("iconText: root.soundEnabled ? root.iconSoundOn : root.iconSoundOff", button)
+        self.assertRegex(button, r'tooltipText: root\.soundEnabled\s+'
+                                 r'\? "Turn off the new-mail sound \(s\)"\s+'
+                                 r': "Turn on the new-mail sound \(s\)"')
+        self.assertIn("foreground: root.soundEnabled ? root.accent : root.foreground", button)
+        self.assertIn("hoverColor: root.accent", button)
+
+    def test_s_toggles_sound_in_every_view(self) -> None:
+        keys = self._function("handleTextKey")
+        self.assertIn('if (t === "s") { toggleSound(); return }', keys)
+        self.assertLess(keys.index('t === "s"'), keys.index('if (auxiliaryView !== "")'))
+
+    def test_toggle_sound_persists_and_previews_through_the_manual_test(self) -> None:
+        toggle = self._function("toggleSound")
+        self.assertIn("var next = !root.soundEnabled", toggle)
+        self.assertIn("persistSettings({ soundEnabled: next })", toggle)
+        self.assertIn('[root.script, "chime", "--volume", String(root.soundVolume)]', toggle)
+        self.assertIn('if (root.soundFile !== "") argv.push("--file", root.soundFile)', toggle)
+        # No `--` and no IDs: the manual test ignores the cooldown and dedupe.
+        self.assertNotIn('"--"', toggle)
+        self.assertNotIn("--cooldown", toggle)
+
+    def test_settings_write_is_guarded_and_keeps_existing_keys(self) -> None:
+        persist = self._function("persistSettings")
+        self.assertIn("var entry = { id: root.moduleName }", persist)
+        self.assertIn('if (existing !== "id") entry[existing] = root.settings[existing]', persist)
+        self.assertIn("root.settings = entry", persist)
+        self.assertEqual(self.qml.count("updateEntryInline("), 1)
+        self.assertIn(
+            'if (root.bar && root.bar.shell && typeof root.bar.shell.updateEntryInline === "function")\n'
+            "      root.bar.shell.updateEntryInline(root.moduleName, entry)",
+            persist,
+        )
+
     def test_manifest_declares_sound_settings(self) -> None:
         widget = self.manifest["barWidget"]
         schema = {item["key"]: item for item in widget["schema"]}

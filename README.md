@@ -120,6 +120,7 @@ If you never add an account, a single Gmail account is assumed. The first
 | Middle-click the bar icon, refresh button, or `r` | refresh now |
 | Accounts button or `m` | account counts, individual inbox links, Add account, setup guide |
 | Help button or `?` | keyboard and mouse controls |
+| Speaker button or `s` | turn the new-mail sound on or off |
 | Header envelope-open or `A` | mark all unread as read (click or press twice to confirm) |
 | `a` | mark the message under the cursor as read, without opening it |
 | Header external-link or `i` | same as right-click |
@@ -201,8 +202,10 @@ and provider environment.
 ## Sound
 
 The widget can say "You've got mail!" when new unread mail arrives. It is
-off by default. Set `soundEnabled` to `true` in the widget settings to turn
-it on, and `soundVolume` to make it quieter.
+off by default. The speaker button in the panel header, or `s`, turns it on
+or off, and plays the sound once when you turn it on. You can also set
+`soundEnabled` to `true` in the widget settings, and `soundVolume` to make
+it quieter.
 
 It plays once when a refresh finds new mail, however many messages
 arrived, and only once even with a bar on several monitors. It stays quiet

@@ -380,3 +380,82 @@ test('unreachable and unparsable payloads leave the arrival state unchanged', ()
   p.applyPayload(list([['work:new', 20], ['work:old', 10]])); // Mail from the outage chimes once.
   assert.deepEqual(chimes.map(chimed), [['work:new']]);
 });
+
+// The header speaker button and `s` turn the sound on or off, and save the
+// choice to this widget's shell.json entry through the scoped shell API.
+function togglePanel(settings = {}) {
+  const p = panelHarness();
+  p.settings = Object.assign({id: 'bvisagie.you-got-mail', max: 30}, settings);
+  const writes = [];
+  p.bar = {shell: {updateEntryInline(id, entry) {
+    writes.push([id, JSON.parse(JSON.stringify(entry))]);
+    return true;
+  }}};
+  const runs = [];
+  p.Util.execArgv = argv => runs.push(Array.from(argv));
+  return {p, writes, runs};
+}
+
+const plain = value => JSON.parse(JSON.stringify(value));
+
+test('turning the sound on saves the whole entry and plays the clip once as a test', () => {
+  const {p, writes, runs} = togglePanel({soundVolume: 35});
+  p.soundVolume = 35;
+  p.toggleSound();
+  const entry = {id: 'bvisagie.you-got-mail', max: 30, soundVolume: 35, soundEnabled: true};
+  assert.deepEqual(writes, [['bvisagie.you-got-mail', entry]]);
+  assert.deepEqual(plain(p.settings), entry);
+  assert.equal(p.soundEnabled, true);
+  // The manual test: no `--`, so no cooldown or dedupe, and Do Not Disturb still applies.
+  assert.deepEqual(runs, [['/test/you-got-mail', 'chime', '--volume', '35']]);
+});
+
+test('the test clip on turning the sound on passes --file only when soundFile is set', () => {
+  const {p, runs} = togglePanel();
+  p.soundFile = '~/Sounds/mail.ogg';
+  p.toggleSound();
+  assert.deepEqual(runs, [['/test/you-got-mail', 'chime', '--volume', '100',
+    '--file', '~/Sounds/mail.ogg']]);
+});
+
+test('turning the sound off saves soundEnabled false and plays nothing', () => {
+  const {p, writes, runs} = togglePanel({soundEnabled: true});
+  assert.equal(p.soundEnabled, true);
+  p.toggleSound();
+  assert.deepEqual(writes, [['bvisagie.you-got-mail',
+    {id: 'bvisagie.you-got-mail', max: 30, soundEnabled: false}]]);
+  assert.equal(p.soundEnabled, false);
+  assert.equal(p.settings.soundEnabled, false);
+  assert.deepEqual(runs, []);
+});
+
+test('s turns the sound on or off from the mail, Help and Accounts views', () => {
+  const {p, writes, runs} = togglePanel();
+  p.handleTextKey('s');
+  assert.equal(p.auxiliaryView, '');
+  assert.equal(p.soundEnabled, true);
+  p.handleTextKey('?');
+  p.handleTextKey('s');
+  assert.equal(p.auxiliaryView, 'help');
+  assert.equal(p.soundEnabled, false);
+  p.handleTextKey('m');
+  p.handleTextKey('s');
+  assert.equal(p.auxiliaryView, 'accounts');
+  assert.equal(p.soundEnabled, true);
+  assert.deepEqual(writes.map(([, entry]) => entry.soundEnabled), [true, false, true]);
+  assert.equal(runs.length, 2); // One test clip for each time it was turned on.
+  assert.ok(runs.every(argv => argv[1] === 'chime' && !argv.includes('--')));
+  const keys = Array.from(p.MailState.shortcuts(), item => item.key);
+  assert.ok(keys.includes('s'));
+});
+
+test('without the shell API the sound still turns on for this session', () => {
+  for (const bar of [null, {}, {shell: null}, {shell: {}}, {shell: {updateEntryInline: 'no'}}]) {
+    const p = panelHarness();
+    p.settings = {id: 'bvisagie.you-got-mail', max: 30};
+    p.bar = bar;
+    assert.doesNotThrow(() => p.toggleSound());
+    assert.equal(p.soundEnabled, true);
+    assert.deepEqual(plain(p.settings), {id: 'bvisagie.you-got-mail', max: 30, soundEnabled: true});
+  }
+});

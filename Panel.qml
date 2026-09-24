@@ -28,6 +28,8 @@ Panel {
   readonly property string iconConfirm: "\uF00C"
   readonly property string iconPrev: "\uF053"
   readonly property string iconNext: "\uF054"
+  readonly property string iconSoundOn: "\uF028"
+  readonly property string iconSoundOff: "\uF026"
 
   readonly property color foreground: bar ? bar.foreground : Color.foreground
   readonly property color accent: Color.accent
@@ -139,6 +141,7 @@ Panel {
   function handleTextKey(t) {
     if (t === "?") { showView("help"); return }
     if (t === "m") { showView("accounts"); return }
+    if (t === "s") { toggleSound(); return }
     if (t === "r") { refresh(); return }
     if (auxiliaryView !== "") {
       if (t === "o") activateSelection()
@@ -259,6 +262,29 @@ Panel {
                 "--volume", String(root.soundVolume)]
     if (root.soundFile !== "") argv.push("--file", root.soundFile)
     Util.execArgv(argv.concat(["--"], valid))
+  }
+
+  // Applied locally first so the panel redraws at once, then written to this
+  // widget's shell.json entry, which comes back to every copy through the bar.
+  // Without the shell API the change lasts for this session only.
+  function persistSettings(values) {
+    var entry = { id: root.moduleName }
+    for (var existing in root.settings) if (existing !== "id") entry[existing] = root.settings[existing]
+    for (var key in values) entry[key] = values[key]
+    root.settings = entry
+    if (root.bar && root.bar.shell && typeof root.bar.shell.updateEntryInline === "function")
+      root.bar.shell.updateEntryInline(root.moduleName, entry)
+  }
+
+  // Turning the sound on plays it once so you know what you will hear. No `--`
+  // makes it the manual test: Do Not Disturb applies, the cooldown does not.
+  function toggleSound() {
+    var next = !root.soundEnabled
+    persistSettings({ soundEnabled: next })
+    if (!next) return
+    var argv = [root.script, "chime", "--volume", String(root.soundVolume)]
+    if (root.soundFile !== "") argv.push("--file", root.soundFile)
+    Util.execArgv(argv)
   }
 
   readonly property int pageSize: {
@@ -835,6 +861,16 @@ Panel {
               foreground: root.foreground
               hoverColor: root.accent
               onClicked: root.showView("")
+            }
+
+            PanelActionButton {
+              iconText: root.soundEnabled ? root.iconSoundOn : root.iconSoundOff
+              tooltipText: root.soundEnabled
+                ? "Turn off the new-mail sound (s)"
+                : "Turn on the new-mail sound (s)"
+              foreground: root.soundEnabled ? root.accent : root.foreground
+              hoverColor: root.accent
+              onClicked: root.toggleSound()
             }
 
             PanelActionButton {

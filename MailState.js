@@ -199,6 +199,7 @@ function shortcuts() {
     {key: "m", title: "Accounts and setup"},
     {key: "?", title: "Show or hide shortcut help"},
     {key: "r / middle-click", title: "Refresh mail"},
+    {key: "s", title: "Turn the new-mail sound on or off"},
     {key: "x / ×", title: "Dismiss an action error"},
     {key: "Tab / Shift+Tab", title: "Switch to the next / previous bar panel"},
     {key: "Esc", title: "Back to mail, cancel confirmation, or close"},
