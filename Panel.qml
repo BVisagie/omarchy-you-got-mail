@@ -746,44 +746,42 @@ Panel {
     bar: root.bar
     opacity: root.hasAlert ? 0.5 : 1
     slotSize: root.barSlot
-    opticalSize: root.barContentWidth
     tooltipText: root.barTooltip()
+    // Drawn as a direct child, not an iconComponent: the shell scales an
+    // iconComponent to fit the icon size, which shrinks icon plus badge to dots.
+    hasVisualContent: true
 
-    iconComponent: Component {
-      Item {
-        Row {
+    Row {
+      anchors.centerIn: parent
+      spacing: Style.space(5)
+
+      MailSlotIcon {
+        anchors.verticalCenter: parent.verticalCenter
+        iconSize: Style.bar.iconCanvas
+        color: button.foreground
+        flagColor: button.foreground
+        hasMail: root.hasUnread && root.reachable
+      }
+
+      Rectangle {
+        anchors.verticalCenter: parent.verticalCenter
+        visible: root.badgeCount > 0 || root.showAlertBadge
+        height: Style.space(12)
+        width: root.badgeWidth
+        radius: height / 2
+        color: root.showAlertBadge
+          ? Qt.rgba(root.alertColor.r, root.alertColor.g, root.alertColor.b, 0.18)
+          : Qt.rgba(button.foreground.r, button.foreground.g,
+                    button.foreground.b, 0.14)
+
+        Text {
           anchors.centerIn: parent
-          spacing: Style.space(5)
-
-          MailSlotIcon {
-            anchors.verticalCenter: parent.verticalCenter
-            iconSize: Style.bar.iconCanvas
-            color: button.foreground
-            flagColor: button.foreground
-            hasMail: root.hasUnread && root.reachable
-          }
-
-          Rectangle {
-            anchors.verticalCenter: parent.verticalCenter
-            visible: root.badgeCount > 0 || root.showAlertBadge
-            height: Style.space(12)
-            width: root.badgeWidth
-            radius: height / 2
-            color: root.showAlertBadge
-              ? Qt.rgba(root.alertColor.r, root.alertColor.g, root.alertColor.b, 0.18)
-              : Qt.rgba(button.foreground.r, button.foreground.g,
-                        button.foreground.b, 0.14)
-
-            Text {
-              anchors.centerIn: parent
-              text: root.showAlertBadge ? "!" : root.badgeCount
-              textFormat: Text.PlainText
-              font.family: root.fontFamily
-              font.pixelSize: Style.font.caption
-              renderType: Text.NativeRendering
-              color: root.showAlertBadge ? root.alertColor : button.foreground
-            }
-          }
+          text: root.showAlertBadge ? "!" : root.badgeCount
+          textFormat: Text.PlainText
+          font.family: root.fontFamily
+          font.pixelSize: Style.font.caption
+          renderType: Text.NativeRendering
+          color: root.showAlertBadge ? root.alertColor : button.foreground
         }
       }
     }
