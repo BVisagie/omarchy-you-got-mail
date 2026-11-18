@@ -564,7 +564,8 @@ class ProviderDataBoundsTests(unittest.TestCase):
         self.assertEqual(payload["messages"][0]["url"], orchestrate.BAD_URL)
         self.assertEqual(payload["inboxes"][0]["searchUrl"], "")
         for bad in ("https://256.0.0.1/mail", "https://1.2.3/mail", "https://mail.123/inbox",
-                    "https://mail.0x1f/inbox", "https://mail.example.test/a\x00b", "https://mail.example.test/\x7f",
+                    "https://mail.0x1f/inbox", "https://bad host/inbox",
+                    "https://user@mail.example.test/m", "https://[::1]/m", "https://mail.example.test/a\x00b", "https://mail.example.test/\x7f",
                     "https://mail.example.test/m\n", " https://mail.example.test/m",
                     "https://mail.example.test/a\ud800/b", "https://mail.example:65536/m",
                     "https:///no-host", "https://mail.example:port/m"):
@@ -577,6 +578,10 @@ class ProviderDataBoundsTests(unittest.TestCase):
             row["url"] = good
             payload = self._list({"a": {"ok": True, "unread": 1, "messages": [row]}})
             self.assertEqual(payload["messages"][0]["url"], good)
+        payload = self._list(
+            {"a": {"ok": True, "unread": 0, "searchUrl": "https://bad host/inbox", "messages": []}}
+        )
+        self.assertEqual(payload["inboxes"][0]["searchUrl"], "")
         url = "https://mail.example.test/#search/invalid:thing"
         payload = self._list({"a": {"ok": True, "unread": 0, "searchUrl": url, "messages": []}})
         self.assertEqual(payload["inboxes"][0]["searchUrl"], url)

@@ -88,6 +88,10 @@ def _text(value, limit: int) -> str:
     return one_line(_clean(str(value)), limit)
 
 
+# The panel opens only links of this shape (MailState.validUrl); anything else
+# is unusable here too, so the CLI and the panel agree.
+PANEL_URL = re.compile(r"https://[A-Za-z0-9.-]+(?::\d+)?(?:[/?#][^\s]*)?")
+
 # A link that is present but unusable stays unusable: an empty link would let
 # a click mark the message read without opening anything.
 BAD_URL = "invalid:"
@@ -105,7 +109,7 @@ def _url(value) -> str:
     url = value
     # A control character cannot travel whole to the browser, so a link
     # carrying one, even at its end, is not opened.
-    if len(url) > MAX_URL or not url.startswith("https://") or any(
+    if len(url) > MAX_URL or not PANEL_URL.fullmatch(url) or any(
         ord(ch) < 0x20 or ord(ch) == 0x7F for ch in url
     ):
         return BAD_URL

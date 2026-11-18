@@ -53,6 +53,7 @@ class BoundedIMAP(imaplib.IMAP4_SSL):
 
     def read(self, size: int) -> bytes:
         if size > MAX_LITERAL:
+            self.over_budget = True
             raise self.abort("the server sent a message part too large to read")
         data = super().read(size)
         self._count(len(data))

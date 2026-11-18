@@ -250,6 +250,12 @@ class ImapReadAllTests(unittest.TestCase):
             payload = capture_json(self.imap.cmd_list, {"host": "h", "user": "u"}, "pw", 5)
         self.assertEqual(payload, {"ok": False, "error": "the server sent more data than expected"})
 
+    def test_an_oversized_literal_marks_the_session_over_budget(self) -> None:
+        client = self.imap.BoundedIMAP.__new__(self.imap.BoundedIMAP)
+        with self.assertRaises(self.imap.imaplib.IMAP4.abort):
+            client.read(self.imap.MAX_LITERAL + 1)
+        self.assertTrue(client.over_budget)
+
     def test_read_all_keeps_its_count_when_the_server_stops_it(self) -> None:
         imap = self.imap
 
