@@ -5,10 +5,10 @@ you add; click a row to open that message in the browser. Read mail is never
 listed. Gmail, HEY, Outlook, Fastmail and IMAP are built in.
 
 <p align="center">
-  <img src="preview.png" alt="You've Got Mail — unread mailbox, Accounts, and Shortcuts overview, with sample mail" width="960">
+  <img src="preview.png" alt="You've Got Mail — the unread pile and the Accounts view, with sample mail" width="960">
 </p>
 
-<p align="center"><sub>Sample mail, version 2.8.0.</sub></p>
+<p align="center"><sub>Sample mail, version 3.0.0.</sub></p>
 
 ## Requirements
 

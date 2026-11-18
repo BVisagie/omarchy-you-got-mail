@@ -153,7 +153,7 @@ their tools are shown as they arrive.
 
 ## Screenshots
 
-Sample mail, version 2.8.0.
+Sample mail, version 3.0.0.
 
 <p align="center">
   <img src="screenshots/accounts.png" alt="Accounts with unread totals, check times, individual inbox links, and Add account" width="360">
