@@ -13,12 +13,24 @@ needs Omarchy 4.5.
   size. Clicks and the tooltip work on either.
 - Everything a provider sends back is checked before the panel sees it. A
   count or time that is not a number no longer fails every account: it is
-  read as 0. Subjects, senders, previews, labels, ids and links are cut to
-  size, links must be `https://`, and only the fields the panel shows are
-  passed on.
+  read as 0. Subjects, senders, previews, labels and ids are cut to size, and
+  only the fields the panel shows are passed on.
+- A message link the browser could not open (not `https://`, a bad host or
+  port, control characters) is passed on as `invalid:`. Clicking that row
+  does nothing, so the message stays unread instead of being marked read
+  without opening.
 - IMAP servers, `hey` and `gws` can no longer send an unbounded reply. IMAP
-  stops at 256 KB for one message part or 32 MB for one check; `hey` and
-  `gws` stop at 8 MB. Each counts as a failed check for that account.
+  stops at 256 KB for one message part or 32 MB for one check; `hey`, `gws`
+  and each provider stop at 8 to 16 MB. Each counts as a failed check for
+  that account.
+- Gmail: a reply from `gws` that failed, was cut short, or could not be
+  saved (for example on a full disk) fails the check instead of showing
+  mail without details or the wrong account's links. Previews are decoded
+  before they are shortened, so they no longer end in a broken `&am`.
+- Subjects and names keep zero-width joiners, so Persian text and emoji such
+  as 👩‍💻 show as written.
+- Ctrl+C or SIGTERM to `you-got-mail` (for example during `read-all`) stops
+  every provider it started, including accounts still waiting their turn.
 - `refreshIntervalSec: 0` turns timed checks off. Mail is still checked when
   the plugin starts, when you open the panel, and when you refresh.
 - CI uses current Python and Node releases and ShellCheck 0.11.0, reads the
