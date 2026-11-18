@@ -1,6 +1,22 @@
 .pragma library
 
 // Pure state transitions shared by the panel and the headless tests.
+
+// Text goes through a translator, T.t(key, english, args) and
+// T.n(key, count, englishOne, englishOther). The panel passes one backed by
+// i18n/*.json; without one (the headless tests) the English text is used,
+// with %1, %2 filled in from args.
+function fill(text, args) {
+  return String(text).replace(/%(\d)/g, function(match, n) {
+    var value = (args || [])[Number(n) - 1]
+    return value === undefined ? match : String(value)
+  })
+}
+
+var PLAIN = {
+  t: function(key, english, args) { return fill(english, args) },
+  n: function(key, count, one, other) { return fill(count === 1 ? one : other, [count]) }
+}
 function dismiss(messages, unread, dismissed, id) {
   if (dismissed[id]) return null
   var index = messages.findIndex(function(row) { return row.id === id })
@@ -14,15 +30,16 @@ function dismiss(messages, unread, dismissed, id) {
   }
 }
 
-function readError(text, exitCode) {
-  if (exitCode !== 0) return "Could not mark as read (process failed)."
+function readError(text, exitCode, T) {
+  T = T || PLAIN
+  if (exitCode !== 0) return T.t("read.processFailed", "Could not mark as read (process failed).")
   try {
     var result = JSON.parse(text)
     if (result && result.ok === true) return ""
     if (result && typeof result.error === "string" && result.error.trim())
       return result.error.trim()
   } catch (_) {}
-  return "Could not mark as read (unexpected response)."
+  return T.t("read.unexpected", "Could not mark as read (unexpected response).")
 }
 
 function readNotice(error, accountId, accountLabel) {
@@ -140,42 +157,54 @@ function remember(entry, page) {
   return { seen: seen.slice(-200), mark: mark }
 }
 
-function checkLabel(checkedAt, now) {
-  if (!(checkedAt > 0)) return "Not checked successfully yet"
+// How long ago, in the words that follow "Checked" or "Last full check".
+function ago(checkedAt, now, T) {
+  T = T || PLAIN
   var age = Math.max(0, now - checkedAt)
-  if (age < 60) return "Checked just now"
-  if (age < 3600) return "Checked " + Math.floor(age / 60) + "m ago"
-  if (age < 86400) return "Checked " + Math.floor(age / 3600) + "h ago"
-  return "Checked " + Math.floor(age / 86400) + "d ago"
+  if (age < 60) return T.t("ago.now", "just now")
+  if (age < 3600) return T.n("ago.minutes", Math.floor(age / 60), "%1 minute ago", "%1 minutes ago")
+  if (age < 86400) return T.n("ago.hours", Math.floor(age / 3600), "%1 hour ago", "%1 hours ago")
+  return T.n("ago.days", Math.floor(age / 86400), "%1 day ago", "%1 days ago")
 }
 
-function accountEntries(inboxes, checks, now) {
+function checkLabel(checkedAt, now, T) {
+  T = T || PLAIN
+  if (!(checkedAt > 0)) return T.t("check.never", "Not checked successfully yet")
+  return T.t("check.when", "Checked %1", [ago(checkedAt, now, T)])
+}
+
+function accountEntries(inboxes, checks, now, T) {
+  T = T || PLAIN
   var entries = []
   var labels = Object.create(null)
   for (var n = 0; n < inboxes.length; n++) {
-    var name = String(inboxes[n].account || inboxes[n].id || "Account")
+    var name = String(inboxes[n].account || inboxes[n].id || T.t("account.fallback", "Account"))
     labels[name] = (labels[name] || 0) + 1
   }
   for (var i = 0; i < inboxes.length; i++) {
     var box = inboxes[i] || {}
     var available = box.ok === true && validUrl(box.searchUrl)
-    var status = box.ok === true ? (Math.max(0, Number(box.unread) || 0) + " unread") : "Unavailable"
-    var label = String(box.account || box.id || "Account")
+    var count = Math.max(0, Number(box.unread) || 0)
+    var status = box.ok === true ? T.n("count.unread", count, "%1 unread", "%1 unread") : T.t("account.unavailable", "Unavailable")
+    var label = String(box.account || box.id || T.t("account.fallback", "Account"))
     // IDs disambiguate account labels without exposing addresses or credentials.
     if (box.id && labels[label] > 1) label += " · " + box.id
     entries.push({
       key: "account:" + box.id,
       title: label,
-      detail: status + " · " + checkLabel(checks[box.id], now)
-        + (box.ok === false ? "\n" + String(box.message || box.error || "Could not reach this account.") : ""),
-      action: available ? "Open inbox" : (box.ok === true ? "No webmail URL configured" : "Inbox unavailable"),
+      detail: status + " · " + checkLabel(checks[box.id], now, T)
+        + (box.ok === false ? "\n" + String(box.message || box.error || T.t("account.unreachable", "Could not reach this account.")) : ""),
+      action: available ? T.t("account.openInbox", "Open inbox")
+        : (box.ok === true ? T.t("account.noWebmail", "No webmail URL configured") : T.t("account.inboxUnavailable", "Inbox unavailable")),
       enabled: available,
       kind: "inbox",
       url: available ? box.searchUrl : ""
     })
   }
-  entries.push({key: "add", title: "Add account", detail: "Set up a mailbox in a terminal", action: "Open setup", enabled: true, kind: "add"})
-  entries.push({key: "guide", title: "Setup guide", detail: "Provider instructions and sign-in help", action: "Open guide", enabled: true, kind: "guide"})
+  entries.push({key: "add", title: T.t("account.add", "Add account"), detail: T.t("account.addDetail", "Set up a mailbox in a terminal"),
+                action: T.t("account.addAction", "Open setup"), enabled: true, kind: "add"})
+  entries.push({key: "guide", title: T.t("account.guide", "Setup guide"), detail: T.t("account.guideDetail", "Provider instructions and sign-in help"),
+                action: T.t("account.guideAction", "Open guide"), enabled: true, kind: "guide"})
   return entries
 }
 
@@ -188,23 +217,25 @@ function moveMenu(entries, index, delta) {
   return index
 }
 
-function shortcuts() {
+// Keyboard keys stay as they are; the words around them are translated.
+function shortcuts(T) {
+  T = T || PLAIN
   return [
-    {key: "↑ ↓ / j k", title: "Move through mail or account actions"},
-    {key: "Enter / Space / o", title: "Open the selected message or account action"},
-    {key: "a", title: "Mark the selected message as read"},
-    {key: "A", title: "Mark all unread as read; press twice to confirm"},
-    {key: "i", title: "Open every inbox with unread mail"},
-    {key: "n / p", title: "Next / previous page"},
-    {key: "m", title: "Accounts and setup"},
-    {key: "?", title: "Show or hide shortcut help"},
-    {key: "r / middle-click", title: "Refresh mail"},
-    {key: "s", title: "Turn the new-mail sound on or off"},
-    {key: "x / ×", title: "Dismiss an action error"},
-    {key: "Tab / Shift+Tab", title: "Switch to the next / previous bar panel"},
-    {key: "Esc", title: "Back to mail, cancel confirmation, or close"},
-    {key: "Click bar icon", title: "Open or close the panel"},
-    {key: "Right-click icon", title: "Open every inbox with unread mail"},
-    {key: "Click message", title: "Open in browser and mark as read"}
+    {key: "↑ ↓ / j k", title: T.t("help.move", "Move through mail or account actions")},
+    {key: "Enter / Space / o", title: T.t("help.open", "Open the selected message or account action")},
+    {key: "a", title: T.t("help.markOne", "Mark the selected message as read")},
+    {key: "A", title: T.t("help.markAll", "Mark all unread as read; press twice to confirm")},
+    {key: "i", title: T.t("help.openUnread", "Open every inbox with unread mail")},
+    {key: "n / p", title: T.t("help.pages", "Next / previous page")},
+    {key: "m", title: T.t("help.accounts", "Accounts and setup")},
+    {key: "?", title: T.t("help.help", "Show or hide shortcut help")},
+    {key: T.t("help.refreshKeys", "r / middle-click"), title: T.t("help.refresh", "Refresh mail")},
+    {key: "s", title: T.t("help.sound", "Turn the new-mail sound on or off")},
+    {key: "x / ×", title: T.t("help.dismiss", "Dismiss an action error")},
+    {key: "Tab / Shift+Tab", title: T.t("help.panels", "Switch to the next / previous bar panel")},
+    {key: "Esc", title: T.t("help.back", "Back to mail, cancel confirmation, or close")},
+    {key: T.t("help.clickIconKey", "Click bar icon"), title: T.t("help.clickIcon", "Open or close the panel")},
+    {key: T.t("help.rightClickIconKey", "Right-click icon"), title: T.t("help.openUnread", "Open every inbox with unread mail")},
+    {key: T.t("help.clickMessageKey", "Click message"), title: T.t("help.clickMessage", "Open in browser and mark as read")}
   ]
 }

@@ -26,8 +26,9 @@ Panel {
   readonly property string iconExternal: "\uF08E"
   readonly property string iconMarkAll: "\uF2B6"
   readonly property string iconConfirm: "\uF00C"
-  readonly property string iconPrev: "\uF053"
-  readonly property string iconNext: "\uF054"
+  // The panel mirrors in right-to-left languages, so back and forward swap.
+  readonly property string iconPrev: I18n.rightToLeft ? "\uF054" : "\uF053"
+  readonly property string iconNext: I18n.rightToLeft ? "\uF053" : "\uF054"
   readonly property string iconSoundOn: "\uF028"
   readonly property string iconSoundOff: "\uF026"
 
@@ -83,8 +84,18 @@ Panel {
   property var arrivalState: null
   // Date.now() of the last sound toggle request; see toggleSound.
   property double lastSoundToggle: 0
-  readonly property var accountMenu: MailState.accountEntries(inboxes, accountChecks, now)
-  readonly property var shortcutHelp: MailState.shortcuts()
+  // The plugin's own text comes from i18n/<language>.json, English when a
+  // string is missing, and follows Setup > Language without a restart.
+  // Mail, provider and CLI messages are shown as they arrive.
+  readonly property QtObject strings: Translations { directory: Qt.resolvedUrl("i18n") }
+  function tr(key, english, args) { return MailState.fill(strings.t(key, english), args) }
+  function trn(key, count, one, other) {
+    return MailState.fill(strings.tn(key, count, count === 1 ? one : other), [I18n.formatNumber(count)])
+  }
+  readonly property var T: ({ t: root.tr, n: root.trn })
+
+  readonly property var accountMenu: MailState.accountEntries(inboxes, accountChecks, now, T)
+  readonly property var shortcutHelp: MailState.shortcuts(T)
 
   function showView(view) {
     cancelMarkAllConfirm()
@@ -166,8 +177,8 @@ Panel {
 
   function freshnessText() {
     return allCheckedAt > 0
-      ? "Last full check: " + MailState.checkLabel(allCheckedAt, now).replace(/^Checked /, "")
-      : "No successful check of all accounts yet"
+      ? tr("check.lastFull", "Last full check: %1", [MailState.ago(allCheckedAt, now, T)])
+      : tr("check.lastFullNever", "No successful check of all accounts yet")
   }
 
   function updateAccounts(reported) {
@@ -394,25 +405,23 @@ Panel {
   }
 
   function titleText() {
-    if (root.needsSignIn && (root.unread === 0 || !root.reachable)) return "Sign-in needed"
-    if (root.unread === 1) return "1 unread"
-    return root.unread + " unread"
+    if (root.needsSignIn && (root.unread === 0 || !root.reachable)) return tr("title.signIn", "Sign-in needed")
+    return countLabel()
   }
 
   function countLabel() {
-    if (root.unread === 1) return "1 unread"
-    return root.unread + " unread"
+    return trn("count.unread", root.unread, "%1 unread", "%1 unread")
   }
 
   function mailTooltip() {
     if (root.actionWarning !== "") return root.actionWarning
     if (!root.reachable)
-      return root.errorText !== "" ? root.errorText : "Mail unreachable"
+      return root.errorText !== "" ? root.errorText : tr("mail.unreachableShort", "Mail unreachable")
     var warn = root.warningText
     if (root.hasUnread)
       return warn !== "" ? (countLabel() + " · " + warn) : countLabel()
     if (warn !== "") return warn
-    return "No unread mail"
+    return tr("mail.none", "No unread mail")
   }
 
   function barTooltip() {
@@ -420,7 +429,7 @@ Panel {
     for (var i = 0; i < inboxes.length; i++) {
       var box = inboxes[i]
       if (box.ok === false)
-        parts.push((box.account || box.id) + ": " + MailState.checkLabel(accountChecks[box.id], now))
+        parts.push((box.account || box.id) + ": " + MailState.checkLabel(accountChecks[box.id], now, T))
     }
     return parts.join("\n")
   }
@@ -447,7 +456,7 @@ Panel {
     if (!root.readExited || !root.readOutputReady || root.pendingId === "") return
     var id = root.pendingId
     var saved = root.dismissedIds[id]
-    var error = MailState.readError(root.readOutput, root.readExitCode)
+    var error = MailState.readError(root.readOutput, root.readExitCode, T)
     var result = MailState.settle(messages, unread, dismissedIds, id, error)
     root.mailboxRevision += 1
     messages = result.messages
@@ -582,14 +591,14 @@ Panel {
         refresh()
         return
       }
-      showActionWarning(data.error || "could not mark all as read")
+      showActionWarning(data.error || tr("markAll.failed", "could not mark all as read"))
       if (marked > 0) {
         root.reconciling = true
         firstPage()
         refresh()
       }
     } catch (e) {
-      showActionWarning("unexpected output from you-got-mail")
+      showActionWarning(tr("cli.unexpected", "unexpected output from you-got-mail"))
     }
   }
 
@@ -610,12 +619,14 @@ Panel {
   function ageLabel(ts) {
     if (!ts || ts <= 0) return ""
     var seconds = Math.max(0, root.now - ts)
-    if (seconds < 60) return "now"
-    if (seconds < 3600) return Math.floor(seconds / 60) + "m"
-    if (seconds < 86400) return Math.floor(seconds / 3600) + "h"
-    if (seconds < 604800) return Math.floor(seconds / 86400) + "d"
-    if (seconds < 2592000) return Math.floor(seconds / 604800) + "w"
-    return Qt.formatDate(new Date(ts * 1000), "d MMM")
+    // Short forms for the row, each one a string of its own to translate.
+    if (seconds < 60) return tr("age.now", "now")
+    if (seconds < 3600) return trn("age.minutesShort", Math.floor(seconds / 60), "%1m", "%1m")
+    if (seconds < 86400) return trn("age.hoursShort", Math.floor(seconds / 3600), "%1h", "%1h")
+    if (seconds < 604800) return trn("age.daysShort", Math.floor(seconds / 86400), "%1d", "%1d")
+    if (seconds < 2592000) return trn("age.weeksShort", Math.floor(seconds / 604800), "%1w", "%1w")
+    // The language picked under Setup > Language, not the shell's start-up one.
+    return Qt.locale(I18n.formatLocale).toString(new Date(ts * 1000), "d MMM")
   }
 
   function oneLine(value) {
@@ -683,7 +694,7 @@ Panel {
       if (!root.refreshPending) root.reconciling = false
       reachable = false
       failures = []
-      errorText = "unexpected output from you-got-mail"
+      errorText = tr("cli.unexpected", "unexpected output from you-got-mail")
       staleAccounts(errorText)
     }
   }
@@ -869,8 +880,8 @@ Panel {
 
             PanelSectionHeader {
               width: parent.width
-              text: root.auxiliaryView === "help" ? "Shortcuts"
-                : (root.auxiliaryView === "accounts" ? "Accounts" : root.titleText())
+              text: root.auxiliaryView === "help" ? root.tr("view.shortcuts", "Shortcuts")
+                : (root.auxiliaryView === "accounts" ? root.tr("view.accounts", "Accounts") : root.titleText())
               textFormat: Text.PlainText
               elide: Text.ElideRight
               foreground: root.foreground
@@ -898,7 +909,7 @@ Panel {
             PanelActionButton {
               visible: root.auxiliaryView !== ""
               iconText: root.iconPrev
-              tooltipText: "Back to unread mail (Esc)"
+              tooltipText: root.tr("tip.back", "Back to unread mail (Esc)")
               foreground: root.foreground
               hoverColor: root.accent
               onClicked: root.showView("")
@@ -907,8 +918,8 @@ Panel {
             PanelActionButton {
               iconText: root.soundEnabled ? root.iconSoundOn : root.iconSoundOff
               tooltipText: root.soundEnabled
-                ? "Turn off the new-mail sound (s)"
-                : "Turn on the new-mail sound (s)"
+                ? root.tr("tip.soundOff", "Turn off the new-mail sound (s)")
+                : root.tr("tip.soundOn", "Turn on the new-mail sound (s)")
               foreground: root.soundEnabled ? root.accent : root.foreground
               hoverColor: root.accent
               onClicked: root.toggleSound()
@@ -916,7 +927,7 @@ Panel {
 
             PanelActionButton {
               iconText: "\uF0C0"
-              tooltipText: "Accounts and setup (m)"
+              tooltipText: root.tr("tip.accounts", "Accounts and setup (m)")
               foreground: root.foreground
               hoverColor: root.accent
               onClicked: root.showView("accounts")
@@ -924,7 +935,7 @@ Panel {
 
             PanelActionButton {
               iconText: "\uF128"
-              tooltipText: "Keyboard shortcuts (?)"
+              tooltipText: root.tr("tip.help", "Keyboard shortcuts (?)")
               foreground: root.foreground
               hoverColor: root.accent
               onClicked: root.showView("help")
@@ -938,10 +949,10 @@ Panel {
               iconText: root.markAllArmed || root.markAllBusy
                 ? root.iconConfirm : root.iconMarkAll
               tooltipText: root.markAllBusy
-                ? "Marking unread mail as read…"
+                ? root.tr("markAll.busy", "Marking unread mail as read…")
                 : (root.markAllArmed
-                  ? "Click again to confirm"
-                  : "Mark all unread as read (A)")
+                  ? root.tr("markAll.clickAgain", "Click again to confirm")
+                  : root.tr("tip.markAll", "Mark all unread as read (A)"))
               foreground: root.foreground
               hoverColor: root.accent
               fontFamily: root.fontFamily
@@ -955,8 +966,8 @@ Panel {
               enabled: root.hasOpenableInbox && !root.markAllBusy
               iconText: root.iconExternal
               tooltipText: root.accountCount > 1
-                ? "Open each unread inbox in the browser (i)"
-                : "Open unread in browser (i)"
+                ? root.tr("tip.openEach", "Open each unread inbox in the browser (i)")
+                : root.tr("tip.openUnread", "Open unread in browser (i)")
               foreground: root.foreground
               hoverColor: root.accent
               fontFamily: root.fontFamily
@@ -977,7 +988,7 @@ Panel {
             anchors.right: refreshButton.left
             anchors.rightMargin: Style.space(6)
             anchors.verticalCenter: parent.verticalCenter
-            text: listProc.running ? "Checking mail…" : root.freshnessText()
+            text: listProc.running ? root.tr("mail.checking", "Checking mail…") : root.freshnessText()
             textFormat: Text.PlainText
             wrapMode: Text.WordWrap
             font.family: root.fontFamily
@@ -991,7 +1002,7 @@ Panel {
             anchors.right: parent.right
             anchors.verticalCenter: parent.verticalCenter
             iconText: "\uF021"
-            tooltipText: "Refresh mail (r)"
+            tooltipText: root.tr("tip.refresh", "Refresh mail (r)")
             enabled: !root.markAllBusy
             foreground: root.foreground
             hoverColor: root.accent
@@ -1035,7 +1046,7 @@ Panel {
               width: parent.width
               text: root.errorText !== ""
                 ? root.errorText
-                : "Could not reach mail. Showing the last list."
+                : root.tr("mail.unreachableKept", "Could not reach mail. Showing the last list.")
               textFormat: Text.PlainText
               wrapMode: Text.WordWrap
               font.family: root.fontFamily
@@ -1057,9 +1068,10 @@ Panel {
               FailureNotice {
                 required property var modelData
                 width: failureList.width
+                strings: root.strings
                 failure: Object.assign({}, modelData, {
-                  message: (modelData.message || modelData.error || "Could not reach mail.")
-                    + "\n" + MailState.checkLabel(root.accountChecks[modelData.id], root.now)
+                  message: (modelData.message || modelData.error || root.tr("mail.unreachable", "Could not reach mail."))
+                    + "\n" + MailState.checkLabel(root.accountChecks[modelData.id], root.now, root.T)
                 })
                 foreground: root.foreground
                 urgent: bar ? bar.urgent : Color.urgent
@@ -1097,7 +1109,7 @@ Panel {
               anchors.right: parent.right
               anchors.verticalCenter: parent.verticalCenter
               iconText: "\uF00D"
-              tooltipText: "Dismiss action error (x)"
+              tooltipText: root.tr("tip.dismiss", "Dismiss action error (x)")
               foreground: root.foreground
               onClicked: root.actionWarning = ""
             }
@@ -1113,7 +1125,8 @@ Panel {
               id: markAllConfirmLabel
               anchors.verticalCenter: parent.verticalCenter
               width: parent.width
-              text: "Press A again to mark " + root.unread + " unread as read"
+              text: root.trn("markAll.confirm", root.unread,
+                "Press A again to mark %1 unread as read", "Press A again to mark %1 unread as read")
               textFormat: Text.PlainText
               elide: Text.ElideRight
               font.family: root.fontFamily
@@ -1133,8 +1146,8 @@ Panel {
               anchors.verticalCenter: parent.verticalCenter
               width: parent.width
               text: root.markAllBusy
-                ? "Marking unread mail as read…"
-                : "Refreshing unread mail…"
+                ? root.tr("markAll.busy", "Marking unread mail as read…")
+                : root.tr("mail.refreshing", "Refreshing unread mail…")
               textFormat: Text.PlainText
               elide: Text.ElideRight
               font.family: root.fontFamily
@@ -1341,7 +1354,7 @@ Panel {
 
               PanelActionButton {
                 iconText: root.iconPrev
-                tooltipText: "Previous page"
+                tooltipText: root.tr("tip.prevPage", "Previous page")
                 enabled: root.hasPrev && !root.readBusy && !root.markAllBusy && !root.reconciling
                 opacity: enabled ? 1 : 0.3
                 foreground: root.foreground
@@ -1353,7 +1366,7 @@ Panel {
 
               Text {
                 anchors.verticalCenter: parent.verticalCenter
-                text: "page " + (root.pageStack.length + 1)
+                text: root.tr("page.number", "page %1", [I18n.formatNumber(root.pageStack.length + 1)])
                 textFormat: Text.PlainText
                 font.family: root.fontFamily
                 font.pixelSize: Style.font.caption
@@ -1362,7 +1375,7 @@ Panel {
 
               PanelActionButton {
                 iconText: root.iconNext
-                tooltipText: "Next page"
+                tooltipText: root.tr("tip.nextPage", "Next page")
                 enabled: root.hasNext && !root.readBusy && !root.markAllBusy && !root.reconciling
                 opacity: enabled ? 1 : 0.3
                 foreground: root.foreground
@@ -1386,10 +1399,10 @@ Panel {
               horizontalAlignment: Text.AlignHCenter
               wrapMode: Text.WordWrap
               text: root.reachable
-                ? "You're all caught up."
+                ? root.tr("mail.caughtUp", "You're all caught up.")
                 : (root.hasSignInAction
-                  ? "Sign in above, then middle-click the icon to refresh."
-                  : "Fix sign-in from a terminal, then middle-click the icon.")
+                  ? root.tr("mail.signInAbove", "Sign in above, then middle-click the icon to refresh.")
+                  : root.tr("mail.signInTerminal", "Fix sign-in from a terminal, then middle-click the icon."))
               textFormat: Text.PlainText
               font.family: root.fontFamily
               font.pixelSize: Style.font.body

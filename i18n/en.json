@@ -1,0 +1,110 @@
+{
+  "account.add": "Add account",
+  "account.addAction": "Open setup",
+  "account.addDetail": "Set up a mailbox in a terminal",
+  "account.fallback": "Account",
+  "account.guide": "Setup guide",
+  "account.guideAction": "Open guide",
+  "account.guideDetail": "Provider instructions and sign-in help",
+  "account.inboxUnavailable": "Inbox unavailable",
+  "account.noWebmail": "No webmail URL configured",
+  "account.openGuide": "Open setup guide",
+  "account.openInbox": "Open inbox",
+  "account.unavailable": "Unavailable",
+  "account.unreachable": "Could not reach this account.",
+  "age.daysShort": {
+    "one": "%1d",
+    "other": "%1d"
+  },
+  "age.hoursShort": {
+    "one": "%1h",
+    "other": "%1h"
+  },
+  "age.minutesShort": {
+    "one": "%1m",
+    "other": "%1m"
+  },
+  "age.now": "now",
+  "age.weeksShort": {
+    "one": "%1w",
+    "other": "%1w"
+  },
+  "ago.days": {
+    "one": "%1 day ago",
+    "other": "%1 days ago"
+  },
+  "ago.hours": {
+    "one": "%1 hour ago",
+    "other": "%1 hours ago"
+  },
+  "ago.minutes": {
+    "one": "%1 minute ago",
+    "other": "%1 minutes ago"
+  },
+  "ago.now": "just now",
+  "check.lastFull": "Last full check: %1",
+  "check.lastFullNever": "No successful check of all accounts yet",
+  "check.never": "Not checked successfully yet",
+  "check.when": "Checked %1",
+  "cli.unexpected": "unexpected output from you-got-mail",
+  "count.unread": {
+    "one": "%1 unread",
+    "other": "%1 unread"
+  },
+  "help.accounts": "Accounts and setup",
+  "help.back": "Back to mail, cancel confirmation, or close",
+  "help.clickIcon": "Open or close the panel",
+  "help.clickIconKey": "Click bar icon",
+  "help.clickMessage": "Open in browser and mark as read",
+  "help.clickMessageKey": "Click message",
+  "help.dismiss": "Dismiss an action error",
+  "help.help": "Show or hide shortcut help",
+  "help.markAll": "Mark all unread as read; press twice to confirm",
+  "help.markOne": "Mark the selected message as read",
+  "help.move": "Move through mail or account actions",
+  "help.open": "Open the selected message or account action",
+  "help.openUnread": "Open every inbox with unread mail",
+  "help.pages": "Next / previous page",
+  "help.panels": "Switch to the next / previous bar panel",
+  "help.refresh": "Refresh mail",
+  "help.refreshKeys": "r / middle-click",
+  "help.rightClickIconKey": "Right-click icon",
+  "help.sound": "Turn the new-mail sound on or off",
+  "mail.caughtUp": "You're all caught up.",
+  "mail.checking": "Checking mail…",
+  "mail.none": "No unread mail",
+  "mail.refreshing": "Refreshing unread mail…",
+  "mail.signInAbove": "Sign in above, then middle-click the icon to refresh.",
+  "mail.signInTerminal": "Fix sign-in from a terminal, then middle-click the icon.",
+  "mail.unreachable": "Could not reach mail.",
+  "mail.unreachableKept": "Could not reach mail. Showing the last list.",
+  "mail.unreachableShort": "Mail unreachable",
+  "markAll.busy": "Marking unread mail as read…",
+  "markAll.clickAgain": "Click again to confirm",
+  "markAll.confirm": {
+    "one": "Press A again to mark %1 unread as read",
+    "other": "Press A again to mark %1 unread as read"
+  },
+  "markAll.failed": "could not mark all as read",
+  "page.number": "page %1",
+  "read.processFailed": "Could not mark as read (process failed).",
+  "read.unexpected": "Could not mark as read (unexpected response).",
+  "tip.accounts": "Accounts and setup (m)",
+  "tip.back": "Back to unread mail (Esc)",
+  "tip.copied": "Copied",
+  "tip.copy": "Copy command",
+  "tip.dismiss": "Dismiss action error (x)",
+  "tip.help": "Keyboard shortcuts (?)",
+  "tip.markAll": "Mark all unread as read (A)",
+  "tip.nextPage": "Next page",
+  "tip.openEach": "Open each unread inbox in the browser (i)",
+  "tip.openUnread": "Open unread in browser (i)",
+  "tip.prevPage": "Previous page",
+  "tip.refresh": "Refresh mail (r)",
+  "tip.signIn": "Sign in in a terminal",
+  "tip.soundOff": "Turn off the new-mail sound (s)",
+  "tip.soundOn": "Turn on the new-mail sound (s)",
+  "title.signIn": "Sign-in needed",
+  "view.accounts": "Accounts",
+  "view.shortcuts": "Shortcuts"
+}

@@ -95,8 +95,8 @@ class PanelContractTests(unittest.TestCase):
         self.assertNotIn("visible:", button)  # Shown in the mail, Accounts and Help views.
         self.assertIn("iconText: root.soundEnabled ? root.iconSoundOn : root.iconSoundOff", button)
         self.assertRegex(button, r'tooltipText: root\.soundEnabled\s+'
-                                 r'\? "Turn off the new-mail sound \(s\)"\s+'
-                                 r': "Turn on the new-mail sound \(s\)"')
+                                 r'\? root\.tr\("tip\.soundOff", "Turn off the new-mail sound \(s\)"\)\s+'
+                                 r': root\.tr\("tip\.soundOn", "Turn on the new-mail sound \(s\)"\)')
         self.assertIn("foreground: root.soundEnabled ? root.accent : root.foreground", button)
         self.assertIn("hoverColor: root.accent", button)
 
@@ -218,7 +218,7 @@ class PanelContractTests(unittest.TestCase):
             "showAlertBadge: hasAlert && (unread === 0 || !reachable)", self.qml
         )
         self.assertIn(
-            'if (root.needsSignIn && (root.unread === 0 || !root.reachable)) return "Sign-in needed"',
+            'if (root.needsSignIn && (root.unread === 0 || !root.reachable)) return tr("title.signIn", "Sign-in needed")',
             self.qml,
         )
 

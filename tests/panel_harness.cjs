@@ -22,6 +22,9 @@ module.exports = function panelHarness() {
     auxiliaryView: '', menuCursor: -1, savedMessageId: '',
     auxiliaryMenu: {contentY: 0, contentHeight: 500, height: 100, revealCursor() {}},
     keyCatcher: {forceActiveFocus() {}}, Style: {space(value) {return value;}},
+    // English, as when a string is missing from every catalog.
+    strings: {t(key, english) { return english; }, tn(key, count, english) { return english; }},
+    I18n: {formatNumber(value) { return String(value); }, formatLocale: 'en-US'},
     reachable: true, hasUnread: true, pageSize: 25, script: '/test/you-got-mail',
     arrivalState: null, soundCooldownSec: 60, soundVolume: 100, soundFile: '',
     moduleName: 'bvisagie.you-got-mail', settings: {}, bar: null, lastSoundToggle: 0,
@@ -43,8 +46,9 @@ module.exports = function panelHarness() {
     },
     set(value) { panel.settings = Object.assign({}, panel.settings, {soundEnabled: value}); },
   });
+  Object.defineProperty(panel, 'T', {get() { return {t: panel.tr, n: panel.trn}; }});
   Object.defineProperty(panel, 'accountMenu', {get() {
-    return state.accountEntries(panel.inboxes, panel.accountChecks, panel.now);
+    return state.accountEntries(panel.inboxes, panel.accountChecks, panel.now, panel.T);
   }});
   const methods = [...source.matchAll(/^  function \w+\([^\n]*\) \{[\s\S]*?^  \}/gm)]
     .map(match => match[0]).join('\n');
