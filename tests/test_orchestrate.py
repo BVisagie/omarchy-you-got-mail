@@ -350,5 +350,88 @@ class ReadAllTests(unittest.TestCase):
         self.assertEqual(payload["error"], "a: timed out")
 
 
+class ProviderDataBoundsTests(unittest.TestCase):
+    """Provider output is untrusted: odd values are cleaned, not fatal."""
+
+    def _list(self, payloads: dict) -> dict:
+        accounts = [_account(acc_id, "gmail", acc_id.title()) for acc_id in payloads]
+        with patch.object(orchestrate, "load_accounts", return_value=accounts), patch.object(
+            orchestrate, "_run_provider", side_effect=lambda acc, args: payloads[acc["id"]]
+        ):
+            return capture_json(orchestrate.cmd_list, "")
+
+    def test_non_numeric_counts_do_not_fail_other_accounts(self) -> None:
+        payload = self._list(
+            {
+                "odd": {"ok": True, "unread": "lots", "messages": [message("x", "soon")]},
+                "good": {"ok": True, "unread": 3, "messages": [message("g", 100)]},
+            }
+        )
+        self.assertTrue(payload["ok"])
+        self.assertEqual(payload["unread"], 3)
+        self.assertEqual({box["unread"] for box in payload["inboxes"]}, {0, 3})
+        odd = [m for m in payload["messages"] if m["id"].startswith("odd:")]
+        self.assertEqual(odd[0]["ts"], 0)
+
+    def test_counts_and_times_are_clamped(self) -> None:
+        payload = self._list(
+            {"a": {"ok": True, "unread": -5, "messages": [message("far", 10**12), message("neg", -1)]}}
+        )
+        self.assertEqual(payload["unread"], 0)
+        self.assertEqual([m["ts"] for m in payload["messages"]], [0, 0])
+        payload = self._list({"a": {"ok": True, "unread": True, "messages": []}})
+        self.assertEqual(payload["unread"], 0)
+        payload = self._list({"a": {"ok": True, "unread": 10**12, "messages": []}})
+        self.assertEqual(payload["unread"], orchestrate.MAX_COUNT)
+
+    def test_text_is_cut_to_size_and_kept_plain(self) -> None:
+        row = message("a", 100, subject="<img src=https://example.invalid/t>" + "s" * 5000)
+        row["from"] = "f" * 5000
+        row["snippet"] = "n" * 5000
+        row["labels"] = ["l" * 500] * 50 + [None, 7]
+        payload = self._list({"a": {"ok": True, "unread": 1, "messages": [row]}})
+        msg = payload["messages"][0]
+        self.assertTrue(msg["subject"].startswith("<img src=https://example.invalid/t>"))
+        self.assertLessEqual(len(msg["subject"]), orchestrate.MAX_TEXT)
+        self.assertLessEqual(len(msg["from"]), orchestrate.MAX_TEXT)
+        self.assertLessEqual(len(msg["snippet"]), orchestrate.MAX_SNIPPET)
+        self.assertEqual(len(msg["labels"]), orchestrate.MAX_LABELS)
+        self.assertTrue(all(len(lab) <= orchestrate.MAX_LABEL for lab in msg["labels"]))
+
+    def test_only_known_fields_reach_the_panel(self) -> None:
+        row = message("a", 100)
+        row["extra"] = "x" * 10_000
+        payload = self._list({"a": {"ok": True, "unread": 1, "messages": [row]}})
+        self.assertEqual(
+            set(payload["messages"][0]),
+            {"id", "account", "subject", "from", "snippet", "ts", "url", "labels"},
+        )
+
+    def test_bad_ids_and_urls_are_dropped(self) -> None:
+        rows = [message("i" * 600, 100), {"id": True}, {"id": ["x"]}, "row", message("ok", 50)]
+        rows[-1]["url"] = "javascript:alert(1)"
+        payload = self._list(
+            {"a": {"ok": True, "unread": 2, "searchUrl": "http://plain.test/", "messages": rows}}
+        )
+        self.assertEqual(len(payload["messages"]), 1)
+        self.assertEqual(payload["messages"][0]["url"], "")
+        self.assertEqual(payload["inboxes"][0]["searchUrl"], "")
+
+    def test_rows_are_capped_at_what_was_asked_for(self) -> None:
+        rows = [message(f"m{i}", 1000 - i) for i in range(500)]
+        tagged = orchestrate._tag_messages(_account("a", "gmail", "Gmail"), {"messages": rows}, 25)
+        self.assertEqual(len(tagged), 25)
+        self.assertEqual(orchestrate._tag_messages(_account("a", "gmail", "Gmail"), {"messages": "x"}, 25), [])
+
+    def test_long_provider_error_is_cut(self) -> None:
+        payload = self._list(
+            {
+                "a": {"ok": False, "error": "e" * 5000},
+                "b": {"ok": True, "unread": 0, "messages": []},
+            }
+        )
+        self.assertLessEqual(len(payload["warning"]), orchestrate.MAX_ERROR + 50)
+
+
 if __name__ == "__main__":
     unittest.main()

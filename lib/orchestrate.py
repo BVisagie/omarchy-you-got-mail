@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import math
 import os
 import subprocess
 import time
@@ -19,12 +20,67 @@ from common import (
     load_accounts,
     max_messages,
     needs_sign_in,
+    one_line,
     provider_path,
     secret_path,
 )
 
 LIST_TIMEOUT = 45
 READ_ALL_TIMEOUT = 120
+
+# Provider output is data from a mail server or another program. Everything
+# the panel draws or acts on is checked and cut to size here, once, so one
+# odd value can neither fail the other accounts nor flood the panel.
+MAX_COUNT = 10_000_000
+MAX_TS = 4_102_444_800  # 2100-01-01
+MAX_ID = 512
+MAX_URL = 2048
+MAX_TEXT = 300
+MAX_SNIPPET = 400
+MAX_ERROR = 500
+MAX_LABELS = 10
+MAX_LABEL = 60
+
+
+def _bounded_int(value, ceiling: int) -> int:
+    """A whole number in 0..ceiling; anything that is not a number is 0."""
+    if isinstance(value, bool):
+        return 0
+    if isinstance(value, int):
+        number = value
+    elif isinstance(value, float) and math.isfinite(value):
+        number = int(value)
+    elif isinstance(value, str) and value.strip().isdigit():
+        number = int(value.strip())
+    else:
+        return 0
+    return min(max(number, 0), ceiling)
+
+
+def _count(value) -> int:
+    return _bounded_int(value, MAX_COUNT)
+
+
+def _ts(value) -> int:
+    ts = _bounded_int(value, MAX_TS + 1)
+    return ts if ts <= MAX_TS else 0
+
+
+def _text(value, limit: int) -> str:
+    if isinstance(value, bool) or not isinstance(value, (str, int, float)):
+        return ""
+    return one_line(str(value), limit)
+
+
+def _url(value) -> str:
+    url = value.strip() if isinstance(value, str) else ""
+    if len(url) > MAX_URL or not url.startswith("https://"):
+        return ""
+    return url
+
+
+def _error(payload: dict, fallback: str) -> str:
+    return _text(payload.get("error"), MAX_ERROR) or fallback
 
 
 def _run_provider(account: dict, args: list[str], timeout: int = LIST_TIMEOUT) -> dict:
@@ -63,16 +119,38 @@ def _run_provider(account: dict, args: list[str], timeout: int = LIST_TIMEOUT) -
     return payload
 
 
-def _tag_messages(account: dict, payload: dict) -> list[dict]:
-    label = str(account.get("label") or account["id"])
+def _tag_messages(account: dict, payload: dict, limit: int) -> list[dict]:
+    label = _text(account.get("label") or account["id"], MAX_TEXT)
+    rows = payload.get("messages")
     tagged = []
-    for msg in payload.get("messages") or []:
-        if not isinstance(msg, dict) or not msg.get("id"):
+    for msg in rows if isinstance(rows, list) else []:
+        if len(tagged) >= limit:
+            break
+        if not isinstance(msg, dict):
             continue
-        item = dict(msg)
-        item["id"] = encode_id(account["id"], str(msg["id"]))
-        item["account"] = label
-        tagged.append(item)
+        local_id = msg.get("id")
+        if isinstance(local_id, bool) or not isinstance(local_id, (str, int)):
+            continue
+        local_id = str(local_id)
+        if not local_id or len(local_id) > MAX_ID:
+            continue
+        labels = msg.get("labels")
+        tagged.append(
+            {
+                "id": encode_id(account["id"], local_id),
+                "account": label,
+                "subject": _text(msg.get("subject"), MAX_TEXT),
+                "from": _text(msg.get("from"), MAX_TEXT),
+                "snippet": _text(msg.get("snippet"), MAX_SNIPPET),
+                "ts": _ts(msg.get("ts")),
+                "url": _url(msg.get("url")),
+                "labels": [
+                    _text(lab, MAX_LABEL)
+                    for lab in (labels if isinstance(labels, list) else [])[:MAX_LABELS]
+                    if _text(lab, MAX_LABEL)
+                ],
+            }
+        )
     return tagged
 
 
@@ -109,21 +187,22 @@ def cmd_list(page_token: str) -> None:
         for fut in as_completed(futures):
             acc, payload, finished_at = fut.result()
             if not payload.get("ok"):
-                msg = account_error(acc, str(payload.get("error") or "failed"))
+                msg = account_error(acc, _error(payload, "failed"))
                 errors.append(msg)
                 error_by_id[acc["id"]] = msg
                 continue
             payloads[acc["id"]] = payload
             checked_at[acc["id"]] = finished_at
-            unread += int(payload.get("unread") or 0)
-            if payload.get("email"):
-                emails.append(str(payload["email"]))
-            merged.extend(_tag_messages(acc, payload))
+            unread += _count(payload.get("unread"))
+            email = _text(payload.get("email"), MAX_TEXT)
+            if email:
+                emails.append(email)
+            merged.extend(_tag_messages(acc, payload, int(fetch)))
 
     inboxes = []
     signin = False
     for acc in accounts:
-        label = str(acc.get("label") or acc["id"])
+        label = _text(acc.get("label") or acc["id"], MAX_TEXT)
         payload = payloads.get(acc["id"])
         if payload:
             inboxes.append(
@@ -131,8 +210,8 @@ def cmd_list(page_token: str) -> None:
                     "id": acc["id"],
                     "account": label,
                     "checkedAt": checked_at[acc["id"]],
-                    "unread": int(payload.get("unread") or 0),
-                    "searchUrl": str(payload.get("searchUrl") or ""),
+                    "unread": _count(payload.get("unread")),
+                    "searchUrl": _url(payload.get("searchUrl")),
                     "ok": True,
                     "needsSignIn": False,
                 }
@@ -175,7 +254,7 @@ def cmd_list(page_token: str) -> None:
         )
         return
 
-    merged.sort(key=lambda m: int(m.get("ts") or 0), reverse=True)
+    merged.sort(key=lambda m: m["ts"], reverse=True)
     chunk = merged[start : start + per]
     # A message in the global top N must be in each account's top N, so
     # fetching `start + per` from every provider is enough for this page.
@@ -215,7 +294,7 @@ def cmd_read(opaque: str) -> None:
         die("unknown account")
     payload = _run_provider(acc, ["read", local_id])
     if not payload.get("ok"):
-        die(str(payload.get("error") or "could not mark as read"))
+        die(_error(payload, "could not mark as read"))
     emit({"ok": True})
 
 
@@ -232,11 +311,11 @@ def cmd_read_all() -> None:
         futures = [pool.submit(work, acc) for acc in accounts]
         for fut in as_completed(futures):
             acc, payload = fut.result()
-            marked += int(payload.get("marked") or 0)
+            marked += _count(payload.get("marked"))
             if payload.get("ok"):
                 succeeded += 1
                 continue
-            errors.append(account_error(acc, str(payload.get("error") or "failed")))
+            errors.append(account_error(acc, _error(payload, "failed")))
 
     signin = any(needs_sign_in(e) for e in errors)
     if succeeded == 0:
