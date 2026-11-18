@@ -8,7 +8,7 @@ listed. Gmail, HEY, Outlook, Fastmail and IMAP are built in.
   <img src="preview.png" alt="You've Got Mail — unread mailbox, Accounts, and Shortcuts overview, with sample mail" width="960">
 </p>
 
-<p align="center"><sub>Sample mail, version 2.8.0.</sub></p>
+<p align="center"><sub>Sample mail, version 3.0.0.</sub></p>
 
 ## Requirements
 
