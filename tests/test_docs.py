@@ -11,7 +11,7 @@ from support import ROOT
 LINK = re.compile(
     r"\]\(([^)\s]+)(?:\s+\"[^\"]*\")?\)|<img[^>]*\bsrc=\"([^\"]+)\"|^\[[^\]]+\]:\s*(\S+)", re.M
 )
-DEFINITION = re.compile(r"^\[([^\]]+)\]:", re.M)
+DEFINITION = re.compile(r"^\[([^\]]+)\]:[ \t]*(?=\S)", re.M)  # with a destination
 # [label][ref] and the shortcut [ref], outside code.
 REFERENCE = re.compile(r"\[[^\]]+\]\[([^\]]+)\]|\[([\w-]+)\](?![(:\[])")
 CODE = re.compile(r"```.*?```|`[^`\n]*`", re.S)

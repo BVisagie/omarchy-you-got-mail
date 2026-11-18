@@ -259,7 +259,7 @@ Not personal Outlook.com (see [Outlook](#outlook)).
 
 ```text
 host, port (993), username, password or app password
-webmail URL (optional) — opened when you click a message
+webmail URL (optional, https:// only) — opened when you click a message
 ```
 
 Unread is every selectable folder except special-use mailboxes (RFC 6154
@@ -269,8 +269,10 @@ spam, drafts, and sent. User folders and Gmail labels with no special-use
 flag still count. Category labels (Promotions and the like) are not
 special-use; pin an explicit `folders` list if they inflate the badge.
 
-There is no standard “open this IMAP message in the browser” URL; if you
-leave webmail empty, click still marks the message read.
+There is no standard “open this IMAP message in the browser” URL, so a click
+opens the webmail inbox. If you leave webmail empty, a click only marks the
+message read; an address that is not `https://` is refused, and the click
+leaves the message unread.
 
 Optional `"folders": ["INBOX", "INBOX/Work"]` on the account object is an
 allow-list: those names are used as-is, with no LIST and no skip filters.

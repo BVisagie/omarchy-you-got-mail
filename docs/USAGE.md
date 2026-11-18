@@ -21,7 +21,7 @@
 | Header envelope-open or `A` | mark all unread as read (click or press twice to confirm) |
 | `a` | mark the message under the cursor as read, without opening it |
 | Header external-link or `i` | same as right-click |
-| Click a message | open **that** thread in the browser and take it off the pile; an IMAP account opens its webmail inbox if one is set, and otherwise only marks the message read |
+| Click a message | open **that** thread in the browser and take it off the pile; an IMAP account opens its webmail inbox if an `https://` one is set, only marks the message read if none is set, and leaves it unread if the address is not `https://` |
 | `↑` `↓` or `j` `k` | move through mail or account actions; scroll help |
 | `Enter`, `Space` or `o` | open the selected message or account action |
 | `n` / `p` | next page, previous page |
