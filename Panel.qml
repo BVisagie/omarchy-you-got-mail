@@ -198,14 +198,34 @@ Panel {
   readonly property bool showAlertBadge: hasAlert && (unread === 0 || !reachable)
   readonly property color alertColor: bar ? bar.urgent : Color.urgent
 
-  readonly property int badgeWidth: (badgeCount > 0 || showAlertBadge)
+  readonly property bool badgeShown: badgeCount > 0 || showAlertBadge
+  readonly property int badgeWidth: badgeShown
     ? Math.max(Style.space(12), String(showAlertBadge ? "!" : badgeCount).length * Style.space(6) + Style.space(8))
     : 0
-  readonly property int barContentWidth: Style.bar.iconFont + badgeWidth + Style.space(5)
-  readonly property int barSlot: barContentWidth + Style.space(10)
+  readonly property int badgeHeight: Style.space(12)
+  readonly property bool barVertical: bar ? bar.vertical : false
+  readonly property int barThickness: bar ? bar.barSize : Style.bar.sizeHorizontal
+  // The mailbox is the button's icon and the badge sits beside it, or under
+  // it on a vertical bar. Omarchy 4.5 fits a button's whole icon into the
+  // bar's icon size, so a badge drawn inside the icon would shrink with it.
+  readonly property int badgeExtent: badgeShown
+    ? (barVertical ? badgeHeight : badgeWidth) + Style.space(5)
+    : 0
+  readonly property int barSlot: Style.bar.iconFont + Style.space(15) + badgeExtent
+  readonly property int iconExtent: barSlot - badgeExtent
 
-  implicitWidth: bar && bar.vertical ? (bar ? bar.barSize : Style.bar.sizeHorizontal) : barSlot
-  implicitHeight: bar && bar.vertical ? barSlot : (bar ? bar.barSize : Style.bar.sizeHorizontal)
+  implicitWidth: barVertical ? barThickness : barSlot
+  implicitHeight: barVertical ? barSlot : barThickness
+
+  function barPressed(b) {
+    if (b === Qt.RightButton) {
+      root.openSearch()
+    } else if (b === Qt.MiddleButton) {
+      root.refresh()
+    } else {
+      root.toggle()
+    }
+  }
 
   function validToken(t) {
     return typeof t === "string" && /^[A-Za-z0-9_-]{1,512}$/.test(t)
@@ -748,60 +768,64 @@ Panel {
 
   BarIconButton {
     id: button
-    anchors.fill: parent
     bar: root.bar
+    width: root.barVertical ? root.width : root.iconExtent
+    height: root.barVertical ? root.iconExtent : root.height
     opacity: root.hasAlert ? 0.5 : 1
-    slotSize: root.barSlot
-    opticalSize: root.barContentWidth
+    slotSize: root.iconExtent
     tooltipText: root.barTooltip()
 
     iconComponent: Component {
-      Item {
-        Row {
-          anchors.centerIn: parent
-          spacing: Style.space(5)
-
-          MailSlotIcon {
-            anchors.verticalCenter: parent.verticalCenter
-            iconSize: Style.bar.iconCanvas
-            color: button.foreground
-            flagColor: button.foreground
-            hasMail: root.hasUnread && root.reachable
-          }
-
-          Rectangle {
-            anchors.verticalCenter: parent.verticalCenter
-            visible: root.badgeCount > 0 || root.showAlertBadge
-            height: Style.space(12)
-            width: root.badgeWidth
-            radius: height / 2
-            color: root.showAlertBadge
-              ? Qt.rgba(root.alertColor.r, root.alertColor.g, root.alertColor.b, 0.18)
-              : Qt.rgba(button.foreground.r, button.foreground.g,
-                        button.foreground.b, 0.14)
-
-            Text {
-              anchors.centerIn: parent
-              text: root.showAlertBadge ? "!" : root.badgeCount
-              textFormat: Text.PlainText
-              font.family: root.fontFamily
-              font.pixelSize: Style.font.caption
-              renderType: Text.NativeRendering
-              color: root.showAlertBadge ? root.alertColor : button.foreground
-            }
-          }
-        }
+      MailSlotIcon {
+        iconSize: Style.bar.iconCanvas
+        color: button.foreground
+        flagColor: button.foreground
+        hasMail: root.hasUnread && root.reachable
       }
     }
 
-    onPressed: function(b) {
-      if (b === Qt.RightButton) {
-        root.openSearch()
-      } else if (b === Qt.MiddleButton) {
-        root.refresh()
-      } else {
-        root.toggle()
+    onPressed: function(b) { root.barPressed(b) }
+  }
+
+  Item {
+    id: badgeArea
+    visible: root.badgeShown
+    x: root.barVertical ? 0 : button.width
+    y: root.barVertical ? button.height : 0
+    width: root.barVertical ? root.width : root.badgeExtent
+    height: root.barVertical ? root.badgeExtent : root.height
+    opacity: button.opacity
+
+    Rectangle {
+      x: root.barVertical ? (parent.width - width) / 2 : 0
+      y: root.barVertical ? 0 : (parent.height - height) / 2
+      width: root.badgeWidth
+      height: root.badgeHeight
+      radius: height / 2
+      scale: button.pressScale
+      color: root.showAlertBadge
+        ? Qt.rgba(root.alertColor.r, root.alertColor.g, root.alertColor.b, 0.18)
+        : Qt.rgba(button.foreground.r, button.foreground.g, button.foreground.b, 0.14)
+
+      Text {
+        anchors.centerIn: parent
+        text: root.showAlertBadge ? "!" : root.badgeCount
+        textFormat: Text.PlainText
+        font.family: root.fontFamily
+        font.pixelSize: Style.font.caption
+        renderType: Text.NativeRendering
+        color: root.showAlertBadge ? root.alertColor : button.foreground
       }
+    }
+
+    // The badge answers clicks and shows the tooltip like the mailbox does.
+    MouseArea {
+      anchors.fill: parent
+      acceptedButtons: Qt.LeftButton | Qt.RightButton | Qt.MiddleButton
+      hoverEnabled: true
+      onClicked: function(mouse) { root.barPressed(mouse.button) }
+      onEntered: if (root.bar) root.bar.showTooltip(badgeArea, button.tooltipText)
+      onExited: if (root.bar) root.bar.hideTooltip(badgeArea)
     }
   }
 

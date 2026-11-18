@@ -52,6 +52,19 @@ class PanelContractTests(unittest.TestCase):
         field = [f for f in self.manifest["barWidget"]["schema"] if f["key"] == "refreshIntervalSec"][0]
         self.assertEqual(field["min"], 0)
 
+    def test_badge_sits_beside_the_icon_not_inside_it(self) -> None:
+        # Omarchy 4.5 scales a BarIconButton's whole icon to the bar icon size.
+        button = self.qml.split("  BarIconButton {\n    id: button")[1].split("\n  }\n")[0]
+        icon = button.split("iconComponent: Component {")[1]
+        self.assertIn("MailSlotIcon {", icon)
+        self.assertNotIn("Rectangle", icon)
+        self.assertNotIn("Row", icon)
+        badge = self.qml.split("id: badgeArea")[1].split("\n  }\n")[0]
+        self.assertIn("visible: root.badgeShown", badge)
+        self.assertIn("onClicked: function(mouse) { root.barPressed(mouse.button) }", badge)
+        self.assertIn("root.bar.showTooltip(badgeArea, button.tooltipText)", badge)
+        self.assertIn("onPressed: function(b) { root.barPressed(b) }", button)
+
     def _function(self, name: str) -> str:
         # The same shape tests/panel_harness.cjs extracts.
         found = re.search(rf"^  function {name}\([^\n]*\) \{{.*?^  \}}", self.qml, re.M | re.S)
