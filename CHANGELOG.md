@@ -4,7 +4,7 @@ Versions match `manifest.json`. Git tags are created at release time.
 
 ## 3.0.0
 
-For Omarchy 4.5. On Omarchy 4.0, stay on 2.10.0 (see the README).
+For Omarchy 4.5. On Omarchy 4.0, stay on 2.10.0 (see docs/UPDATING.md).
 
 - The panel follows the language picked under Setup > Language. Its text is
   read from `i18n/en.json` through Omarchy's translations, with plural forms,
@@ -18,7 +18,10 @@ For Omarchy 4.5. On Omarchy 4.0, stay on 2.10.0 (see the README).
   animations are turned off, and ease out like the rest of the shell.
 - The manifest lists search aliases (mail, email, inbox, unread, and the
   providers).
-- The README shows how to open the panel from a keybinding.
+- The README is short, and the details moved to docs/USAGE.md (controls,
+  keybinding, settings, sound, languages) and docs/UPDATING.md (updating,
+  staying on Omarchy 4.0), beside docs/ACCOUNTS.md. A keybinding example for
+  the panel is new.
 - Accounts, credentials and existing settings are unchanged. Run
   `omarchy restart shell` after updating.
 

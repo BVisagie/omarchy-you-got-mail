@@ -234,18 +234,24 @@ class PanelContractTests(unittest.TestCase):
         self.assertIn("Style.space(64)", self.qml)
         self.assertIn("Math.max(Style.space(40)", self.qml)
 
+    def _docs(self) -> str:
+        paths = [ROOT / "README.md", *sorted((ROOT / "docs").glob("*.md"))]
+        return "\n".join(path.read_text(encoding="utf-8") for path in paths)
+
     def test_readme_uses_https_install(self) -> None:
         readme = (ROOT / "README.md").read_text(encoding="utf-8")
         self.assertIn("https://github.com/BVisagie/omarchy-you-got-mail.git", readme)
         self.assertIn("omarchy plugin update bvisagie.you-got-mail", readme)
-        self.assertIn("omarchy plugin update bvisagie.you-got-mail --yes", readme)
-        self.assertIn("`q`", readme)
-        self.assertIn("~/.bun/bin", readme)
-        self.assertIn("YOU_GOT_MAIL_IMAP_PASSWORD", readme)
-        self.assertIn("gws auth setup", readme)
-        self.assertIn("accounts login", readme)
-        self.assertIn("GOOGLE_WORKSPACE_CLI_KEYRING_BACKEND=file", readme)
-        self.assertIn("No sudo or pkexec is required", readme)
+        self.assertIn("No sudo is needed", readme)
+        # The details live in docs/; the README links to them.
+        docs = self._docs()
+        self.assertIn("Add `--yes` to skip the diff", docs)
+        self.assertIn("`q`", docs)
+        self.assertIn("~/.bun/bin", docs)
+        self.assertIn("YOU_GOT_MAIL_IMAP_PASSWORD", docs)
+        self.assertIn("gws auth setup", docs)
+        self.assertIn("accounts login", docs)
+        self.assertIn("GOOGLE_WORKSPACE_CLI_KEYRING_BACKEND=file", docs)
         self.assertNotIn("must be public", readme)
         self.assertTrue((ROOT / "preview.png").is_file(), "marketplace listing wants root preview.png")
         self.assertIn("preview.png", readme)
@@ -299,9 +305,9 @@ class PanelContractTests(unittest.TestCase):
         self.assertNotIn("messages = []", self.qml)
         self.assertRegex(self.qml, r't === "a"\)\s+root\.markCursorRead\(\)')
         self.assertRegex(self.qml, r't === "A"\)\s+root\.requestMarkAll\(\)')
-        readme = (ROOT / "README.md").read_text(encoding="utf-8")
-        self.assertIn("Header envelope-open or `A`", readme)
-        self.assertIn("mark the message under the cursor as read, without opening it", readme)
+        usage = (ROOT / "docs" / "USAGE.md").read_text(encoding="utf-8")
+        self.assertIn("Header envelope-open or `A`", usage)
+        self.assertIn("mark the message under the cursor as read, without opening it", usage)
 
     def test_refresh_requests_are_coalesced(self) -> None:
         self.assertIn("property bool refreshPending", self.qml)
