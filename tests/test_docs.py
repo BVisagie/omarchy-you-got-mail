@@ -8,7 +8,13 @@ from pathlib import Path
 
 from support import ROOT
 
-LINK = re.compile(r"\]\(([^)\s]+)\)|<img[^>]*\bsrc=\"([^\"]+)\"|^\[[^\]]+\]:\s*(\S+)", re.M)
+LINK = re.compile(
+    r"\]\(([^)\s]+)(?:\s+\"[^\"]*\")?\)|<img[^>]*\bsrc=\"([^\"]+)\"|^\[[^\]]+\]:\s*(\S+)", re.M
+)
+DEFINITION = re.compile(r"^\[([^\]]+)\]:", re.M)
+# [label][ref] and the shortcut [ref], outside code.
+REFERENCE = re.compile(r"\[[^\]]+\]\[([^\]]+)\]|\[([\w-]+)\](?![(:\[])")
+CODE = re.compile(r"```.*?```|`[^`\n]*`", re.S)
 
 
 def _anchors(path: Path) -> set[str]:
@@ -35,6 +41,15 @@ class DocLinkTests(unittest.TestCase):
                 self.assertTrue(resolved.exists(), f"{doc.name}: {target}")
                 if anchor and resolved.suffix == ".md":
                     self.assertIn(anchor, _anchors(resolved), f"{doc.name}: {target}")
+
+    def test_reference_links_have_definitions(self) -> None:
+        docs = [ROOT / "README.md", ROOT / "CHANGELOG.md", *sorted((ROOT / "docs").glob("*.md"))]
+        for doc in docs:
+            text = doc.read_text(encoding="utf-8")
+            defined = {label.lower() for label in DEFINITION.findall(text)}
+            prose = DEFINITION.sub("", CODE.sub("", text))
+            for full, short in REFERENCE.findall(prose):
+                self.assertIn((full or short).lower(), defined, f"{doc.name}: [{full or short}]")
 
     def test_readme_keeps_install_and_removal(self) -> None:
         # The plugin marketplace requires both in the root README.

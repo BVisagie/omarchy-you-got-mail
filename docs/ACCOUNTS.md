@@ -348,11 +348,10 @@ you did not just receive from Microsoft.
 ## More than one account
 
 Every account goes on one pile: the badge is the sum of unread, rows are
-newest-first, and each row carries its account's label. Click a row to open
-**that** message and mark it read. Right-click the bar icon, or use the
-header's external-link button, to open each inbox that has unread mail; to
-open just one inbox, even at zero unread, use **Accounts (`m`) → Open inbox**.
-More in [USAGE.md § The panel](USAGE.md#the-panel).
+newest-first, and each row carries its account's label. To open just one
+inbox, even at zero unread, use **Accounts (`m`) → Open inbox**. What a click
+on a row, a right-click and each key do is in
+[USAGE.md § Controls](USAGE.md#controls).
 
 ## Troubleshooting
 
