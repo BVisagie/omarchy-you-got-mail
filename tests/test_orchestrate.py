@@ -38,6 +38,10 @@ class ProviderResultTests(unittest.TestCase):
             self.assertFalse(self._result('{"ok":%s}' % ok)["ok"], ok)
         self.assertTrue(self._result('{"ok":true}')["ok"])
 
+    def test_line_separators_inside_json_strings_are_fine(self) -> None:
+        result = self._result('log line\n{"ok":true,"messages":[{"subject":"a\u2028b\u2029c"}]}')
+        self.assertTrue(result["ok"])
+
     def test_malformed_json_is_an_account_error(self) -> None:
         for text in ('{"ok":true,"unread":' + "9" * 5000 + "}", "[" * 100_000, "{not json"):
             result = self._result(text)
@@ -425,6 +429,15 @@ class ProviderDataBoundsTests(unittest.TestCase):
         self.assertEqual(len(msg["labels"]), orchestrate.MAX_LABELS)
         self.assertTrue(all(len(lab) <= orchestrate.MAX_LABEL for lab in msg["labels"]))
 
+    def test_lone_surrogates_neither_crash_nor_reach_the_output(self) -> None:
+        import json
+
+        bad = message("\ud800", 2)
+        row = message("ok", 1, subject="Hi \udc00 there")
+        payload = self._list({"a": {"ok": True, "unread": 2, "messages": [bad, row]}})
+        self.assertEqual(len(payload["messages"]), 1)
+        json.dumps(payload, ensure_ascii=False).encode("utf-8")
+
     def test_only_known_fields_reach_the_panel(self) -> None:
         row = message("a", 100)
         row["extra"] = "x" * 10_000
@@ -442,8 +455,14 @@ class ProviderDataBoundsTests(unittest.TestCase):
             {"a": {"ok": True, "unread": 2, "searchUrl": "http://plain.test/", "messages": rows}}
         )
         self.assertEqual(len(payload["messages"]), 1)
-        self.assertEqual(payload["messages"][0]["url"], "")
+        # A bad link must not become "no link", or a click would mark the
+        # message read without opening it.
+        self.assertEqual(payload["messages"][0]["url"], orchestrate.BAD_URL)
         self.assertEqual(payload["inboxes"][0]["searchUrl"], "")
+        row = message("none", 1)
+        row["url"] = ""
+        payload = self._list({"a": {"ok": True, "unread": 1, "messages": [row]}})
+        self.assertEqual(payload["messages"][0]["url"], "")
 
     def test_longest_id_the_panel_accepts_is_kept(self) -> None:
         tagged = orchestrate._tag_messages(

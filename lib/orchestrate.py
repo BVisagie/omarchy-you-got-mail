@@ -72,16 +72,28 @@ def _ts(value) -> int:
     return ts if ts <= MAX_TS else 0
 
 
+def _clean(value: str) -> str:
+    # JSON can carry a lone surrogate, which cannot be written back out.
+    return value.encode("utf-8", "replace").decode("utf-8")
+
+
 def _text(value, limit: int) -> str:
     if isinstance(value, bool) or not isinstance(value, (str, int, float)):
         return ""
-    return one_line(str(value), limit)
+    return one_line(_clean(str(value)), limit)
+
+
+# A link that is present but unusable stays unusable: an empty link would let
+# a click mark the message read without opening anything.
+BAD_URL = "invalid:"
 
 
 def _url(value) -> str:
-    url = value.strip() if isinstance(value, str) else ""
-    if len(url) > MAX_URL or not url.startswith("https://"):
+    if value is None or value == "":
         return ""
+    url = _clean(value).strip() if isinstance(value, str) else ""
+    if len(url) > MAX_URL or not url.startswith("https://"):
+        return BAD_URL
     return url
 
 
@@ -112,7 +124,7 @@ def _run_provider(account: dict, args: list[str], timeout: int = LIST_TIMEOUT) -
         err = _text(proc.stderr, MAX_ERROR)
         return {"ok": False, "error": f"{account['id']}: {err or 'no output'}"}
     try:
-        payload = json.loads(text.splitlines()[-1])
+        payload = json.loads(text.split("\n")[-1])
     except (ValueError, RecursionError):
         return {"ok": False, "error": f"{account['id']}: provider returned invalid JSON"}
     if not isinstance(payload, dict):
@@ -140,7 +152,10 @@ def _tag_messages(account: dict, payload: dict, limit: int) -> list[dict]:
         if not local_id:
             continue
         # The panel takes ids whose encoded part fits MAX_ID characters.
-        opaque = encode_id(account["id"], local_id)
+        try:
+            opaque = encode_id(account["id"], local_id)
+        except UnicodeEncodeError:
+            continue
         if len(opaque.split(":", 1)[1]) > MAX_ID:
             continue
         labels = msg.get("labels")
@@ -220,7 +235,7 @@ def cmd_list(page_token: str) -> None:
                     "account": label,
                     "checkedAt": checked_at[acc["id"]],
                     "unread": _count(payload.get("unread")),
-                    "searchUrl": _url(payload.get("searchUrl")),
+                    "searchUrl": _url(payload.get("searchUrl")).replace(BAD_URL, ""),
                     "ok": True,
                     "needsSignIn": False,
                 }

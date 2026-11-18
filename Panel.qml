@@ -199,11 +199,13 @@ Panel {
   readonly property color alertColor: bar ? bar.urgent : Color.urgent
 
   readonly property bool badgeShown: badgeCount > 0 || showAlertBadge
+  readonly property bool barVertical: bar ? bar.vertical : false
+  // A vertical bar has room for three digits; the tooltip keeps the count.
+  readonly property string badgeText: showAlertBadge ? "!" : (barVertical && badgeCount > 999 ? "1k+" : String(badgeCount))
   readonly property int badgeWidth: badgeShown
-    ? Math.max(Style.space(12), String(showAlertBadge ? "!" : badgeCount).length * Style.space(6) + Style.space(8))
+    ? Math.max(Style.space(12), badgeText.length * Style.space(6) + Style.space(8))
     : 0
   readonly property int badgeHeight: Style.space(12)
-  readonly property bool barVertical: bar ? bar.vertical : false
   readonly property int barThickness: bar ? bar.barSize : Style.bar.sizeHorizontal
   // The mailbox is the button's icon and the badge sits beside it, or under
   // it on a vertical bar. Omarchy 4.5 fits a button's whole icon into the
@@ -788,16 +790,21 @@ Panel {
     onPressed: function(b) { root.barPressed(b) }
   }
 
-  Item {
+  // A bar button of its own, so the bar forwards clicks to it while the
+  // panel is open and shows the same tooltip as the mailbox.
+  WidgetButton {
     id: badgeArea
-    visible: root.badgeShown
+    bar: root.bar
     x: root.barVertical ? 0 : button.width
     y: root.barVertical ? button.height : 0
-    width: root.barVertical ? root.width : root.badgeExtent
-    height: root.barVertical ? root.badgeExtent : root.height
+    fixedWidth: root.barVertical ? root.width : root.badgeExtent
+    fixedHeight: root.barVertical ? root.badgeExtent : root.height
+    width: fixedWidth
+    height: fixedHeight
+    labelVisible: false
+    hasVisualContent: root.badgeShown
     opacity: button.opacity
-    // The bar only shows a tooltip for a target that says it is hovered.
-    readonly property bool tooltipHovered: visible && badgeMouse.containsMouse
+    tooltipText: button.tooltipText
 
     Rectangle {
       x: root.barVertical ? (parent.width - width) / 2 : 0
@@ -811,7 +818,7 @@ Panel {
 
       Text {
         anchors.centerIn: parent
-        text: root.showAlertBadge ? "!" : root.badgeCount
+        text: root.badgeText
         textFormat: Text.PlainText
         font.family: root.fontFamily
         font.pixelSize: Style.font.caption
@@ -820,16 +827,7 @@ Panel {
       }
     }
 
-    // The badge answers clicks and shows the tooltip like the mailbox does.
-    MouseArea {
-      id: badgeMouse
-      anchors.fill: parent
-      acceptedButtons: Qt.LeftButton | Qt.RightButton | Qt.MiddleButton
-      hoverEnabled: true
-      onClicked: function(mouse) { root.barPressed(mouse.button) }
-      onEntered: if (root.bar) root.bar.showTooltip(badgeArea, button.tooltipText)
-      onExited: if (root.bar) root.bar.hideTooltip(badgeArea)
-    }
+    onPressed: function(b) { root.barPressed(b) }
   }
 
   KeyboardPanel {

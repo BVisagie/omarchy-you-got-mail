@@ -553,6 +553,23 @@ class RunCappedTests(unittest.TestCase):
             )
         self.assertLess(time.monotonic() - started, 5)
 
+    def test_outer_stop_reaches_a_nested_command(self) -> None:
+        import time
+
+        # The inner command stays in the outer group, so the outer timeout
+        # stops it too instead of leaving it running unsupervised.
+        inner = (
+            "import os, sys\n"
+            f"sys.path.insert(0, {str(Path(common.__file__).parent)!r})\n"
+            "import common\n"
+            "common.run_capped([sys.executable, '-c', 'import time; time.sleep(30)'],"
+            " dict(os.environ), 30, own_group=False)"
+        )
+        started = time.monotonic()
+        with self.assertRaises(subprocess.TimeoutExpired):
+            self._run(inner, timeout=1)
+        self.assertLess(time.monotonic() - started, 5)
+
     def test_timeout_kills_the_program(self) -> None:
         with self.assertRaises(subprocess.TimeoutExpired):
             self._run("import time; time.sleep(30)", timeout=0.5)

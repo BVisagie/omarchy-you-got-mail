@@ -484,22 +484,30 @@ def provider_path(provider: str) -> Path:
 
 
 def run_capped(
-    cmd: list[str], env: dict, timeout: float, limit: int = MAX_CLI_OUTPUT
+    cmd: list[str],
+    env: dict,
+    timeout: float,
+    limit: int = MAX_CLI_OUTPUT,
+    own_group: bool = True,
 ) -> subprocess.CompletedProcess:
     """Like subprocess.run(capture_output=True, text=True), with a size cap.
 
     A program that prints more than `limit` bytes on either stream is killed
     and ResponseTooLargeError is raised, so a runaway reply cannot fill memory.
     """
-    # Its own process group, so a stop also reaches anything it started that
-    # still holds the pipes open.
+    # In its own process group, a stop also reaches anything it started that
+    # still holds the pipes open. A command run from inside such a group stays
+    # in it (own_group=False), so stopping the outer one stops it as well.
     proc = subprocess.Popen(
-        cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=env, start_new_session=True
+        cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=env, start_new_session=own_group
     )
     captured: dict[str, bytes] = {}
     too_large = threading.Event()
 
     def stop() -> None:
+        if not own_group:
+            proc.kill()
+            return
         try:
             os.killpg(proc.pid, signal.SIGKILL)
         except (ProcessLookupError, PermissionError):

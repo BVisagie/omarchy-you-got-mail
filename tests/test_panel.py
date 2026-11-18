@@ -61,12 +61,18 @@ class PanelContractTests(unittest.TestCase):
         self.assertIn("MailSlotIcon {", icon)
         self.assertNotIn("Rectangle", icon)
         self.assertNotIn("Row", icon)
+        # A WidgetButton registers with the bar, so clicks reach it while the
+        # panel is open, and it carries the bar's tooltip contract.
+        self.assertIn("  WidgetButton {\n    id: badgeArea", self.qml)
         badge = self.qml.split("id: badgeArea")[1].split("\n  }\n")[0]
-        self.assertIn("visible: root.badgeShown", badge)
-        self.assertIn("onClicked: function(mouse) { root.barPressed(mouse.button) }", badge)
-        self.assertIn("root.bar.showTooltip(badgeArea, button.tooltipText)", badge)
-        self.assertIn("readonly property bool tooltipHovered: visible && badgeMouse.containsMouse", badge)
+        self.assertIn("hasVisualContent: root.badgeShown", badge)
+        self.assertIn("labelVisible: false", badge)
+        self.assertIn("tooltipText: button.tooltipText", badge)
+        self.assertIn("onPressed: function(b) { root.barPressed(b) }", badge)
+        self.assertIn("text: root.badgeText", badge)
         self.assertNotIn("pressScale", badge)  # Omarchy 4.0's WidgetButton has none.
+        text = self._property("badgeText")
+        self.assertIn('barVertical && badgeCount > 999 ? "1k+"', text)
         self.assertIn("onPressed: function(b) { root.barPressed(b) }", button)
 
     def _function(self, name: str) -> str:
@@ -198,7 +204,7 @@ class PanelContractTests(unittest.TestCase):
     def test_empty_partial_failure_uses_warning_not_caught_up(self) -> None:
         self.assertIn("function barTooltip()", self.qml)
         self.assertIn("Sign-in needed", self.qml)
-        self.assertIn('text: root.showAlertBadge ? "!" : root.badgeCount', self.qml)
+        self.assertIn('readonly property string badgeText: showAlertBadge ? "!"', self.qml)
         self.assertIn("property bool needsSignIn", self.qml)
         self.assertIn("readonly property bool hasAlert", self.qml)
         self.assertIn("opacity: root.hasAlert ? 0.5 : 1", self.qml)

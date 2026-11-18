@@ -67,7 +67,7 @@ def _try_hey(acc: dict, args: list[str], timeout: int = 40) -> tuple[dict | None
         return None, "HEY isn't installed for this bar. See the setup guide."
     cmd = ["hey", *args, "--json"]
     try:
-        proc = run_capped(cmd, env, timeout)
+        proc = run_capped(cmd, env, timeout, own_group=False)
     except subprocess.TimeoutExpired:
         return None, "hey timed out"
     except ResponseTooLargeError:
