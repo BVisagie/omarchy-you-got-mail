@@ -1189,6 +1189,53 @@ class GmailProviderProcessTests(unittest.TestCase):
         self.assertNotIn("old", cached)
         self.assertIn("abc1", cached)
 
+    def test_a_preview_is_decoded_before_it_is_cut(self) -> None:
+        snippet = "word " * 40 + "fish &amp; chips"  # 216 characters decoded
+        payload, cached = self._list_with_details('{"id":"abc1","snippet":"' + snippet + '"}')
+        self.assertTrue(payload["ok"], payload)
+        self.assertTrue(payload["messages"][0]["snippet"].endswith("fish & chips"))
+        self.assertEqual(cached["abc1"]["v"], 2)
+
+    def test_a_label_reply_must_be_one_object_with_a_list(self) -> None:
+        import json
+
+        def prepare(cache) -> None:
+            import os
+
+            cache.mkdir(parents=True, mode=0o700)
+            os.chmod(cache.parent, 0o700)
+            (cache / "messages.json").write_text(json.dumps({"abc1": {"v": 2, "subject": "s", "lab": ["Label_1"]}}))
+            (cache / "messages.json").chmod(0o600)
+
+        payload = self._run(
+            'case " $* " in\n'
+            '  *" users getProfile "*) printf \'{"emailAddress":"you@gmail.com"}\\n\' ;;\n'
+            '  *" messages list "*) printf \'{"messages":[{"id":"abc1"}]}\\n\' ;;\n'
+            "  *\" labels list \"*) printf '{\"labels\":[{\"id\":\"Label_1\",\"name\":\"Work\",\"type\":\"user\"}]}\\n{\"error\":{}}\\n' ;;\n"
+            "  *) printf '{}\\n' ;;\n"
+            "esac\n",
+            "list",
+            "--limit",
+            "2",
+            prepare=prepare,
+        )
+        self.assertTrue(payload["ok"], payload)
+        self.assertEqual(payload["messages"][0]["labels"], [])
+
+    def test_an_older_cache_entry_is_still_decoded_when_shown(self) -> None:
+        import json
+
+        def prepare(cache) -> None:
+            import os
+
+            cache.mkdir(parents=True, mode=0o700)
+            os.chmod(cache.parent, 0o700)
+            (cache / "messages.json").write_text(json.dumps({"abc1": {"subject": "A &amp; B", "ts": 1}}))
+            (cache / "messages.json").chmod(0o600)
+
+        payload, cached = self._list_with_details('{"id":"abc1"}', prepare=prepare)
+        self.assertEqual(payload["messages"][0]["subject"], "A & B")
+
     def test_one_message_list_succeeds_with_its_subject(self) -> None:
         payload = self._run(self.GWS_ONE_MESSAGE, "list", "--limit", "5")
         self.assertTrue(payload["ok"], payload)

@@ -17,6 +17,31 @@ export GOOGLE_WORKSPACE_CLI_KEYRING_BACKEND="${GOOGLE_WORKSPACE_CLI_KEYRING_BACK
 
 # Most gws output this provider reads; a larger reply is refused, not parsed.
 export GWS_MAX_BYTES=$((8 * 1024 * 1024))
+
+# The HTML entities Gmail puts in previews and headers, decoded once.
+export ENTITY_JQ='def entity:
+  gsub("&lt;";"<") | gsub("&gt;";">") | gsub("&quot;";"\"")
+  | gsub("&#39;";"'"'"'") | gsub("&nbsp;";" ") | gsub("&amp;";"&")
+  | gsub("[\\r\\n\\t]+"; " ") | gsub(" +"; " ")
+  | ltrimstr(" ") | rtrimstr(" ");'
+
+# One message's details, from a reply (read with jq -s) that is exactly one
+# object for the message asked about. Text is decoded, then cut to what the
+# panel shows, so a part stays a few kilobytes whatever gws sent.
+# shellcheck disable=SC2016  # $id and $name are jq's, not the shell's.
+export DETAILS_JQ='
+  select(length == 1 and (.[0] | type) == "object" and (.[0].id | tostring) == $id)
+  | .[0]
+  | def header($name): ((.payload.headers // [] | map(select(.name == $name)) | .[0].value) // "") | tostring;
+  {($id): {
+    v: 2,
+    subject: (header("Subject") | entity | .[0:300]),
+    from: (header("From") | entity | .[0:300]),
+    snippet: (.snippet // "" | tostring | entity | .[0:400]),
+    ts: ((.internalDate // "0") | tostring | if test("\\A[0-9]{1,16}\\z") then tonumber else 0 end),
+    threadId: ((.threadId | strings | select(test("\\A[0-9a-f]{1,32}\\z"))) // $id),
+    lab: [(.labelIds // [])[] | strings | select(startswith("Label_")) | .[0:64]][0:10]
+  }}'
 # The message cache keeps 1000 entries. Fields are cut to what the panel
 # shows (300, 300 and 400 characters, 10 labels), so even escaped or multibyte
 # text keeps a full cache under about 10 MiB, inside this limit on reading it
@@ -326,7 +351,8 @@ fill_labels_from_cache() {
   case "$unknown" in ''|*[!0-9]*) return 0 ;; 0) return 0 ;; esac
 
   fetched="$(gws_gmail users labels list --params '{"userId":"me"}' 2>/dev/null \
-    | jq -c '[.labels[]? | select(.type == "user")
+    | jq -cs 'select(length == 1 and (.[0] | type) == "object" and (.[0].labels | type) == "array")
+              | [.[0].labels[] | objects | select(.type == "user")
               | {key: (.id | tostring | .[0:64]), value: ((.name // "") | tostring | split("/") | last | strings | .[0:60])}]
               | .[0:10000] | from_entries' 2>/dev/null)"
   status=$?
@@ -369,20 +395,7 @@ fill_cache() {
         rm -f "$out.raw"
         exit 0
       fi
-      # Each field is cut here, so a part stays a few kilobytes and the merge
-      # of a full page stays small whatever gws sent.
-      # Exactly one object, for the message asked about; anything else is
-      # treated as no details.
-      parsed=$(jq -c -s --arg id "$id" "select(length == 1 and (.[0] | type) == \"object\"
-            and (.[0].id | tostring) == \$id) | .[0] | {(\$id): {
-              subject: ((.payload.headers // [] | map(select(.name == \"Subject\")) | .[0].value) // \"\" | tostring | .[0:300]),
-              from: ((.payload.headers // [] | map(select(.name == \"From\")) | .[0].value) // \"\" | tostring | .[0:300]),
-              snippet: (.snippet // \"\" | tostring | .[0:400]),
-              ts: ((.internalDate // \"0\") | tostring
-                   | if test(\"^[0-9]{1,16}$\") then tonumber else 0 end),
-              threadId: ((.threadId | strings | select(test(\"\\\\A[0-9a-f]{1,32}\\\\z\"))) // \$id),
-              lab: [(.labelIds // [])[] | strings | select(startswith(\"Label_\")) | .[0:64]][0:10]
-            }}" < "$out.raw" 2>/dev/null)
+      parsed=$(jq -c -s --arg id "$id" "$ENTITY_JQ $DETAILS_JQ" < "$out.raw" 2>/dev/null)
       rm -f "$out.raw"
       [ -n "$parsed" ] || exit 0
       printf "%s\n" "$parsed" > "$out.json" || exit 1
@@ -435,12 +448,9 @@ render() {
     --arg next "$next" \
     --arg current "$current" \
     --arg search "$search" \
-    --arg authuser "$email" '
-    def entity:
-      gsub("&lt;";"<") | gsub("&gt;";">") | gsub("&quot;";"\"")
-      | gsub("&#39;";"'"'"'") | gsub("&nbsp;";" ") | gsub("&amp;";"&")
-      | gsub("[\\r\\n\\t]+"; " ") | gsub(" +"; " ")
-      | ltrimstr(" ") | rtrimstr(" ");
+    --arg authuser "$email" "$ENTITY_JQ"'
+    # Entries cached since v2 are decoded once, when fetched; older ones here.
+    def decoded($m): if $m.v == 2 then . else entity end;
 
     def sender:
       . as $raw
@@ -477,10 +487,10 @@ render() {
           | {
               id: $id,
               threadId: $thread,
-              subject: ((($m.subject // "") | entity) as $s
+              subject: ((($m.subject // "") | tostring | decoded($m)) as $s
                         | if ($s | length) > 0 then $s else "(no subject)" end),
-              from: (($m.from // "") | entity | sender),
-              snippet: (($m.snippet // "") | entity),
+              from: (($m.from // "") | tostring | decoded($m) | sender),
+              snippet: (($m.snippet // "") | tostring | decoded($m)),
               ts: (($m.ts // 0) / 1000 | floor),
               labels: (($m.lab // []) | mine),
               url: mail_url($thread)
