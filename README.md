@@ -32,7 +32,8 @@ The overview is composed from the individual screenshots below.
 
 ## Requirements
 
-- [Omarchy](https://omarchy.org/) 4.0 or later (plugin `schemaVersion` 1)
+- [Omarchy](https://omarchy.org/) 4.5 or later (plugin `schemaVersion` 1).
+  On Omarchy 4.0, stay on [2.10.0](#staying-on-omarchy-40).
 - `python3` (and `jq` for the Gmail provider)
 - **Gmail:** [Google Workspace CLI][gws] — `gws auth setup` (or a Desktop
   OAuth client JSON), then
@@ -82,10 +83,24 @@ That fast-forwards the git checkout in
 `~/.config/omarchy-you-got-mail/` (accounts and secrets). See
 [CHANGELOG.md](CHANGELOG.md) for what changed in each release.
 
-Version 2.10.0 uses your existing accounts and widget settings; no migration
-or new sign-in is required unless a provider's login has expired. On
-Omarchy 4.5 the shell keeps the old widget code after an update until you
-run `omarchy restart shell`. Last-check times start fresh after a reload.
+Version 3.0.0 uses your existing accounts and widget settings; no migration
+or new sign-in is required unless a provider's login has expired. The shell
+keeps the old widget code after an update until you run
+`omarchy restart shell`. Last-check times start fresh after a reload.
+
+### Staying on Omarchy 4.0
+
+Version 3.0.0 needs Omarchy 4.5, and `omarchy plugin update` always takes the
+newest commit. On Omarchy 4.0, pin the checkout to the last release that
+supports it instead of updating:
+
+```bash
+git -C ~/.config/omarchy/plugins/bvisagie.you-got-mail checkout v2.10.0
+omarchy restart shell
+```
+
+`omarchy plugin update` moves the checkout to the newest version again, so
+leave this plugin out of it until you are on Omarchy 4.5.
 
 ## Accounts
 
@@ -135,6 +150,21 @@ If you never add an account, a single Gmail account is assumed. The first
 
 The bar tooltip shows the unread count, or why mail needs attention. A
 `!` on the mailbox means mail needs attention, not unread mail.
+
+To open or close the panel from the keyboard, add a binding to
+`~/.config/hypr/bindings.lua`:
+
+```lua
+o.bind("SUPER + SHIFT + M", "Mail", { panel = "bvisagie.you-got-mail" })
+```
+
+Pick a key that is free (`omarchy menu keybindings --print` lists them).
+
+The panel follows the language picked under **Setup > Language**. Its text
+lives in `i18n/en.json`; it ships in English only for now, and a translation
+is one more file beside it, such as `i18n/de.json`, with the same keys.
+Mail, account names, and messages from the providers and their tools are
+shown as they arrive.
 
 The widget can also say "You've got mail!" when new mail arrives. It is
 off by default; see [Sound](#sound).
@@ -240,7 +270,7 @@ bundled clip; add `--file` with your `soundFile` path to test that, or
 you hear the bundled clip and the output says why under `fallback`. While
 Do Not Disturb is on it prints `{"ok": true, "skipped": "dnd"}` instead. If
 it prints that with Do Not Disturb off, `omarchy-shell notifications isDnd`
-is failing; the sound needs Omarchy 4.0 or later.
+is failing; the sound needs Omarchy 4.5 or later.
 
 The sound comes with the next refresh, so it can lag new mail by up to one
 refresh interval, or until the quiet time is up. Mail you read elsewhere
