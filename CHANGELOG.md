@@ -2,6 +2,27 @@
 
 Versions match `manifest.json`. Git tags are created at release time.
 
+## 2.10.0
+
+Hardening for mail data, and the last release for Omarchy 4.0. Version 3.0.0
+needs Omarchy 4.5.
+
+- Everything a provider sends back is checked before the panel sees it. A
+  count or time that is not a number no longer fails every account: it is
+  read as 0. Subjects, senders, previews, labels, ids and links are cut to
+  size, links must be `https://`, and only the fields the panel shows are
+  passed on.
+- IMAP servers, `hey` and `gws` can no longer send an unbounded reply. IMAP
+  stops at 256 KB for one message part or 32 MB for one check; `hey` and
+  `gws` stop at 8 MB. Each counts as a failed check for that account.
+- `refreshIntervalSec: 0` turns timed checks off. Mail is still checked when
+  the plugin starts, when you open the panel, and when you refresh.
+- CI uses current Python and Node releases and ShellCheck 0.11.0, reads the
+  repository without write access, and fails on a tracked symlink or a file
+  named like an installer, both of which Omarchy or its plugin marketplace
+  refuse. Dependabot proposes action updates weekly.
+- Accounts, credentials and existing settings are unchanged.
+
 ## 2.9.0
 
 An optional "You've got mail!" sound when new unread mail arrives.

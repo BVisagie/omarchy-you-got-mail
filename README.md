@@ -82,7 +82,7 @@ That fast-forwards the git checkout in
 `~/.config/omarchy-you-got-mail/` (accounts and secrets). See
 [CHANGELOG.md](CHANGELOG.md) for what changed in each release.
 
-Version 2.9.0 uses your existing accounts and widget settings; no migration
+Version 2.10.0 uses your existing accounts and widget settings; no migration
 or new sign-in is required unless a provider's login has expired. Plugin
 changes reload automatically. Last-check times start fresh after a reload.
 
@@ -150,7 +150,9 @@ memory and start fresh when the plugin reloads. Press `r` or the refresh button
 to check again; changing relative time labels does not fetch mail.
 
 The panel refreshes on the interval from widget settings (default one
-minute), and again when you open it or click a row. With more than one
+minute), and again when you open it or click a row. Set the interval to
+`0` to turn timed checks off; mail is then checked when the plugin
+starts, when you open the panel, and when you refresh. With more than one
 account the badge is the sum of unread, rows are newest-first, and each
 row shows an account chip. If one account fails, the others still show
 and the panel names the failure, including when the healthy mailboxes
@@ -183,7 +185,7 @@ same keys):
 | Key | Default | Range |
 |---|---|---|
 | `max` | 25 | 1–50 (messages per panel page) |
-| `refreshIntervalSec` | 60 | 15–3600 |
+| `refreshIntervalSec` | 60 | 15–3600, or 0 for no timed checks |
 | `soundEnabled` | `false` | `true` plays the [new-mail sound](#sound) |
 | `soundCooldownSec` | 60 | 0–3600 (seconds before the sound can play again) |
 | `soundVolume` | 100 | 0–100 |
