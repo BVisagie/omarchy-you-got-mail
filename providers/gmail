@@ -147,9 +147,14 @@ trap 'rm -f -- "$RUN_FILES".*' EXIT
 # command substitution can strip trailing newlines. A reply over the cap
 # prints nothing, fails, and marks TOO_LARGE for fail_if_too_large.
 gws_gmail() {
-  local rc
+  local rc saved
   gws gmail "$@" | head -c "$((GWS_MAX_BYTES + 1))" >"$REPLY_FILE"
-  rc=${PIPESTATUS[0]}
+  rc=${PIPESTATUS[0]} saved=${PIPESTATUS[1]}
+  # A reply that could not be saved whole (a full disk) is no reply.
+  if [ "$saved" -ne 0 ]; then
+    rm -f -- "$REPLY_FILE"
+    return 1
+  fi
   if [ "$(wc -c <"$REPLY_FILE")" -gt "$GWS_MAX_BYTES" ]; then
     : >"$TOO_LARGE"
     rm -f -- "$REPLY_FILE"
@@ -279,28 +284,36 @@ fill_cache() {
       too_large="$3"
       params=$(jq -nc --arg id "$id" \
         "{userId:\"me\",id:\$id,format:\"metadata\",metadataHeaders:[\"Subject\",\"From\"]}")
+      # A part that cannot be saved (a full disk) fails the worker, and
+      # with it the check, rather than leaving the message without details.
       gws gmail users messages get --params "$params" 2>/dev/null \
-        | head -c "$((GWS_MAX_BYTES + 1))" > "$out.raw"
+        | head -c "$((GWS_MAX_BYTES + 1))" > "$out.raw" || exit 1
       if [ "$(wc -c < "$out.raw")" -gt "$GWS_MAX_BYTES" ]; then
         rm -f "$out.raw"
         : > "$too_large"
         exit 0
       fi
-      jq -c "{(.id): {
+      parsed=$(jq -c "{(.id): {
               subject: ((.payload.headers // [] | map(select(.name == \"Subject\")) | .[0].value) // \"\"),
               from: ((.payload.headers // [] | map(select(.name == \"From\")) | .[0].value) // \"\"),
               snippet: (.snippet // \"\"),
               ts: ((.internalDate // \"0\") | tonumber? // 0),
               threadId: (.threadId // .id),
               lab: [(.labelIds // [])[] | select(startswith(\"Label_\"))]
-            }}" < "$out.raw" > "$out.json" 2>/dev/null
+            }}" < "$out.raw" 2>/dev/null)
       rm -f "$out.raw"
+      [ -n "$parsed" ] || exit 0
+      printf "%s\n" "$parsed" > "$out.json" || exit 1
     '
 
   while IFS= read -r id; do
     valid_id "$id" || continue
     printf '%s\n' "$id"
   done <<<"$missing" | xargs -r -P 6 -I {} bash -c "$fetch_one" _ {} "$parts_prefix" "$TOO_LARGE"
+  if [ "${PIPESTATUS[1]}" -ne 0 ]; then
+    rm -f -- "$parts_prefix".*
+    gmail_error "could not save message details"
+  fi
 
   fail_if_too_large
 

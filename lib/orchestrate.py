@@ -212,7 +212,7 @@ def _run_provider(account: dict, args: list[str], timeout: int = LIST_TIMEOUT) -
         err = _text(proc.stderr, MAX_ERROR)
         return {"ok": False, "error": f"{account['id']}: {err or 'no output'}"}
     try:
-        payload = json.loads(text.split("\n")[-1])
+        payload = json.loads(text.rsplit("\n", 1)[-1])
     except (ValueError, RecursionError):
         return {"ok": False, "error": f"{account['id']}: provider returned invalid JSON"}
     if not isinstance(payload, dict):

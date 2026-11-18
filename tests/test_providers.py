@@ -6,6 +6,14 @@ from unittest.mock import MagicMock, patch
 from support import capture_json, load_provider
 
 
+def shutil_which(name: str) -> str:
+    import shutil
+
+    found = shutil.which(name)
+    assert found, name
+    return found
+
+
 class FastmailReadTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls) -> None:
@@ -643,7 +651,7 @@ class GmailProviderProcessTests(unittest.TestCase):
         '"reason":"authError"}}'
     )
 
-    def _run(self, gws_body: str, *args: str, prepare=None) -> dict:
+    def _run(self, gws_body: str, *args: str, prepare=None, bins=None) -> dict:
         import json
         import os
         import shutil
@@ -662,6 +670,10 @@ class GmailProviderProcessTests(unittest.TestCase):
         gws = bindir / "gws"
         gws.write_text("#!/usr/bin/env bash\n" + gws_body, encoding="utf-8")
         gws.chmod(0o755)
+        for name, body in (bins or {}).items():
+            tool = bindir / name
+            tool.write_text("#!/usr/bin/env bash\n" + body, encoding="utf-8")
+            tool.chmod(0o755)
         env = os.environ.copy()
         env["PATH"] = str(bindir) + os.pathsep + env.get("PATH", "")
         env["XDG_CACHE_HOME"] = str(tmp / "cache")
@@ -773,6 +785,40 @@ class GmailProviderProcessTests(unittest.TestCase):
         left = sorted(p.name for p in dirs[0].glob("gws.*.*"))
         # A live run's files stay; only ended runs' are removed.
         self.assertEqual(left, [f"gws.{os.getpid()}.part.abc2.json"])
+
+    def test_a_reply_that_cannot_be_saved_fails_the_check(self) -> None:
+        # head stands in for a full disk: it reads its input but cannot write.
+        real_head = shutil_which("head")
+        payload = self._run(
+            'case " $* " in\n'
+            '  *" users getProfile "*) printf \'{"emailAddress":"you@gmail.com"}\\n\' ;;\n'
+            '  *) printf \'{"messages":[{"id":"abc1"}],"resultSizeEstimate":1}\\n\' ;;\n'
+            "esac\n",
+            "list",
+            "--limit",
+            "5",
+            bins={"head": f'"{real_head}" "$@" >/dev/null; exit 1\n'},
+        )
+        self.assertFalse(payload["ok"])
+
+    def test_message_details_that_cannot_be_saved_fail_the_check(self) -> None:
+        real_head = shutil_which("head")
+        payload = self._run(
+            'case " $* " in\n'
+            '  *" users getProfile "*) printf \'{"emailAddress":"you@gmail.com"}\\n\' ;;\n'
+            '  *" messages list "*) printf \'{"messages":[{"id":"abc1"}],"resultSizeEstimate":1}\\n\' ;;\n'
+            '  *" messages get "*) printf \'{"id":"abc1","snippet":"hi"}\\n\' ;;\n'
+            "  *) printf '{}\\n' ;;\n"
+            "esac\n",
+            "list",
+            "--limit",
+            "5",
+            # Only the message-details reply cannot be written.
+            bins={"head": 'data=$(cat); [[ $data == *snippet* ]] && exit 1\n'
+                          f'printf "%s" "$data" | "{real_head}" "$@"\n'},
+        )
+        self.assertFalse(payload["ok"])
+        self.assertIn("could not save message details", payload["error"])
 
     def test_oversized_profile_fails_the_check(self) -> None:
         payload = self._run(
