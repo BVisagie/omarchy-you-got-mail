@@ -329,7 +329,7 @@ Panel {
   // on refresh. Anything else that is not a number means the default.
   readonly property int refreshMs: {
     var raw = setting("refreshIntervalSec", 60)
-    if (raw === 0 || String(raw).trim() === "0") return 0
+    if (raw === 0 || raw === "0") return 0
     var n = parseInt(raw, 10)
     if (!(n > 0)) n = 60
     return Math.max(15, Math.min(3600, n)) * 1000

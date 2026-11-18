@@ -693,6 +693,35 @@ class GmailProviderProcessTests(unittest.TestCase):
         self.assertFalse(payload["ok"])
         self.assertIn("more output than expected", payload["error"])
 
+    def test_oversized_profile_fails_the_check(self) -> None:
+        payload = self._run(
+            'case " $* " in\n'
+            "  *\" users getProfile \"*) printf '{\"emailAddress\":\"'; head -c 9000000 /dev/zero | tr '\\0' a; printf '@gmail.com\"}\\n' ;;\n"
+            "  *) printf '{\"messages\":[]}\\n' ;;\n"
+            "esac\n",
+            "list",
+            "--limit",
+            "5",
+        )
+        self.assertFalse(payload["ok"])
+        self.assertIn("more output than expected", payload["error"])
+
+    def test_one_byte_over_counts_the_trailing_newline(self) -> None:
+        # Valid JSON padded so that, with its newline, it is the cap plus one.
+        cap = 8 * 1024 * 1024
+        body = '{"messages":[]}'
+        payload = self._run(
+            'case " $* " in\n'
+            '  *" users getProfile "*) printf \'{"emailAddress":"you@gmail.com"}\\n\' ;;\n'
+            f"  *) printf '%s' '{body}'; head -c {cap - len(body)} /dev/zero | tr '\\0' ' '; printf '\\n' ;;\n"
+            "esac\n",
+            "list",
+            "--limit",
+            "5",
+        )
+        self.assertFalse(payload["ok"])
+        self.assertIn("more output than expected", payload["error"])
+
     def test_oversized_gws_reply_is_refused(self) -> None:
         payload = self._run(
             'case " $* " in\n'

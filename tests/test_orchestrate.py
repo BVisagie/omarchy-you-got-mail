@@ -466,6 +466,11 @@ class ProviderDataBoundsTests(unittest.TestCase):
         # message read without opening it.
         self.assertEqual(payload["messages"][0]["url"], orchestrate.BAD_URL)
         self.assertEqual(payload["inboxes"][0]["searchUrl"], "")
+        for bad in ("https://mail.example.test/a\x00b", "https://mail.example.test/\x7f"):
+            row = message("ctl", 1)
+            row["url"] = bad
+            payload = self._list({"a": {"ok": True, "unread": 1, "messages": [row]}})
+            self.assertEqual(payload["messages"][0]["url"], orchestrate.BAD_URL)
         url = "https://mail.example.test/#search/invalid:thing"
         payload = self._list({"a": {"ok": True, "unread": 0, "searchUrl": url, "messages": []}})
         self.assertEqual(payload["inboxes"][0]["searchUrl"], url)

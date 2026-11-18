@@ -92,7 +92,10 @@ def _url(value) -> str:
     if value is None or value == "":
         return ""
     url = _clean(value).strip() if isinstance(value, str) else ""
-    if len(url) > MAX_URL or not url.startswith("https://"):
+    # A control character cannot travel whole to the browser.
+    if len(url) > MAX_URL or not url.startswith("https://") or any(
+        ord(ch) < 0x20 or ord(ch) == 0x7F for ch in url
+    ):
         return BAD_URL
     return url
 

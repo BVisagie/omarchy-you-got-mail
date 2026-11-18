@@ -122,8 +122,32 @@ command -v jq >/dev/null 2>&1 || die "jq not found on PATH"
 command -v gws >/dev/null 2>&1 || die "Gmail isn't installed for this bar. See the setup guide."
 private_dir "$CACHE_DIR" || die "cache directory is not usable"
 
+# Marked when any gws reply in this run is over the cap. $$ stays this run's
+# id inside $(...), so a lookup in a subshell can still mark it.
+TOO_LARGE="$CACHE_DIR/gws.too-large.$$"
+trap 'rm -f -- "$TOO_LARGE"' EXIT
+
+# gws output, capped. The size is counted on the bytes as written, before a
+# command substitution can strip trailing newlines. A reply over the cap
+# prints nothing, fails, and marks TOO_LARGE for fail_if_too_large.
 gws_gmail() {
-  gws gmail "$@" | head -c "$GWS_MAX_BYTES"
+  local reply rc
+  reply="$(mktemp "$CACHE_DIR/gws.XXXXXX")" || return 1
+  gws gmail "$@" | head -c "$((GWS_MAX_BYTES + 1))" >"$reply"
+  rc=${PIPESTATUS[0]}
+  if [ "$(wc -c <"$reply")" -gt "$GWS_MAX_BYTES" ]; then
+    : >"$TOO_LARGE"
+    rm -f -- "$reply"
+    return 1
+  fi
+  cat -- "$reply"
+  rm -f -- "$reply"
+  return "$rc"
+}
+
+fail_if_too_large() {
+  [ -e "$TOO_LARGE" ] && gmail_error "gws sent more output than expected"
+  return 0
 }
 
 # Write JSON into the caller's variable. Do not invoke this (or unread_total)
@@ -133,10 +157,8 @@ gws_list() {
   local dest="$1" errfile="$CACHE_DIR/gws.err" out msg
   shift
   [[ "$dest" =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]] || die "internal error"
-  out="$(gws gmail "$@" 2>"$errfile" | head -c "$((GWS_MAX_BYTES + 1))")" || true
-  if [ "$(printf '%s' "$out" | wc -c)" -gt "$GWS_MAX_BYTES" ]; then
-    gmail_error "gws sent more output than expected"
-  fi
+  out="$(gws_gmail "$@" 2>"$errfile")" || true
+  fail_if_too_large
   if printf '%s' "$out" | jq -e 'type == "object" and .error' >/dev/null 2>&1; then
     gmail_error "$(printf '%s' "$out" | jq -r '.error.message // "could not read unread mail"')"
   fi
@@ -243,20 +265,20 @@ fill_cache() {
       out="$2"
       params=$(jq -nc --arg id "$id" \
         "{userId:\"me\",id:\$id,format:\"metadata\",metadataHeaders:[\"Subject\",\"From\"]}")
-      raw=$(gws gmail users messages get --params "$params" 2>/dev/null \
-        | head -c "$((GWS_MAX_BYTES + 1))")
-      if [ "$(printf "%s" "$raw" | wc -c)" -gt "$GWS_MAX_BYTES" ]; then
+      gws gmail users messages get --params "$params" 2>/dev/null \
+        | head -c "$((GWS_MAX_BYTES + 1))" > "$out/$id.raw"
+      if [ "$(wc -c < "$out/$id.raw")" -gt "$GWS_MAX_BYTES" ]; then
         : > "$out/too-large"
         exit 0
       fi
-      printf "%s" "$raw" | jq -c "{(.id): {
+      jq -c "{(.id): {
               subject: ((.payload.headers // [] | map(select(.name == \"Subject\")) | .[0].value) // \"\"),
               from: ((.payload.headers // [] | map(select(.name == \"From\")) | .[0].value) // \"\"),
               snippet: (.snippet // \"\"),
               ts: ((.internalDate // \"0\") | tonumber? // 0),
               threadId: (.threadId // .id),
               lab: [(.labelIds // [])[] | select(startswith(\"Label_\"))]
-            }}" > "$out/$id.json" 2>/dev/null
+            }}" < "$out/$id.raw" > "$out/$id.json" 2>/dev/null
     '
 
   while IFS= read -r id; do
@@ -383,6 +405,7 @@ cmd_list() {
   ensure_json_object "$LABEL_FILE"
   fill_cache "$ids"
   fill_labels_from_cache "$ids"
+  fail_if_too_large
   render "$ids" "$unread" "$email" "$next" "$token"
 }
 
