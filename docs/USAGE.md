@@ -51,7 +51,7 @@ newest messages across accounts. Mark-all as read uses the same mailbox
 total: it is not limited to the current page.
 
 **Accounts** (`m`) shows each account's current count and opens just that
-inbox, even if it has no unread mail. Accounts without a webmail URL cannot
+inbox, even if it has no unread mail, without marking any messages read. Accounts without a webmail URL cannot
 be opened. Failed accounts say **Unavailable** rather than showing a zero
 count.
 
