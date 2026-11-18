@@ -8,6 +8,7 @@ import os
 import re
 import shlex
 import shutil
+import signal
 import stat
 import subprocess
 import sys
@@ -490,15 +491,25 @@ def run_capped(
     A program that prints more than `limit` bytes on either stream is killed
     and ResponseTooLargeError is raised, so a runaway reply cannot fill memory.
     """
-    proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=env)
+    # Its own process group, so a stop also reaches anything it started that
+    # still holds the pipes open.
+    proc = subprocess.Popen(
+        cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=env, start_new_session=True
+    )
     captured: dict[str, bytes] = {}
     too_large = threading.Event()
+
+    def stop() -> None:
+        try:
+            os.killpg(proc.pid, signal.SIGKILL)
+        except (ProcessLookupError, PermissionError):
+            proc.kill()
 
     def drain(name: str, stream) -> None:
         data = stream.read(limit + 1)
         if len(data) > limit:
             too_large.set()
-            proc.kill()
+            stop()
         captured[name] = data[:limit]
 
     threads = [
@@ -514,8 +525,11 @@ def run_capped(
         if any(thread.is_alive() for thread in threads):
             raise subprocess.TimeoutExpired(cmd, timeout)
         returncode = proc.wait(max(0.0, deadline - time.monotonic()))
+        if too_large.is_set():
+            for thread in threads:
+                thread.join(1)
     except subprocess.TimeoutExpired:
-        proc.kill()
+        stop()
         proc.wait()
         for thread in threads:
             thread.join(1)

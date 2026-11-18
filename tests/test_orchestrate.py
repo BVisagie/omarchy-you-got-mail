@@ -16,17 +16,41 @@ def _account(acc_id: str, provider: str, label: str) -> dict:
 class ProviderResultTests(unittest.TestCase):
     def test_nonzero_provider_exit_cannot_report_success(self) -> None:
         process = subprocess.CompletedProcess([], 1, '{"ok":true}', '')
-        with patch.object(orchestrate.subprocess, "run", return_value=process):
+        with patch.object(orchestrate, "run_capped", return_value=process):
             result = orchestrate._run_provider(_account("gmail", "gmail", "Gmail"), ["read", "one"])
         self.assertFalse(result["ok"])
         self.assertIn("exited 1", result["error"])
 
     def test_successful_exit_preserves_provider_failure(self) -> None:
         process = subprocess.CompletedProcess([], 0, '{"ok":false,"error":"permission denied"}', '')
-        with patch.object(orchestrate.subprocess, "run", return_value=process):
+        with patch.object(orchestrate, "run_capped", return_value=process):
             result = orchestrate._run_provider(_account("gmail", "gmail", "Gmail"), ["read", "one"])
         self.assertFalse(result["ok"])
         self.assertEqual(result["error"], "permission denied")
+
+    def _result(self, stdout: str, code: int = 0) -> dict:
+        process = subprocess.CompletedProcess([], code, stdout, "")
+        with patch.object(orchestrate, "run_capped", return_value=process):
+            return orchestrate._run_provider(_account("gmail", "gmail", "Gmail"), ["list"])
+
+    def test_only_a_json_true_is_success(self) -> None:
+        for ok in ('"false"', '"true"', "1", "null"):
+            self.assertFalse(self._result('{"ok":%s}' % ok)["ok"], ok)
+        self.assertTrue(self._result('{"ok":true}')["ok"])
+
+    def test_malformed_json_is_an_account_error(self) -> None:
+        for text in ('{"ok":true,"unread":' + "9" * 5000 + "}", "[" * 100_000, "{not json"):
+            result = self._result(text)
+            self.assertFalse(result["ok"])
+            self.assertIn("invalid JSON", result["error"])
+
+    def test_oversized_provider_output_is_an_account_error(self) -> None:
+        with patch.object(
+            orchestrate, "run_capped", side_effect=orchestrate.ResponseTooLargeError("big")
+        ):
+            result = orchestrate._run_provider(_account("gmail", "gmail", "Gmail"), ["list"])
+        self.assertFalse(result["ok"])
+        self.assertIn("more output than expected", result["error"])
 
 
 class AccountStatusTests(unittest.TestCase):
@@ -411,7 +435,8 @@ class ProviderDataBoundsTests(unittest.TestCase):
         )
 
     def test_bad_ids_and_urls_are_dropped(self) -> None:
-        rows = [message("i" * 600, 100), {"id": True}, {"id": ["x"]}, "row", message("ok", 50)]
+        # 385 characters encode to 514: too long for the panel's id check.
+        rows = [message("i" * 385, 100), {"id": True}, {"id": ["x"]}, "row", message("ok", 50)]
         rows[-1]["url"] = "javascript:alert(1)"
         payload = self._list(
             {"a": {"ok": True, "unread": 2, "searchUrl": "http://plain.test/", "messages": rows}}
@@ -419,6 +444,12 @@ class ProviderDataBoundsTests(unittest.TestCase):
         self.assertEqual(len(payload["messages"]), 1)
         self.assertEqual(payload["messages"][0]["url"], "")
         self.assertEqual(payload["inboxes"][0]["searchUrl"], "")
+
+    def test_longest_id_the_panel_accepts_is_kept(self) -> None:
+        tagged = orchestrate._tag_messages(
+            _account("a", "gmail", "Gmail"), {"messages": [message("i" * 384, 1)]}, 5
+        )
+        self.assertEqual(len(tagged[0]["id"].split(":", 1)[1]), 512)
 
     def test_rows_are_capped_at_what_was_asked_for(self) -> None:
         rows = [message(f"m{i}", 1000 - i) for i in range(500)]

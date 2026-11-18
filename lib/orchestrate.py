@@ -11,6 +11,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from common import (
     FETCH_CAP,
+    ResponseTooLargeError,
     account_error,
     classify_account_error,
     decode_id,
@@ -22,6 +23,7 @@ from common import (
     needs_sign_in,
     one_line,
     provider_path,
+    run_capped,
     secret_path,
 )
 
@@ -40,6 +42,7 @@ MAX_SNIPPET = 400
 MAX_ERROR = 500
 MAX_LABELS = 10
 MAX_LABEL = 60
+MAX_PROVIDER_OUTPUT = 16 * 1024 * 1024
 
 
 def _bounded_int(value, ceiling: int) -> int:
@@ -95,29 +98,28 @@ def _run_provider(account: dict, args: list[str], timeout: int = LIST_TIMEOUT) -
     env["YOU_GOT_MAIL_MAX"] = os.environ.get("YOU_GOT_MAIL_MAX", str(max_messages()))
     env["YOU_GOT_MAIL_FETCH"] = os.environ.get("YOU_GOT_MAIL_FETCH", env["YOU_GOT_MAIL_MAX"])
     try:
-        proc = subprocess.run(
-            [str(provider_path(provider)), *args],
-            capture_output=True,
-            text=True,
-            env=env,
-            timeout=timeout,
-            check=False,
+        proc = run_capped(
+            [str(provider_path(provider)), *args], env, timeout, MAX_PROVIDER_OUTPUT
         )
     except subprocess.TimeoutExpired:
         return {"ok": False, "error": f"{account['id']}: timed out"}
+    except ResponseTooLargeError:
+        return {"ok": False, "error": f"{account['id']}: provider sent more output than expected"}
     except OSError as exc:
         return {"ok": False, "error": f"{account['id']}: {exc}"}
     text = (proc.stdout or "").strip()
     if not text:
-        err = (proc.stderr or "").strip()
+        err = _text(proc.stderr, MAX_ERROR)
         return {"ok": False, "error": f"{account['id']}: {err or 'no output'}"}
     try:
         payload = json.loads(text.splitlines()[-1])
-    except json.JSONDecodeError:
+    except (ValueError, RecursionError):
         return {"ok": False, "error": f"{account['id']}: provider returned invalid JSON"}
     if not isinstance(payload, dict):
         return {"ok": False, "error": f"{account['id']}: provider returned invalid JSON"}
-    if proc.returncode != 0 and payload.get("ok"):
+    # Only a JSON true is success; "false" and 1 are not.
+    payload["ok"] = payload.get("ok") is True
+    if proc.returncode != 0 and payload["ok"]:
         return {"ok": False, "error": f"{account['id']}: provider exited {proc.returncode}"}
     return payload
 
@@ -135,12 +137,16 @@ def _tag_messages(account: dict, payload: dict, limit: int) -> list[dict]:
         if isinstance(local_id, bool) or not isinstance(local_id, (str, int)):
             continue
         local_id = str(local_id)
-        if not local_id or len(local_id) > MAX_ID:
+        if not local_id:
+            continue
+        # The panel takes ids whose encoded part fits MAX_ID characters.
+        opaque = encode_id(account["id"], local_id)
+        if len(opaque.split(":", 1)[1]) > MAX_ID:
             continue
         labels = msg.get("labels")
         tagged.append(
             {
-                "id": encode_id(account["id"], local_id),
+                "id": opaque,
                 "account": label,
                 "subject": _text(msg.get("subject"), MAX_TEXT),
                 "from": _text(msg.get("from"), MAX_TEXT),

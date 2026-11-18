@@ -144,7 +144,7 @@ gws_list() {
     printf -v "$dest" '%s' "$out"
     return 0
   fi
-  msg="$(tr -s '[:space:]' ' ' <"$errfile" 2>/dev/null)"
+  msg="$(head -c 65536 "$errfile" 2>/dev/null | tr -s '[:space:]' ' ')"
   [ -n "$msg" ] || msg="$(tr -s '[:space:]' ' ' <<<"$out")"
   gmail_error "${msg:-could not read unread mail}"
 }

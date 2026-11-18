@@ -700,9 +700,11 @@ Panel {
     }
   }
 
+  // The bar passes this widget's settings in after it loads, so the first
+  // check waits a turn to see them, whatever the interval is.
   Component.onCompleted: {
     now = Date.now() / 1000
-    if (refreshMs === 0) refresh()
+    Qt.callLater(root.refresh)
   }
 
   Process {
@@ -745,7 +747,6 @@ Panel {
     interval: Math.max(15000, root.refreshMs)
     running: root.refreshMs > 0
     repeat: true
-    triggeredOnStart: true
     onTriggered: {
       root.now = Date.now() / 1000
       root.refresh()
@@ -795,6 +796,8 @@ Panel {
     width: root.barVertical ? root.width : root.badgeExtent
     height: root.barVertical ? root.badgeExtent : root.height
     opacity: button.opacity
+    // The bar only shows a tooltip for a target that says it is hovered.
+    readonly property bool tooltipHovered: visible && badgeMouse.containsMouse
 
     Rectangle {
       x: root.barVertical ? (parent.width - width) / 2 : 0
@@ -802,7 +805,6 @@ Panel {
       width: root.badgeWidth
       height: root.badgeHeight
       radius: height / 2
-      scale: button.pressScale
       color: root.showAlertBadge
         ? Qt.rgba(root.alertColor.r, root.alertColor.g, root.alertColor.b, 0.18)
         : Qt.rgba(button.foreground.r, button.foreground.g, button.foreground.b, 0.14)
@@ -820,6 +822,7 @@ Panel {
 
     // The badge answers clicks and shows the tooltip like the mailbox does.
     MouseArea {
+      id: badgeMouse
       anchors.fill: parent
       acceptedButtons: Qt.LeftButton | Qt.RightButton | Qt.MiddleButton
       hoverEnabled: true

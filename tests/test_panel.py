@@ -47,8 +47,10 @@ class PanelContractTests(unittest.TestCase):
         self.assertIn("Math.max(15, Math.min(3600, n)) * 1000", refresh)
         timer = self.qml.split("interval: Math.max(15000, root.refreshMs)")[1].split("}")[0]
         self.assertIn("running: root.refreshMs > 0", timer)
-        self.assertIn("triggeredOnStart: true", timer)
-        self.assertIn("if (refreshMs === 0) refresh()", self.qml)
+        # Settings arrive after load: the first check is one turn later, not
+        # the timer's start, so a saved 0 still checks once.
+        self.assertNotIn("triggeredOnStart", timer)
+        self.assertIn("Qt.callLater(root.refresh)", self.qml.split("Component.onCompleted:")[1].split("}")[0])
         field = [f for f in self.manifest["barWidget"]["schema"] if f["key"] == "refreshIntervalSec"][0]
         self.assertEqual(field["min"], 0)
 
@@ -63,6 +65,8 @@ class PanelContractTests(unittest.TestCase):
         self.assertIn("visible: root.badgeShown", badge)
         self.assertIn("onClicked: function(mouse) { root.barPressed(mouse.button) }", badge)
         self.assertIn("root.bar.showTooltip(badgeArea, button.tooltipText)", badge)
+        self.assertIn("readonly property bool tooltipHovered: visible && badgeMouse.containsMouse", badge)
+        self.assertNotIn("pressScale", badge)  # Omarchy 4.0's WidgetButton has none.
         self.assertIn("onPressed: function(b) { root.barPressed(b) }", button)
 
     def _function(self, name: str) -> str:

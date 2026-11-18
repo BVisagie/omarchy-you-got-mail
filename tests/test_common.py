@@ -540,6 +540,19 @@ class RunCappedTests(unittest.TestCase):
         proc = self._run("import sys; sys.stdout.write('x' * 1024)")
         self.assertEqual(len(proc.stdout), 1024)
 
+    def test_timeout_reaches_a_child_holding_the_pipes(self) -> None:
+        import time
+
+        started = time.monotonic()
+        with self.assertRaises(subprocess.TimeoutExpired):
+            self._run(
+                "import subprocess, sys, time\n"
+                "subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(30)'])\n"
+                "time.sleep(30)",
+                timeout=0.5,
+            )
+        self.assertLess(time.monotonic() - started, 5)
+
     def test_timeout_kills_the_program(self) -> None:
         with self.assertRaises(subprocess.TimeoutExpired):
             self._run("import time; time.sleep(30)", timeout=0.5)

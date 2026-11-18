@@ -325,6 +325,9 @@ def cmd_read_all(acc: dict, password: str) -> None:
                     emit({"ok": False, "marked": marked, "error": "could not mark as read"})
                     return
                 marked += len(chunk)
+    except (imaplib.IMAP4.error, OSError) as exc:
+        emit({"ok": False, "marked": marked, "error": str(exc) or "could not mark as read"})
+        return
     finally:
         try:
             client.logout()
