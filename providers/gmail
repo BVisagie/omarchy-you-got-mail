@@ -163,6 +163,12 @@ gws_gmail() {
     : >"$TOO_LARGE" || return "$NOT_SAVED"
     return 1
   fi
+  # bash drops NUL bytes from what it reads, which could turn a malformed
+  # reply into a different, valid-looking one: refuse it instead.
+  if [ "$(tr -d '\000' <"$REPLY_FILE" | wc -c)" -ne "$(wc -c <"$REPLY_FILE")" ]; then
+    rm -f -- "$REPLY_FILE"
+    return 1
+  fi
   cat -- "$REPLY_FILE"
   rm -f -- "$REPLY_FILE"
   return "$rc"
@@ -191,8 +197,10 @@ gws_list() {
   out="$(gws_gmail "$@" 2>"$errfile")"
   [ "$?" -eq "$NOT_SAVED" ] && fail_not_saved
   fail_if_too_large
-  # Exactly one JSON object; a reply holding several is not a page.
-  if printf '%s' "$out" | jq -e -s 'length == 1 and (.[0] | type) == "object"' >/dev/null 2>&1; then
+  # Exactly one JSON object, whose messages, when present, are a list; a
+  # reply holding several objects, or messages of another shape, is no page.
+  if printf '%s' "$out" | jq -e -s 'length == 1 and (.[0] | type) == "object"
+      and ((.[0].messages == null) or ((.[0].messages | type) == "array"))' >/dev/null 2>&1; then
     if printf '%s' "$out" | jq -e '.error' >/dev/null 2>&1; then
       gmail_error "$(printf '%s' "$out" | jq -r '.error.message // "could not read unread mail" | tostring | .[0:500]')"
     fi

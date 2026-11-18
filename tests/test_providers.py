@@ -1024,6 +1024,22 @@ class GmailProviderProcessTests(unittest.TestCase):
             self.assertFalse(payload["ok"], token)
             self.assertEqual(batches, [], token)
 
+    def test_read_all_refuses_messages_that_are_not_a_list(self) -> None:
+        payload, batches = self._read_all('{"messages":{"metadata":{"id":"abcd"}}}')
+        self.assertFalse(payload["ok"])
+        self.assertEqual(batches, [])
+
+    def test_read_all_refuses_a_reply_holding_a_nul_byte(self) -> None:
+        payload = self._run(
+            'case " $* " in\n'
+            "  *\" messages list \"*) printf '{\"messages\":[{\"id\":\"ab\\000cd\"}]}\\n' ;;\n"
+            '  *" batchModify "*) echo marked >> "$XDG_CACHE_HOME/batches.log"; printf \'{}\\n\' ;;\n'
+            "  *) printf '{}\\n' ;;\n"
+            "esac\n",
+            "read-all",
+        )
+        self.assertFalse(payload["ok"])
+
     def test_a_repeated_id_is_one_row_and_one_lookup(self) -> None:
         payload, cached = self._list_with_details(
             '{"id":"abc1","snippet":"hi"}', ids='[{"id":"abc1"},{"id":"abc1"},{"id":"abc2"}]'
