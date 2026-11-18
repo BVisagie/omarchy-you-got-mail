@@ -293,7 +293,8 @@ fill_labels_from_cache() {
 
   fetched="$(gws_gmail users labels list --params '{"userId":"me"}' 2>/dev/null \
     | jq -c '[.labels[]? | select(.type == "user")
-              | {key: .id, value: (.name | split("/") | last)}] | from_entries' 2>/dev/null)"
+              | {key: (.id | tostring | .[0:64]), value: ((.name // "") | tostring | split("/") | last | strings | .[0:60])}]
+              | .[0:500] | from_entries' 2>/dev/null)"
   [ "$?" -eq "$NOT_SAVED" ] && return "$NOT_SAVED"
   [ -n "$fetched" ] || return 0
   printf '%s\n' "$fetched" | write_private "$LABEL_FILE" || return "$NOT_SAVED"
@@ -334,7 +335,7 @@ fill_cache() {
               snippet: (.snippet // \"\" | tostring | .[0:1000]),
               ts: ((.internalDate // \"0\") | tostring
                    | if test(\"^[0-9]{1,16}$\") then tonumber else 0 end),
-              threadId: (.threadId // .id | tostring | .[0:64]),
+              threadId: ((.threadId | strings | select(test(\"\\\\A[0-9a-f]{1,32}\\\\z\"))) // \$id),
               lab: [(.labelIds // [])[] | strings | select(startswith(\"Label_\")) | .[0:64]][0:50]
             }}" < "$out.raw" 2>/dev/null)
       rm -f "$out.raw"
@@ -411,7 +412,8 @@ render() {
       end;
 
     ($labelmap[0] // {}) as $names
-    | def mine: [ .[] | $names[.] | select(. != null) ];
+    # Bounded here too, for names an older cache holds at any length.
+    | def mine: [ .[] | $names[.] | strings | .[0:60] ][0:10];
 
     ($cache[0] // {}) as $c
     | {
@@ -425,7 +427,8 @@ render() {
           $ids[]
           | . as $id
           | ($c[$id] // {}) as $m
-          | ($m.threadId // $id) as $thread
+          # A thread id is used whole or not at all: a cut one opens elsewhere.
+          | (($m.threadId | strings | select(test("\\A[0-9a-f]{1,32}\\z"))) // $id) as $thread
           | {
               id: $id,
               threadId: $thread,
@@ -509,8 +512,13 @@ cmd_read_all() {
     # Through stdin: the collected ids outgrow what one argument can carry.
     all="$(printf '%s\n%s\n' "$all" "$ids" | jq -cs '(.[0] + .[1]) | unique')" \
       || fail_read_all "$marked" "could not collect unread mail"
-    next="$(printf '%s' "$page" | jq -r '.nextPageToken // empty' 2>/dev/null)"
-    case "$next" in *[!A-Za-z0-9_-]*) next="" ;; esac
+    next="$(printf '%s' "$page" | jq -r '.nextPageToken // empty | tostring' 2>/dev/null)"
+    # A token that is there but unusable is not the last page: stop before
+    # marking only part of the mail.
+    case "$next" in
+      *[!A-Za-z0-9_-]*) fail_read_all 0 "Gmail sent an unusable page token" ;;
+    esac
+    [ "${#next}" -le 512 ] || fail_read_all 0 "Gmail sent an unusable page token"
     [ -z "$next" ] && break
     case "$seen" in
       *"|$next|"*) die "gmail repeated a page token" ;;

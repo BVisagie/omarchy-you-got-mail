@@ -976,16 +976,71 @@ class GmailProviderProcessTests(unittest.TestCase):
         self.assertTrue(payload["ok"], payload)
         self.assertEqual(payload["email"], "")
 
-    def test_read_all_handles_more_ids_than_one_argument_holds(self) -> None:
-        ids = ",".join(f'{{"id":"{i:08x}"}}' for i in range(5000))
+    def _read_all(self, list_reply: str) -> tuple:
+        import json
+
+        dirs = []
         payload = self._run(
             'case " $* " in\n'
-            f"  *\" messages list \"*) printf '%s\\n' '{{\"messages\":[{ids}]}}' ;;\n"
+            f"  *\" messages list \"*) printf '%s\\n' '{list_reply}' ;;\n"
+            '  *" batchModify "*) printf \'%s\\n\' "$*" >> "$XDG_CACHE_HOME/batches.log"; printf \'{}\\n\' ;;\n'
             "  *) printf '{}\\n' ;;\n"
             "esac\n",
             "read-all",
+            prepare=dirs.append,
         )
+        log = dirs[0].parent.parent / "batches.log"
+        batches = []
+        if log.exists():
+            for line in log.read_text().splitlines():
+                body = line[line.index("--json ") + len("--json "):]
+                batches.append(json.loads(body)["ids"])
+        return payload, batches
+
+    def test_read_all_handles_more_ids_than_one_argument_holds(self) -> None:
+        # 32-character ids: 5000 of them are about 175 kB, past Linux's
+        # 128 kB limit on one argument.
+        ids = [f"{i:032x}" for i in range(5000)]
+        reply = '{"messages":[' + ",".join(f'{{"id":"{i}"}}' for i in ids) + "]}"
+        payload, batches = self._read_all(reply)
         self.assertEqual(payload, {"ok": True, "marked": 5000})
+        marked = [i for batch in batches for i in batch]
+        self.assertEqual(sorted(marked), sorted(ids))  # every id, exactly once
+
+    def test_read_all_stops_at_an_unusable_page_token(self) -> None:
+        payload, batches = self._read_all('{"messages":[{"id":"abc1"}],"nextPageToken":"bad token!"}')
+        self.assertFalse(payload["ok"])
+        self.assertEqual(payload["marked"], 0)
+        self.assertEqual(batches, [])
+
+    def test_a_thread_link_uses_a_whole_thread_id_or_the_message_id(self) -> None:
+        # Gmail ids are hex; a thread id that is not one, or too long, is
+        # never cut into another link: the message id is used instead.
+        for thread, expected in (("abcdef12", "abcdef12"), ("a" * 70, "abc1"), ("zz", "abc1")):
+            details = '{"id":"abc1","threadId":"' + thread + '"}'
+            payload, cached = self._list_with_details(details)
+            self.assertTrue(payload["ok"], payload)
+            self.assertTrue(payload["messages"][0]["url"].endswith("#all/" + expected), thread)
+
+    def test_label_names_are_cut_when_shown(self) -> None:
+        import json
+
+        def prepare(cache) -> None:
+            import os
+
+            cache.mkdir(parents=True, mode=0o700)
+            os.chmod(cache.parent, 0o700)
+            (cache / "labels.json").write_text(json.dumps({"Label_1": "n" * 5000}))
+            (cache / "messages.json").write_text(
+                json.dumps({"abc1": {"subject": "s", "lab": ["Label_1"] * 30, "ts": 1}})
+            )
+            for name in ("labels.json", "messages.json"):
+                (cache / name).chmod(0o600)
+
+        payload, cached = self._list_with_details('{"id":"abc1"}', prepare=prepare)
+        labels = payload["messages"][0]["labels"]
+        self.assertLessEqual(len(labels), 10)
+        self.assertTrue(all(len(name) <= 60 for name in labels))
 
     def test_a_list_reply_of_several_objects_is_not_a_page(self) -> None:
         payload = self._run(
