@@ -57,6 +57,12 @@ class CatalogTests(unittest.TestCase):
             text = (ROOT / name).read_text(encoding="utf-8")
             self.assertEqual(shown.findall(text), [], name)
 
+    def test_qml_property_names_start_lower_case(self) -> None:
+        # QML refuses the whole file otherwise, which no unit test here would see.
+        for name in ("Panel.qml", "FailureNotice.qml", "PanelMenu.qml", "MailSlotIcon.qml"):
+            text = (ROOT / name).read_text(encoding="utf-8")
+            self.assertEqual(re.findall(r"^\s*(?:readonly\s+)?property\s+\S+\s+([A-Z]\w*)", text, re.M), [], name)
+
     def test_the_panel_reads_its_catalogs_with_translations(self) -> None:
         qml = (ROOT / "Panel.qml").read_text(encoding="utf-8")
         self.assertIn('Translations { directory: Qt.resolvedUrl("i18n") }', qml)

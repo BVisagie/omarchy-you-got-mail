@@ -92,10 +92,10 @@ Panel {
   function trn(key, count, one, other) {
     return MailState.fill(strings.tn(key, count, count === 1 ? one : other), [I18n.formatNumber(count)])
   }
-  readonly property var T: ({ t: root.tr, n: root.trn })
+  readonly property var translator: ({ t: root.tr, n: root.trn })
 
-  readonly property var accountMenu: MailState.accountEntries(inboxes, accountChecks, now, T)
-  readonly property var shortcutHelp: MailState.shortcuts(T)
+  readonly property var accountMenu: MailState.accountEntries(inboxes, accountChecks, now, translator)
+  readonly property var shortcutHelp: MailState.shortcuts(translator)
 
   function showView(view) {
     cancelMarkAllConfirm()
@@ -177,7 +177,7 @@ Panel {
 
   function freshnessText() {
     return allCheckedAt > 0
-      ? tr("check.lastFull", "Last full check: %1", [MailState.ago(allCheckedAt, now, T)])
+      ? tr("check.lastFull", "Last full check: %1", [MailState.ago(allCheckedAt, now, translator)])
       : tr("check.lastFullNever", "No successful check of all accounts yet")
   }
 
@@ -429,7 +429,7 @@ Panel {
     for (var i = 0; i < inboxes.length; i++) {
       var box = inboxes[i]
       if (box.ok === false)
-        parts.push((box.account || box.id) + ": " + MailState.checkLabel(accountChecks[box.id], now, T))
+        parts.push((box.account || box.id) + ": " + MailState.checkLabel(accountChecks[box.id], now, translator))
     }
     return parts.join("\n")
   }
@@ -456,7 +456,7 @@ Panel {
     if (!root.readExited || !root.readOutputReady || root.pendingId === "") return
     var id = root.pendingId
     var saved = root.dismissedIds[id]
-    var error = MailState.readError(root.readOutput, root.readExitCode, T)
+    var error = MailState.readError(root.readOutput, root.readExitCode, translator)
     var result = MailState.settle(messages, unread, dismissedIds, id, error)
     root.mailboxRevision += 1
     messages = result.messages
@@ -1071,7 +1071,7 @@ Panel {
                 strings: root.strings
                 failure: Object.assign({}, modelData, {
                   message: (modelData.message || modelData.error || root.tr("mail.unreachable", "Could not reach mail."))
-                    + "\n" + MailState.checkLabel(root.accountChecks[modelData.id], root.now, root.T)
+                    + "\n" + MailState.checkLabel(root.accountChecks[modelData.id], root.now, root.translator)
                 })
                 foreground: root.foreground
                 urgent: bar ? bar.urgent : Color.urgent

@@ -46,9 +46,9 @@ module.exports = function panelHarness() {
     },
     set(value) { panel.settings = Object.assign({}, panel.settings, {soundEnabled: value}); },
   });
-  Object.defineProperty(panel, 'T', {get() { return {t: panel.tr, n: panel.trn}; }});
+  Object.defineProperty(panel, 'translator', {get() { return {t: panel.tr, n: panel.trn}; }});
   Object.defineProperty(panel, 'accountMenu', {get() {
-    return state.accountEntries(panel.inboxes, panel.accountChecks, panel.now, panel.T);
+    return state.accountEntries(panel.inboxes, panel.accountChecks, panel.now, panel.translator);
   }});
   const methods = [...source.matchAll(/^  function \w+\([^\n]*\) \{[\s\S]*?^  \}/gm)]
     .map(match => match[0]).join('\n');
