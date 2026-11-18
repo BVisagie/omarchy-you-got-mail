@@ -1024,6 +1024,18 @@ class GmailProviderProcessTests(unittest.TestCase):
             self.assertFalse(payload["ok"], token)
             self.assertEqual(batches, [], token)
 
+    def test_a_page_from_a_failed_gws_is_not_used(self) -> None:
+        payload = self._run(
+            'case " $* " in\n'
+            "  *\" messages list \"*) printf '{\"messages\":[{\"id\":\"abc1\"}]}\\n'; exit 2 ;;\n"
+            '  *" batchModify "*) echo marked >> "$XDG_CACHE_HOME/batches.log"; printf \'{}\\n\' ;;\n'
+            "  *) printf '{}\\n' ;;\n"
+            "esac\n",
+            "read-all",
+        )
+        self.assertFalse(payload["ok"])
+        self.assertEqual(payload.get("marked", 0), 0)
+
     def test_read_all_refuses_messages_that_are_not_a_list(self) -> None:
         payload, batches = self._read_all('{"messages":{"metadata":{"id":"abcd"}}}')
         self.assertFalse(payload["ok"])

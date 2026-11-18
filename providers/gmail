@@ -191,11 +191,12 @@ fail_if_too_large() {
 # inside $(...): die() exits 0, so a subshell would capture the error object
 # and the parent would treat it as an empty mailbox.
 gws_list() {
-  local dest="$1" errfile="$CACHE_DIR/gws.err" out msg
+  local dest="$1" errfile="$CACHE_DIR/gws.err" out msg status
   shift
   [[ "$dest" =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]] || die "internal error"
   out="$(gws_gmail "$@" 2>"$errfile")"
-  [ "$?" -eq "$NOT_SAVED" ] && fail_not_saved
+  status=$?
+  [ "$status" -eq "$NOT_SAVED" ] && fail_not_saved
   fail_if_too_large
   # Exactly one JSON object, whose messages, when present, are a list; a
   # reply holding several objects, or messages of another shape, is no page.
@@ -204,8 +205,11 @@ gws_list() {
     if printf '%s' "$out" | jq -e '.error' >/dev/null 2>&1; then
       gmail_error "$(printf '%s' "$out" | jq -r '.error.message // "could not read unread mail" | tostring | .[0:500]')"
     fi
-    printf -v "$dest" '%s' "$out"
-    return 0
+    # Only a gws that succeeded has handed over a page.
+    if [ "$status" -eq 0 ]; then
+      printf -v "$dest" '%s' "$out"
+      return 0
+    fi
   fi
   msg="$(head -c 65536 "$errfile" 2>/dev/null | tr -s '[:space:]' ' ')"
   [ -n "$msg" ] || msg="$(tr -s '[:space:]' ' ' <<<"$out")"
