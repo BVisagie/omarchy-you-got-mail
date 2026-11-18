@@ -518,6 +518,14 @@ class ConfigFileTests(unittest.TestCase):
         self.assertEqual(common.max_messages(), 25)
 
 
+
+class OneLineTests(unittest.TestCase):
+    def test_joiners_stay_and_invisible_marks_go(self) -> None:
+        self.assertEqual(common.one_line("👩\u200d💻"), "👩\u200d💻")
+        self.assertEqual(common.one_line("می\u200cخواهم"), "می\u200cخواهم")
+        self.assertEqual(common.one_line("a\u200bb\u202ec\ufeff"), "abc")
+
+
 class RunCappedTests(unittest.TestCase):
     def _run(self, script: str, timeout: float = 10, limit: int = 1024):
         return common.run_capped([sys.executable, "-c", script], dict(os.environ), timeout, limit)

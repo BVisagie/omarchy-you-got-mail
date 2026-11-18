@@ -1196,6 +1196,12 @@ class GmailProviderProcessTests(unittest.TestCase):
         self.assertTrue(payload["messages"][0]["snippet"].endswith("fish & chips"))
         self.assertEqual(cached["abc1"]["v"], 2)
 
+    def test_a_long_from_header_still_gives_the_whole_name(self) -> None:
+        sender = "Ada Lovelace <" + "a" * 400 + "@example.com>"
+        details = '{"id":"abc1","payload":{"headers":[{"name":"From","value":"' + sender + '"}]}}'
+        payload, cached = self._list_with_details(details)
+        self.assertEqual(payload["messages"][0]["from"], "Ada Lovelace")
+
     def test_a_label_reply_must_be_one_object_with_a_list(self) -> None:
         import json
 

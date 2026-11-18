@@ -166,7 +166,9 @@ def fetch_limit(raw: object | None = None) -> int:
 
 
 def one_line(value: str, limit: int = 180) -> str:
-    text = re.sub(r"[\u00ad\u034f\u200b-\u200f\u202a-\u202e\u2060-\u206f\ufeff]+", "", value or "")
+    # Invisible and direction-changing characters go; the zero-width joiners
+    # U+200C and U+200D stay, since Persian spelling and emoji such as 👩‍💻 need them.
+    text = re.sub(r"[\u00ad\u034f\u200b\u200e\u200f\u202a-\u202e\u2060-\u206f\ufeff]+", "", value or "")
     text = re.sub(r"\s+", " ", text).strip()
     if len(text) <= limit:
         return text
