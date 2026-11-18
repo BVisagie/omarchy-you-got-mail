@@ -73,7 +73,7 @@ def read_http_body(fp: object, limit: int = MAX_HTTP_BODY) -> bytes:
 
 
 def die(message: str, code: int = 0) -> None:
-    sys.stdout.write(json.dumps({"ok": False, "error": message}, ensure_ascii=False) + "\n")
+    sys.stdout.write(json.dumps({"ok": False, "error": message}) + "\n")
     raise SystemExit(code)
 
 

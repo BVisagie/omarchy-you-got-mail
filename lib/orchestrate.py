@@ -123,7 +123,7 @@ def _url(value) -> str:
     last = host.rstrip(".").rsplit(".", 1)[-1]
     if re.fullmatch(r"[0-9]+|0[xX][0-9a-fA-F]*", last):
         try:
-            ipaddress.IPv4Address(host)
+            ipaddress.IPv4Address(host[:-1] if host.endswith(".") else host)
         except ValueError:
             return BAD_URL
     return url
@@ -385,9 +385,15 @@ def cmd_read(opaque: str) -> None:
     acc = accounts.get(account_id)
     if not acc:
         die("unknown account")
-    payload = _run_provider(acc, ["read", local_id])
-    if not payload.get("ok"):
-        die(_error(payload, "could not mark as read"))
+    # Through _each like the others: the provider runs on a worker thread,
+    # which a signal never interrupts, and an interrupt here stops it.
+    def work(acc: dict) -> dict:
+        payload = _run_provider(acc, ["read", local_id])
+        return {"ok": bool(payload.get("ok")), "error": _error(payload, "could not mark as read")}
+
+    for result in _each([acc], work):
+        if not result["ok"]:
+            die(result["error"])
     emit({"ok": True})
 
 
@@ -397,15 +403,21 @@ def cmd_read_all() -> None:
     marked = 0
     succeeded = 0
 
+    # Only what the totals need is kept until every account finishes.
     def work(acc: dict) -> tuple[dict, dict]:
-        return acc, _run_provider(acc, ["read-all"], timeout=READ_ALL_TIMEOUT)
+        payload = _run_provider(acc, ["read-all"], timeout=READ_ALL_TIMEOUT)
+        return acc, {
+            "ok": bool(payload.get("ok")),
+            "marked": _count(payload.get("marked")),
+            "error": _error(payload, "failed"),
+        }
 
     for acc, payload in _each(accounts, work):
-        marked = min(marked + _count(payload.get("marked")), MAX_COUNT)
-        if payload.get("ok"):
+        marked = min(marked + payload["marked"], MAX_COUNT)
+        if payload["ok"]:
             succeeded += 1
             continue
-        errors.append(account_error(acc, _error(payload, "failed")))
+        errors.append(account_error(acc, payload["error"]))
 
     signin = any(needs_sign_in(e) for e in errors)
     if succeeded == 0:

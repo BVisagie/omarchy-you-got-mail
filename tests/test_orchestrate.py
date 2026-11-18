@@ -95,6 +95,32 @@ class ProviderResultTests(unittest.TestCase):
         stop.assert_called_once()
         self.assertLessEqual(len(started), 2)
 
+    def test_read_runs_its_provider_off_the_main_thread(self) -> None:
+        import threading
+
+        acc = _account("a", "gmail", "Gmail")
+        threads = []
+
+        def run(account: dict, args: list[str]) -> dict:
+            threads.append(threading.current_thread() is threading.main_thread())
+            return {"ok": True}
+
+        opaque = orchestrate.encode_id("a", "m1")
+        with patch.object(orchestrate, "load_accounts", return_value=[acc]), patch.object(
+            orchestrate, "_run_provider", side_effect=run
+        ):
+            self.assertEqual(capture_json(orchestrate.cmd_read, opaque), {"ok": True})
+        self.assertEqual(threads, [False])
+
+    def test_failed_read_reports_its_error(self) -> None:
+        acc = _account("a", "gmail", "Gmail")
+        opaque = orchestrate.encode_id("a", "m1")
+        with patch.object(orchestrate, "load_accounts", return_value=[acc]), patch.object(
+            orchestrate, "_run_provider", return_value={"ok": False, "error": "permission denied"}
+        ):
+            payload = capture_json(orchestrate.cmd_read, opaque)
+        self.assertEqual(payload, {"ok": False, "error": "permission denied"})
+
     def test_sigterm_takes_the_interrupt_path(self) -> None:
         import signal
 
@@ -542,10 +568,11 @@ class ProviderDataBoundsTests(unittest.TestCase):
             row["url"] = bad
             payload = self._list({"a": {"ok": True, "unread": 1, "messages": [row]}})
             self.assertEqual(payload["messages"][0]["url"], orchestrate.BAD_URL)
-        row = message("ip", 1)
-        row["url"] = "https://192.168.1.10:8443/mail"
-        payload = self._list({"a": {"ok": True, "unread": 1, "messages": [row]}})
-        self.assertEqual(payload["messages"][0]["url"], "https://192.168.1.10:8443/mail")
+        for good in ("https://192.168.1.10:8443/mail", "https://192.168.1.10./mail"):
+            row = message("ip", 1)
+            row["url"] = good
+            payload = self._list({"a": {"ok": True, "unread": 1, "messages": [row]}})
+            self.assertEqual(payload["messages"][0]["url"], good)
         url = "https://mail.example.test/#search/invalid:thing"
         payload = self._list({"a": {"ok": True, "unread": 0, "searchUrl": url, "messages": []}})
         self.assertEqual(payload["inboxes"][0]["searchUrl"], url)
