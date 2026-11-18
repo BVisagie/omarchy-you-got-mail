@@ -95,6 +95,17 @@ class ProviderResultTests(unittest.TestCase):
         stop.assert_called_once()
         self.assertLessEqual(len(started), 2)
 
+    def test_sigterm_takes_the_interrupt_path(self) -> None:
+        import signal
+
+        import cli
+
+        previous = signal.getsignal(signal.SIGTERM)
+        self.addCleanup(signal.signal, signal.SIGTERM, previous)
+        with patch.object(cli, "cmd_list"), patch.object(cli.sys, "argv", ["you-got-mail", "list"]):
+            cli.main()
+        self.assertIs(signal.getsignal(signal.SIGTERM), signal.default_int_handler)
+
     def test_a_provider_started_after_a_stop_is_an_account_error(self) -> None:
         with patch.object(orchestrate, "run_capped", side_effect=orchestrate.Cancelled("stopped")):
             result = orchestrate._run_provider(_account("gmail", "gmail", "Gmail"), ["read-all"])
@@ -473,6 +484,9 @@ class ProviderDataBoundsTests(unittest.TestCase):
         self.assertEqual(payload["unread"], 12)
         payload = self._list({"a": {"ok": True, "unread": 10**12, "messages": []}})
         self.assertEqual(payload["unread"], orchestrate.MAX_COUNT)
+        # The sum stays inside QML's 32-bit int too.
+        many = {f"a{i}": {"ok": True, "unread": orchestrate.MAX_COUNT, "messages": []} for i in range(300)}
+        self.assertEqual(self._list(many)["unread"], orchestrate.MAX_COUNT)
 
     def test_text_is_cut_to_size_and_kept_plain(self) -> None:
         row = message("a", 100, subject="<img src=https://example.invalid/t>" + "s" * 5000)
@@ -519,7 +533,8 @@ class ProviderDataBoundsTests(unittest.TestCase):
         # message read without opening it.
         self.assertEqual(payload["messages"][0]["url"], orchestrate.BAD_URL)
         self.assertEqual(payload["inboxes"][0]["searchUrl"], "")
-        for bad in ("https://256.0.0.1/mail", "https://1.2.3/mail", "https://mail.example.test/a\x00b", "https://mail.example.test/\x7f",
+        for bad in ("https://256.0.0.1/mail", "https://1.2.3/mail", "https://mail.123/inbox",
+                    "https://mail.0x1f/inbox", "https://mail.example.test/a\x00b", "https://mail.example.test/\x7f",
                     "https://mail.example.test/m\n", " https://mail.example.test/m",
                     "https://mail.example.test/a\ud800/b", "https://mail.example:65536/m",
                     "https:///no-host", "https://mail.example:port/m"):

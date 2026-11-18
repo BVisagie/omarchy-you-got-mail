@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import os
+import signal
 import sys
 from pathlib import Path
 
@@ -45,6 +46,9 @@ when you turn the sound off.
 
 
 def main() -> None:
+    # Providers run in sessions of their own. A SIGTERM to this CLI, like a
+    # Ctrl+C, takes the interrupt path that stops them before it exits.
+    signal.signal(signal.SIGTERM, signal.default_int_handler)
     args = sys.argv[1:]
     if not args or args[0] in ("list",):
         page = ""
@@ -81,4 +85,7 @@ def main() -> None:
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except KeyboardInterrupt:
+        sys.exit(130)

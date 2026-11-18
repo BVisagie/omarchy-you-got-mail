@@ -118,8 +118,10 @@ def _url(value) -> str:
     host = parts.hostname
     if not host:
         return BAD_URL
-    # A dotted number is an IPv4 address, and must be a valid one.
-    if re.fullmatch(r"[0-9.]+", host):
+    # A browser reads a host whose last label is a number as an IPv4 address,
+    # so it must be a valid one.
+    last = host.rstrip(".").rsplit(".", 1)[-1]
+    if re.fullmatch(r"[0-9]+|0[xX][0-9a-fA-F]*", last):
         try:
             ipaddress.IPv4Address(host)
         except ValueError:
@@ -260,24 +262,35 @@ def cmd_list(page_token: str) -> None:
     emails = []
     payloads: dict[str, dict] = {}
 
+    # Each worker keeps only the checked, bounded part of its reply, so what
+    # is held until every account finishes does not grow with reply size.
     def work(acc: dict) -> tuple[dict, dict, float]:
         payload = _run_provider(acc, ["list", "--limit", fetch])
-        return acc, payload, time.time()
+        if not payload.get("ok"):
+            return acc, {"ok": False, "error": _error(payload, "failed")}, time.time()
+        summary = {
+            "ok": True,
+            "unread": _count(payload.get("unread")),
+            "email": _text(payload.get("email"), MAX_TEXT),
+            "searchUrl": _search_url(payload.get("searchUrl")),
+            "rows": _tag_messages(acc, payload, int(fetch)),
+        }
+        return acc, summary, time.time()
 
     checked_at: dict[str, float] = {}
     for acc, payload, finished_at in _each(accounts, work):
-        if not payload.get("ok"):
-            msg = account_error(acc, _error(payload, "failed"))
+        if not payload["ok"]:
+            msg = account_error(acc, payload["error"])
             errors.append(msg)
             error_by_id[acc["id"]] = msg
             continue
         payloads[acc["id"]] = payload
         checked_at[acc["id"]] = finished_at
-        unread += _count(payload.get("unread"))
-        email = _text(payload.get("email"), MAX_TEXT)
-        if email:
-            emails.append(email)
-        merged.extend(_tag_messages(acc, payload, int(fetch)))
+        # QML holds the total in a 32-bit int.
+        unread = min(unread + payload["unread"], MAX_COUNT)
+        if payload["email"]:
+            emails.append(payload["email"])
+        merged.extend(payload["rows"])
 
     inboxes = []
     signin = False
@@ -290,8 +303,8 @@ def cmd_list(page_token: str) -> None:
                     "id": acc["id"],
                     "account": label,
                     "checkedAt": checked_at[acc["id"]],
-                    "unread": _count(payload.get("unread")),
-                    "searchUrl": _search_url(payload.get("searchUrl")),
+                    "unread": payload["unread"],
+                    "searchUrl": payload["searchUrl"],
                     "ok": True,
                     "needsSignIn": False,
                 }
@@ -388,7 +401,7 @@ def cmd_read_all() -> None:
         return acc, _run_provider(acc, ["read-all"], timeout=READ_ALL_TIMEOUT)
 
     for acc, payload in _each(accounts, work):
-        marked += _count(payload.get("marked"))
+        marked = min(marked + _count(payload.get("marked")), MAX_COUNT)
         if payload.get("ok"):
             succeeded += 1
             continue
