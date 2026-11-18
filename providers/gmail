@@ -156,8 +156,9 @@ gws_gmail() {
     return "$NOT_SAVED"
   fi
   if [ "$(wc -c <"$REPLY_FILE")" -gt "$GWS_MAX_BYTES" ]; then
-    : >"$TOO_LARGE"
     rm -f -- "$REPLY_FILE"
+    # Without the mark the oversize would pass for an optional lookup failing.
+    : >"$TOO_LARGE" || return "$NOT_SAVED"
     return 1
   fi
   cat -- "$REPLY_FILE"
@@ -303,7 +304,7 @@ fill_cache() {
         | head -c "$((GWS_MAX_BYTES + 1))" > "$out.raw" || exit 1
       if [ "$(wc -c < "$out.raw")" -gt "$GWS_MAX_BYTES" ]; then
         rm -f "$out.raw"
-        : > "$too_large"
+        : > "$too_large" || exit 1
         exit 0
       fi
       parsed=$(jq -c "{(.id): {
