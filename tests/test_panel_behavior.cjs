@@ -490,3 +490,9 @@ test('without a bar shell the sound still turns on for this session', () => {
     assert.deepEqual(plain(p.settings), {id: 'bvisagie.you-got-mail', max: 30, soundEnabled: true});
   }
 });
+
+test('the vertical badge shortens past 999 in the language\'s digits', () => {
+  const p = panelHarness();
+  p.I18n.formatNumber = value => String(value).replace(/\d/g, d => '۰۱۲۳۴۵۶۷۸۹'[d]);
+  assert.equal(p.tr('badge.overThousand', '%1k+', [p.I18n.formatNumber(1)]), '۱k+');
+});

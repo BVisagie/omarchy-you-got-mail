@@ -213,7 +213,7 @@ Panel {
   readonly property bool barVertical: bar ? bar.vertical : false
   // A vertical bar has room for three digits; the tooltip keeps the count.
   // In the language's own digits, like the tooltip.
-  readonly property string badgeText: showAlertBadge ? "!" : (barVertical && badgeCount > 999 ? tr("badge.overThousand", "1k+") : I18n.formatNumber(badgeCount))
+  readonly property string badgeText: showAlertBadge ? "!" : (barVertical && badgeCount > 999 ? tr("badge.overThousand", "%1k+", [I18n.formatNumber(1)]) : I18n.formatNumber(badgeCount))
   readonly property int badgeWidth: badgeShown
     ? Math.max(Style.space(12), badgeText.length * Style.space(6) + Style.space(8))
     : 0
