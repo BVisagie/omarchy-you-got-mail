@@ -115,7 +115,8 @@ private_dir() {
   [[ "$owner" == "$(id -u)" ]] || return 1
   chmod 700 -- "$dir" 2>/dev/null || return 1
   find "$dir" -mindepth 1 -maxdepth 1 ! -type f -exec rm -rf -- {} + 2>/dev/null
-  find "$dir" -mindepth 1 -maxdepth 1 -type f -exec chmod 600 -- {} + 2>/dev/null
+  # Another run's gws.<pid>.* files come and go; umask 077 made them private.
+  find "$dir" -mindepth 1 -maxdepth 1 -type f ! -name 'gws.*.*' -exec chmod 600 -- {} + 2>/dev/null
 }
 
 command -v jq >/dev/null 2>&1 || die "jq not found on PATH"
@@ -138,6 +139,8 @@ for left in "$CACHE_DIR"/gws.*.*; do
   case "$owner" in ''|*[!0-9]*) continue ;; esac
   kill -0 "$owner" 2>/dev/null || rm -f -- "$left"
 done
+# Files under this run's own PID can only be an ended run's.
+rm -f -- "$RUN_FILES".*
 trap 'rm -f -- "$RUN_FILES".*' EXIT
 
 # gws output, capped. The size is counted on the bytes as written, before a

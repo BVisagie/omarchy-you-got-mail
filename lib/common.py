@@ -77,7 +77,8 @@ def die(message: str, code: int = 0) -> None:
 
 
 def emit(payload: dict) -> None:
-    sys.stdout.write(json.dumps(payload, ensure_ascii=False) + "\n")
+    # ASCII escapes carry any text, a lone surrogate included, to the reader.
+    sys.stdout.write(json.dumps(payload) + "\n")
 
 
 def read_owned_file(
@@ -547,6 +548,8 @@ def run_capped(
                         f"printed more than {limit // (1024 * 1024)} MB"
                     )
         returncode = proc.wait(max(0.0, deadline - time.monotonic()))
+        if own_group:
+            stop()  # a helper that closed its pipes may still be running
     except subprocess.TimeoutExpired:
         stop()
         proc.wait()
@@ -555,9 +558,11 @@ def run_capped(
         selector.close()
         proc.stdout.close()
         proc.stderr.close()
+    # Invalid UTF-8 stays visible as lone surrogates, so the checks after
+    # this refuse an id or link that holds it instead of opening a rewrite.
     return subprocess.CompletedProcess(
         cmd,
         returncode,
-        bytes(output[proc.stdout]).decode("utf-8", "replace"),
-        bytes(output[proc.stderr]).decode("utf-8", "replace"),
+        bytes(output[proc.stdout]).decode("utf-8", "surrogateescape"),
+        bytes(output[proc.stderr]).decode("utf-8", "surrogateescape"),
     )

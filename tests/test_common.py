@@ -604,6 +604,33 @@ class RunCappedTests(unittest.TestCase):
         self.assertEqual(proc.returncode, 0)
         self.assertLess(time.monotonic() - started, 3)
 
+    def test_invalid_utf8_stays_visible(self) -> None:
+        proc = self._run("import sys; sys.stdout.buffer.write(b'a\\xffb')")
+        self.assertEqual(proc.stdout, "a\udcffb")
+        with self.assertRaises(UnicodeEncodeError):
+            proc.stdout.encode("utf-8")
+
+    def test_helper_that_closed_its_pipes_is_stopped(self) -> None:
+        import time
+
+        proc = self._run(
+            "import subprocess, sys\n"
+            "p = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(30)'],"
+            " stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)\n"
+            "print(p.pid)"
+        )
+        pid = int(proc.stdout)
+        for _ in range(40):
+            try:
+                state = Path(f"/proc/{pid}/stat").read_text().split(")")[-1].split()[0]
+            except FileNotFoundError:
+                break
+            if state == "Z":
+                break
+            time.sleep(0.05)
+        else:
+            self.fail("helper still running")
+
     def test_timeout_kills_the_program(self) -> None:
         with self.assertRaises(subprocess.TimeoutExpired):
             self._run("import time; time.sleep(30)", timeout=0.5)
