@@ -563,7 +563,8 @@ class ProviderDataBoundsTests(unittest.TestCase):
         # message read without opening it.
         self.assertEqual(payload["messages"][0]["url"], orchestrate.BAD_URL)
         self.assertEqual(payload["inboxes"][0]["searchUrl"], "")
-        for bad in ("https://256.0.0.1/mail", "https://1.2.3/mail", "https://mail.123/inbox",
+        for bad in ("https://256.0.0.1/mail", "https://1.2.3.4.5/mail", "https://mail.123/inbox",
+                    "https://08.1/mail", "https://1.16777216/mail", "https://4294967296/mail",
                     "https://mail.0x1f/inbox", "https://bad host/inbox", "https://mail.example.test/a\ufeffb",
                     "https://mail.example.test:\u0663/m",
                     "https://user@mail.example.test/m", "https://[::1]/m", "https://mail.example.test/a\x00b", "https://mail.example.test/\x7f",
@@ -574,7 +575,9 @@ class ProviderDataBoundsTests(unittest.TestCase):
             row["url"] = bad
             payload = self._list({"a": {"ok": True, "unread": 1, "messages": [row]}})
             self.assertEqual(payload["messages"][0]["url"], orchestrate.BAD_URL)
-        for good in ("https://192.168.1.10:8443/mail", "https://192.168.1.10./mail"):
+        for good in ("https://192.168.1.10:8443/mail", "https://192.168.1.10./mail",
+                     "https://127.1:8443/mail", "https://0x7f.1/mail", "https://0177.0.0.1/mail",
+                     "https://3232235786/mail"):
             row = message("ip", 1)
             row["url"] = good
             payload = self._list({"a": {"ok": True, "unread": 1, "messages": [row]}})
@@ -587,6 +590,10 @@ class ProviderDataBoundsTests(unittest.TestCase):
             {"a": {"ok": True, "unread": 0, "searchUrl": "https://m.test/\ufeff", "messages": []}}
         )
         self.assertEqual(payload["inboxes"][0]["searchUrl"], "")
+        payload = self._list(
+            {"a": {"ok": True, "unread": 0, "searchUrl": "https://127.1:2096/", "messages": []}}
+        )
+        self.assertEqual(payload["inboxes"][0]["searchUrl"], "https://127.1:2096/")
         url = "https://mail.example.test/#search/invalid:thing"
         payload = self._list({"a": {"ok": True, "unread": 0, "searchUrl": url, "messages": []}})
         self.assertEqual(payload["inboxes"][0]["searchUrl"], url)

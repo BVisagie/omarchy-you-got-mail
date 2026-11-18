@@ -250,6 +250,15 @@ class ImapReadAllTests(unittest.TestCase):
             payload = capture_json(self.imap.cmd_list, {"host": "h", "user": "u"}, "pw", 5)
         self.assertEqual(payload, {"ok": False, "error": "the server sent more data than expected"})
 
+    def test_an_overlong_line_marks_the_session_over_budget(self) -> None:
+        client = self.imap.BoundedIMAP.__new__(self.imap.BoundedIMAP)
+        with patch.object(
+            self.imap.imaplib.IMAP4_SSL, "readline", side_effect=self.imap.imaplib.IMAP4.error("got more than 1000000 bytes")
+        ):
+            with self.assertRaises(self.imap.imaplib.IMAP4.error):
+                client.readline()
+        self.assertTrue(client.over_budget)
+
     def test_a_session_over_budget_is_dropped_not_logged_out(self) -> None:
         from unittest.mock import MagicMock
 

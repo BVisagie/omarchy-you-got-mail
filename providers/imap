@@ -60,7 +60,11 @@ class BoundedIMAP(imaplib.IMAP4_SSL):
         return data
 
     def readline(self) -> bytes:
-        line = super().readline()
+        try:
+            line = super().readline()
+        except self.error:
+            self.over_budget = True  # imaplib's own limit on one line
+            raise
         self._count(len(line))
         return line
 

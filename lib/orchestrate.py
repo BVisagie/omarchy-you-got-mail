@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import ipaddress
 import json
 import math
 import os
@@ -124,14 +123,35 @@ def _url(value) -> str:
     if not host:
         return BAD_URL
     # A browser reads a host whose last label is a number as an IPv4 address,
-    # so it must be a valid one.
+    # so it must be one the browser can parse.
     last = host.rstrip(".").rsplit(".", 1)[-1]
-    if re.fullmatch(r"[0-9]+|0[xX][0-9a-fA-F]*", last):
-        try:
-            ipaddress.IPv4Address(host[:-1] if host.endswith(".") else host)
-        except ValueError:
-            return BAD_URL
+    if re.fullmatch(r"[0-9]+|0[xX][0-9a-fA-F]*", last) and not _browser_ipv4(host):
+        return BAD_URL
     return url
+
+
+def _browser_ipv4(host: str) -> bool:
+    """The WHATWG URL IPv4 parser: 1 to 4 parts, each decimal, 0x hex or
+    0-led octal, the last filling the bytes the others leave (127.1 is
+    127.0.0.1)."""
+    parts = host.split(".")
+    if len(parts) > 1 and parts[-1] == "":
+        parts.pop()
+    if not 1 <= len(parts) <= 4:
+        return False
+    numbers = []
+    for part in parts:
+        if re.fullmatch(r"0[xX][0-9a-fA-F]*", part):
+            numbers.append(int(part[2:] or "0", 16))
+        elif re.fullmatch(r"0[0-7]+", part):
+            numbers.append(int(part, 8))
+        elif re.fullmatch(r"0|[1-9][0-9]*", part):
+            numbers.append(int(part))
+        else:
+            return False
+    if any(number > 255 for number in numbers[:-1]):
+        return False
+    return numbers[-1] < 256 ** (5 - len(numbers))
 
 
 def _search_url(value) -> str:
