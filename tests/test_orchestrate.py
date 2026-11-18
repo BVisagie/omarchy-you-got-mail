@@ -48,6 +48,20 @@ class ProviderResultTests(unittest.TestCase):
             self.assertFalse(result["ok"])
             self.assertIn("invalid JSON", result["error"])
 
+    def test_interrupt_stops_the_providers_still_running(self) -> None:
+        from concurrent.futures import Future
+
+        def interrupted(futures):
+            raise KeyboardInterrupt
+            yield  # pragma: no cover
+
+        with patch.object(orchestrate, "as_completed", side_effect=interrupted), patch.object(
+            orchestrate, "stop_active"
+        ) as stop:
+            with self.assertRaises(KeyboardInterrupt):
+                list(orchestrate._completed([Future()]))
+        stop.assert_called_once()
+
     def test_argument_the_os_refuses_is_an_account_error(self) -> None:
         with patch.object(orchestrate, "run_capped", side_effect=ValueError("embedded null byte")):
             result = orchestrate._run_provider(_account("gmail", "gmail", "Gmail"), ["read", "a\x00"])
@@ -468,7 +482,8 @@ class ProviderDataBoundsTests(unittest.TestCase):
         self.assertEqual(payload["inboxes"][0]["searchUrl"], "")
         for bad in ("https://mail.example.test/a\x00b", "https://mail.example.test/\x7f",
                     "https://mail.example.test/m\n", " https://mail.example.test/m",
-                    "https://mail.example.test/a\ud800/b"):
+                    "https://mail.example.test/a\ud800/b", "https://mail.example:65536/m",
+                    "https:///no-host", "https://mail.example:port/m"):
             row = message("ctl", 1)
             row["url"] = bad
             payload = self._list({"a": {"ok": True, "unread": 1, "messages": [row]}})

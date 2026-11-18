@@ -631,6 +631,26 @@ class RunCappedTests(unittest.TestCase):
         else:
             self.fail("helper still running")
 
+    def test_stop_active_reaches_a_running_command(self) -> None:
+        import threading
+        import time
+
+        result = {}
+
+        def run() -> None:
+            result["proc"] = self._run("import time; time.sleep(30)", timeout=30)
+
+        thread = threading.Thread(target=run)
+        started = time.monotonic()
+        thread.start()
+        while not common._ACTIVE_GROUPS and time.monotonic() - started < 5:
+            time.sleep(0.02)
+        common.stop_active()
+        thread.join(5)
+        self.assertFalse(thread.is_alive())
+        self.assertEqual(result["proc"].returncode, -9)
+        self.assertEqual(common._ACTIVE_GROUPS, set())
+
     def test_timeout_kills_the_program(self) -> None:
         with self.assertRaises(subprocess.TimeoutExpired):
             self._run("import time; time.sleep(30)", timeout=0.5)

@@ -8,6 +8,7 @@ import os
 import subprocess
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from urllib.parse import urlsplit
 
 from common import (
     FETCH_CAP,
@@ -25,6 +26,7 @@ from common import (
     provider_path,
     run_capped,
     secret_path,
+    stop_active,
 )
 
 LIST_TIMEOUT = 45
@@ -104,6 +106,14 @@ def _url(value) -> str:
         ord(ch) < 0x20 or ord(ch) == 0x7F for ch in url
     ):
         return BAD_URL
+    # A host and, if given, a port the browser can use.
+    try:
+        parts = urlsplit(url)
+        parts.port
+    except ValueError:
+        return BAD_URL
+    if not parts.hostname:
+        return BAD_URL
     return url
 
 
@@ -115,6 +125,19 @@ def _search_url(value) -> str:
 
 def _error(payload: dict, fallback: str) -> str:
     return _text(payload.get("error"), MAX_ERROR) or fallback
+
+
+def _completed(futures):
+    """as_completed, but an interrupt also stops the providers still running.
+
+    They run in sessions of their own, out of reach of a terminal's Ctrl+C,
+    and the pool would otherwise wait for them, still reading or marking mail.
+    """
+    try:
+        yield from as_completed(futures)
+    except BaseException:
+        stop_active()
+        raise
 
 
 def _run_provider(account: dict, args: list[str], timeout: int = LIST_TIMEOUT) -> dict:
@@ -225,7 +248,7 @@ def cmd_list(page_token: str) -> None:
     checked_at: dict[str, float] = {}
     with ThreadPoolExecutor(max_workers=min(8, len(accounts))) as pool:
         futures = [pool.submit(work, acc) for acc in accounts]
-        for fut in as_completed(futures):
+        for fut in _completed(futures):
             acc, payload, finished_at = fut.result()
             if not payload.get("ok"):
                 msg = account_error(acc, _error(payload, "failed"))
@@ -350,7 +373,7 @@ def cmd_read_all() -> None:
 
     with ThreadPoolExecutor(max_workers=min(8, len(accounts))) as pool:
         futures = [pool.submit(work, acc) for acc in accounts]
-        for fut in as_completed(futures):
+        for fut in _completed(futures):
             acc, payload = fut.result()
             marked += _count(payload.get("marked"))
             if payload.get("ok"):

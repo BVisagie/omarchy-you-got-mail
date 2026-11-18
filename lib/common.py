@@ -14,6 +14,7 @@ import stat
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 from pathlib import Path
 
@@ -488,6 +489,22 @@ def provider_path(provider: str) -> Path:
 # still holds open. What the program itself wrote is already in the pipe.
 EXIT_GRACE = 0.5
 
+# Process groups run_capped started and has not finished with. They are in
+# sessions of their own, so a Ctrl+C at the terminal does not reach them;
+# stop_active() does.
+_ACTIVE_GROUPS: set[int] = set()
+_ACTIVE_LOCK = threading.Lock()
+
+
+def stop_active() -> None:
+    with _ACTIVE_LOCK:
+        groups = list(_ACTIVE_GROUPS)
+    for group in groups:
+        try:
+            os.killpg(group, signal.SIGKILL)
+        except OSError:
+            pass
+
 
 def run_capped(
     cmd: list[str],
@@ -507,7 +524,13 @@ def run_capped(
     proc = subprocess.Popen(
         cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=env, start_new_session=own_group
     )
+    if own_group:
+        with _ACTIVE_LOCK:
+            _ACTIVE_GROUPS.add(proc.pid)
 
+    # The leader is only reaped (proc.wait) after its group is stopped. Until
+    # then its PID, which is the group's id, cannot be reused, so the stop
+    # cannot reach an unrelated group.
     def stop() -> None:
         if own_group:
             try:
@@ -516,6 +539,12 @@ def run_capped(
             except (ProcessLookupError, PermissionError):
                 pass
         proc.kill()
+
+    def exited() -> bool:
+        try:
+            return os.waitid(os.P_PID, proc.pid, os.WEXITED | os.WNOWAIT | os.WNOHANG) is not None
+        except ChildProcessError:
+            return True
 
     output = {proc.stdout: bytearray(), proc.stderr: bytearray()}
     selector = selectors.DefaultSelector()
@@ -528,7 +557,7 @@ def run_capped(
             now = time.monotonic()
             if now > deadline:
                 raise subprocess.TimeoutExpired(cmd, timeout)
-            if exited_at is None and proc.poll() is not None:
+            if exited_at is None and exited():
                 exited_at = now
                 if own_group:
                     stop()  # anything it left running
@@ -547,14 +576,22 @@ def run_capped(
                     raise ResponseTooLargeError(
                         f"printed more than {limit // (1024 * 1024)} MB"
                     )
-        returncode = proc.wait(max(0.0, deadline - time.monotonic()))
+        while not exited():
+            if time.monotonic() > deadline:
+                raise subprocess.TimeoutExpired(cmd, timeout)
+            time.sleep(0.02)
         if own_group:
             stop()  # a helper that closed its pipes may still be running
-    except subprocess.TimeoutExpired:
-        stop()
-        proc.wait()
+        returncode = proc.wait()
+    except BaseException:
+        # A timeout, or an interrupt arriving here: nothing it started runs on.
+        if proc.returncode is None:
+            stop()
+            proc.wait()
         raise
     finally:
+        with _ACTIVE_LOCK:
+            _ACTIVE_GROUPS.discard(proc.pid)
         selector.close()
         proc.stdout.close()
         proc.stderr.close()
