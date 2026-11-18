@@ -1018,6 +1018,20 @@ class GmailProviderProcessTests(unittest.TestCase):
         self.assertFalse(payload["ok"])
         self.assertEqual(batches, [])
 
+    def test_read_all_stops_at_a_page_token_that_is_not_a_string(self) -> None:
+        for token in ("false", "0", "[]"):
+            payload, batches = self._read_all('{"messages":[{"id":"abc1"}],"nextPageToken":' + token + "}")
+            self.assertFalse(payload["ok"], token)
+            self.assertEqual(batches, [], token)
+
+    def test_a_repeated_id_is_one_row_and_one_lookup(self) -> None:
+        payload, cached = self._list_with_details(
+            '{"id":"abc1","snippet":"hi"}', ids='[{"id":"abc1"},{"id":"abc1"},{"id":"abc2"}]'
+        )
+        self.assertTrue(payload["ok"], payload)
+        self.assertEqual([m["id"] for m in payload["messages"]], ["abc1", "abc2"])
+        self.assertEqual(payload["unread"], 2)
+
     def test_list_refuses_an_overlong_page_token(self) -> None:
         token = "a" * 140_000
         payload = self._run(

@@ -211,10 +211,10 @@ page_token() {
   local dest="$1" token
   [[ "$dest" =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]] || die "internal error"
   token="$(printf '%s' "$2" | jq -r '
-      if (.nextPageToken // "") == "" then ""
-      elif (.nextPageToken | type) == "string"
-           and (.nextPageToken | test("\\A[A-Za-z0-9_-]{1,512}\\z")) then .nextPageToken
-      else error("unusable") end' 2>/dev/null)" || return 1
+      .nextPageToken as $t
+      | if $t == null or $t == "" then ""
+        elif ($t | type) == "string" and ($t | test("\\A[A-Za-z0-9_-]{1,512}\\z")) then $t
+        else error("unusable") end' 2>/dev/null)" || return 1
   printf -v "$dest" '%s' "$token"
 }
 
@@ -287,7 +287,8 @@ unread_total() {
   gws_list page users messages list --params "$(
     jq -nc --arg q "$QUERY" --argjson n 500 \
       '{userId:"me",q:$q,maxResults:$n}')"
-  ids="$(printf '%s' "$page" | jq '[.messages[]? | objects | .id | strings | select(test("\\A[0-9a-f]{1,32}\\z"))] | length' 2>/dev/null)"
+  ids="$(printf '%s' "$page" | jq '[foreach (.messages[]? | objects | .id | strings | select(test("\\A[0-9a-f]{1,32}\\z"))) as $i
+      ({}; .[$i] += 1; if .[$i] == 1 then $i else empty end)] | length' 2>/dev/null)"
   case "$ids" in
     ''|*[!0-9]*) printf -v "$dest" '%s' "$listed" ;;
     *) printf -v "$dest" '%s' "$ids" ;;
@@ -474,7 +475,8 @@ cmd_list() {
   gws_list page users messages list --params "$(
     jq -nc --arg q "$QUERY" --argjson n "$max" --arg t "$token" \
       '{userId:"me",q:$q,maxResults:$n} + (if $t == "" then {} else {pageToken:$t} end)')"
-  all_ids="$(printf '%s' "$page" | jq -c '[.messages[]? | objects | .id | strings | select(test("\\A[0-9a-f]{1,32}\\z"))]' 2>/dev/null)"
+  all_ids="$(printf '%s' "$page" | jq -c '[foreach (.messages[]? | objects | .id | strings | select(test("\\A[0-9a-f]{1,32}\\z"))) as $i
+      ({}; .[$i] += 1; if .[$i] == 1 then $i else empty end)]' 2>/dev/null)"
   [ -n "$all_ids" ] || all_ids='[]'
   # Counted whole, for the unread total; no more than were asked for are
   # looked up and shown, however many the reply holds.
@@ -520,7 +522,8 @@ cmd_read_all() {
     gws_list page users messages list --params "$(
       jq -nc --arg q "$QUERY" --argjson n 500 --arg t "$token" \
         '{userId:"me",q:$q,maxResults:$n} + (if $t == "" then {} else {pageToken:$t} end)')"
-    ids="$(printf '%s' "$page" | jq -c '[.messages[]? | objects | .id | strings | select(test("\\A[0-9a-f]{1,32}\\z"))]' 2>/dev/null)"
+    ids="$(printf '%s' "$page" | jq -c '[foreach (.messages[]? | objects | .id | strings | select(test("\\A[0-9a-f]{1,32}\\z"))) as $i
+      ({}; .[$i] += 1; if .[$i] == 1 then $i else empty end)]' 2>/dev/null)"
     [ -n "$ids" ] || ids='[]'
     # Through stdin: the collected ids outgrow what one argument can carry.
     all="$(printf '%s\n%s\n' "$all" "$ids" | jq -cs '(.[0] + .[1]) | unique')" \
