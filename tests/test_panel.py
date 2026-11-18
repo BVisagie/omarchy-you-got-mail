@@ -129,11 +129,12 @@ class PanelContractTests(unittest.TestCase):
         self.assertIn('if (existing !== "id") entry[existing] = root.settings[existing]', persist)
         self.assertIn("root.settings = entry", persist)
         self.assertEqual(self.qml.count("updateEntryInline("), 1)
+        # Omarchy 4.5's shell always has updateEntryInline; no older-shell check.
         self.assertIn(
-            'if (root.bar && root.bar.shell && typeof root.bar.shell.updateEntryInline === "function")\n'
-            "      root.bar.shell.updateEntryInline(root.moduleName, entry)",
+            "if (root.bar && root.bar.shell) root.bar.shell.updateEntryInline(root.moduleName, entry)",
             persist,
         )
+        self.assertNotIn("typeof", persist)
 
     def test_manifest_declares_sound_settings(self) -> None:
         widget = self.manifest["barWidget"]

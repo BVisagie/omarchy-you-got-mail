@@ -480,8 +480,8 @@ test('toggles within 300 ms of the last one are ignored, so a held s flips once'
   assert.equal(writes.length, 2 + 3); // Each one-second hold flips once.
 });
 
-test('without the shell API the sound still turns on for this session', () => {
-  for (const bar of [null, {}, {shell: null}, {shell: {}}, {shell: {updateEntryInline: 'no'}}]) {
+test('without a bar shell the sound still turns on for this session', () => {
+  for (const bar of [null, {}, {shell: null}]) {
     const p = panelHarness();
     p.settings = {id: 'bvisagie.you-got-mail', max: 30};
     p.bar = bar;

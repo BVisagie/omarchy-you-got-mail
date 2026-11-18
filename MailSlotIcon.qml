@@ -72,7 +72,11 @@ Item {
 
   property real flagAmount: hasMail ? 1 : 0
   Behavior on flagAmount {
-    NumberAnimation { duration: 180; easing.type: Easing.InOutQuad }
+    NumberAnimation {
+      duration: Style.duration(180)
+      easing.type: Easing.Bezier
+      easing.bezierCurve: Style.easeOut
+    }
   }
 
   Canvas {

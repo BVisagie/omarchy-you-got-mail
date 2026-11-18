@@ -63,7 +63,7 @@ Column {
         ? Qt.rgba(root.foreground.r, root.foreground.g, root.foreground.b, 0.14)
         : Qt.rgba(root.foreground.r, root.foreground.g, root.foreground.b, 0.07)
 
-      Behavior on color { ColorAnimation { duration: 60 } }
+      Behavior on color { ColorAnimation { duration: Style.duration(60) } }
 
       Text {
         id: commandText

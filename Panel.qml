@@ -290,14 +290,12 @@ Panel {
 
   // Applied locally first so the panel redraws at once, then written to this
   // widget's shell.json entry, which comes back to every copy through the bar.
-  // Without the shell API the change lasts for this session only.
   function persistSettings(values) {
     var entry = { id: root.moduleName }
     for (var existing in root.settings) if (existing !== "id") entry[existing] = root.settings[existing]
     for (var key in values) entry[key] = values[key]
     root.settings = entry
-    if (root.bar && root.bar.shell && typeof root.bar.shell.updateEntryInline === "function")
-      root.bar.shell.updateEntryInline(root.moduleName, entry)
+    if (root.bar && root.bar.shell) root.bar.shell.updateEntryInline(root.moduleName, entry)
   }
 
   // Turning the sound on plays it once so you know what you will hear. No `--`
@@ -1190,7 +1188,7 @@ Panel {
                 ? Qt.rgba(root.foreground.r, root.foreground.g, root.foreground.b, 0.08)
                 : "transparent"
 
-              Behavior on color { ColorAnimation { duration: 80 } }
+              Behavior on color { ColorAnimation { duration: Style.duration(80) } }
 
               MouseArea {
                 id: rowMouse
