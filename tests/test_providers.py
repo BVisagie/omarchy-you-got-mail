@@ -955,6 +955,38 @@ class GmailProviderProcessTests(unittest.TestCase):
         self.assertTrue(payload["ok"], payload)
         self.assertEqual([m["id"] for m in payload["messages"]], ["abc1"])
 
+    def test_odd_entries_and_ids_do_not_hide_the_others(self) -> None:
+        payload, cached = self._list_with_details(
+            '{"id":"abc1","snippet":"hi"}', ids='[false,{"id":"abc2\\\\n"},{"id":"abc1"}]'
+        )
+        self.assertTrue(payload["ok"], payload)
+        self.assertEqual([m["id"] for m in payload["messages"]], ["abc1"])
+        self.assertEqual(payload["unread"], 1)
+
+    def test_an_address_with_a_trailing_newline_is_unknown(self) -> None:
+        payload = self._run(
+            'case " $* " in\n'
+            '  *" users getProfile "*) printf \'{"emailAddress":"you@gmail.com\\\\n"}\\n\' ;;\n'
+            "  *) printf '{\"messages\":[]}\\n' ;;\n"
+            "esac\n",
+            "list",
+            "--limit",
+            "2",
+        )
+        self.assertTrue(payload["ok"], payload)
+        self.assertEqual(payload["email"], "")
+
+    def test_read_all_handles_more_ids_than_one_argument_holds(self) -> None:
+        ids = ",".join(f'{{"id":"{i:08x}"}}' for i in range(5000))
+        payload = self._run(
+            'case " $* " in\n'
+            f"  *\" messages list \"*) printf '%s\\n' '{{\"messages\":[{ids}]}}' ;;\n"
+            "  *) printf '{}\\n' ;;\n"
+            "esac\n",
+            "read-all",
+        )
+        self.assertEqual(payload, {"ok": True, "marked": 5000})
+
     def test_a_list_reply_of_several_objects_is_not_a_page(self) -> None:
         payload = self._run(
             'case " $* " in\n'

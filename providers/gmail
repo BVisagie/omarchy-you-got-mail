@@ -213,7 +213,11 @@ ensure_json_object() {
   printf '{}\n' | write_private "$file" || fail_not_saved
 }
 
-# An address the links can carry: one line, no spaces, at most 254 characters.
+# An address the links can carry: one line, no spaces or control characters,
+# at most 254 characters. Checked in jq on the JSON string itself, before
+# bash could drop a NUL or a trailing newline, and again here.
+EMAIL_FILTER='.emailAddress | strings
+  | select(length >= 1 and length <= 254 and (test("[\\s[:cntrl:]]") | not))'
 usable_email() {
   [[ "$1" =~ ^[^[:space:][:cntrl:]]{1,254}$ ]]
 }
@@ -222,11 +226,11 @@ account_email() {
   local cached email
   # Measured before jq reads it, like the other cache files.
   if readable_file "$PROFILE_FILE" && [ "$(wc -c <"$PROFILE_FILE")" -le 4096 ]; then
-    cached="$(jq -r '.emailAddress // empty | strings' "$PROFILE_FILE" 2>/dev/null)"
+    cached="$(jq -r "$EMAIL_FILTER" "$PROFILE_FILE" 2>/dev/null)"
     usable_email "$cached" && { printf '%s' "$cached"; return 0; }
   fi
   email="$(gws_gmail users getProfile --params '{"userId":"me"}' 2>/dev/null \
-    | jq -r '.emailAddress // empty | strings' 2>/dev/null)"
+    | jq -r "$EMAIL_FILTER" 2>/dev/null)"
   [ "$?" -eq "$NOT_SAVED" ] && return "$NOT_SAVED"
   usable_email "$email" || return 1
   printf '{"emailAddress":%s}\n' "$(printf '%s' "$email" | jq -Rs .)" \
@@ -269,7 +273,7 @@ unread_total() {
   gws_list page users messages list --params "$(
     jq -nc --arg q "$QUERY" --argjson n 500 \
       '{userId:"me",q:$q,maxResults:$n}')"
-  ids="$(printf '%s' "$page" | jq '[.messages[]?.id | strings | select(test("^[0-9a-f]{1,32}$"))] | length' 2>/dev/null)"
+  ids="$(printf '%s' "$page" | jq '[.messages[]? | objects | .id | strings | select(test("\\A[0-9a-f]{1,32}\\z"))] | length' 2>/dev/null)"
   case "$ids" in
     ''|*[!0-9]*) printf -v "$dest" '%s' "$listed" ;;
     *) printf -v "$dest" '%s' "$ids" ;;
@@ -453,7 +457,7 @@ cmd_list() {
   gws_list page users messages list --params "$(
     jq -nc --arg q "$QUERY" --argjson n "$max" --arg t "$token" \
       '{userId:"me",q:$q,maxResults:$n} + (if $t == "" then {} else {pageToken:$t} end)')"
-  all_ids="$(printf '%s' "$page" | jq -c '[.messages[]?.id | strings | select(test("^[0-9a-f]{1,32}$"))]' 2>/dev/null)"
+  all_ids="$(printf '%s' "$page" | jq -c '[.messages[]? | objects | .id | strings | select(test("\\A[0-9a-f]{1,32}\\z"))]' 2>/dev/null)"
   [ -n "$all_ids" ] || all_ids='[]'
   # Counted whole, for the unread total; no more than were asked for are
   # looked up and shown, however many the reply holds.
@@ -500,10 +504,11 @@ cmd_read_all() {
     gws_list page users messages list --params "$(
       jq -nc --arg q "$QUERY" --argjson n 500 --arg t "$token" \
         '{userId:"me",q:$q,maxResults:$n} + (if $t == "" then {} else {pageToken:$t} end)')"
-    ids="$(printf '%s' "$page" | jq -c '[.messages[]?.id | strings | select(test("^[0-9a-f]{1,32}$"))]' 2>/dev/null)"
+    ids="$(printf '%s' "$page" | jq -c '[.messages[]? | objects | .id | strings | select(test("\\A[0-9a-f]{1,32}\\z"))]' 2>/dev/null)"
     [ -n "$ids" ] || ids='[]'
-    all="$(jq -nc --argjson a "$all" --argjson b "$ids" \
-      'reduce $b[] as $id ($a; if index($id) then . else . + [$id] end)')"
+    # Through stdin: the collected ids outgrow what one argument can carry.
+    all="$(printf '%s\n%s\n' "$all" "$ids" | jq -cs '(.[0] + .[1]) | unique')" \
+      || fail_read_all "$marked" "could not collect unread mail"
     next="$(printf '%s' "$page" | jq -r '.nextPageToken // empty' 2>/dev/null)"
     case "$next" in *[!A-Za-z0-9_-]*) next="" ;; esac
     [ -z "$next" ] && break
