@@ -903,7 +903,7 @@ class GmailProviderProcessTests(unittest.TestCase):
         )
         self.assertTrue(payload["ok"], payload)
         cached = json.loads((dirs[0] / "messages.json").read_text())
-        self.assertEqual(len(cached["abc1"]["snippet"]), 1000)
+        self.assertEqual(len(cached["abc1"]["snippet"]), 400)
 
     def _list_with_details(self, details: str, ids: str = '[{"id":"abc1"}]', prepare=None) -> tuple:
         import json
@@ -1037,6 +1037,20 @@ class GmailProviderProcessTests(unittest.TestCase):
         self.assertFalse(payload["ok"])
         self.assertEqual(payload.get("marked", 0), 0)
 
+    def test_a_profile_reply_must_be_one_object(self) -> None:
+        payload = self._run(
+            'case " $* " in\n'
+            "  *\" users getProfile \"*) printf '{\"emailAddress\":\"other@gmail.com\"}\\n{\"error\":{}}\\n' ;;\n"
+            "  *\" messages list \"*) printf '{\"messages\":[]}\\n' ;;\n"
+            "  *) printf '{}\\n' ;;\n"
+            "esac\n",
+            "list",
+            "--limit",
+            "2",
+        )
+        self.assertTrue(payload["ok"], payload)
+        self.assertEqual(payload["email"], "")
+
     def test_nothing_from_a_failed_lookup_is_used(self) -> None:
         payload = self._run(
             'case " $* " in\n'
@@ -1167,7 +1181,7 @@ class GmailProviderProcessTests(unittest.TestCase):
             cache.mkdir(parents=True, mode=0o700)
             os.chmod(cache.parent, 0o700)
             big = cache / "messages.json"
-            big.write_text('{"old":"' + "x" * (9 * 1024 * 1024) + '"}')
+            big.write_text('{"old":"' + "x" * (17 * 1024 * 1024) + '"}')
             big.chmod(0o600)
 
         payload, cached = self._list_with_details('{"id":"abc1","snippet":"hi"}', prepare=prepare)
