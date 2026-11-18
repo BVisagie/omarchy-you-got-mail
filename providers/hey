@@ -20,7 +20,7 @@ import time
 from datetime import datetime
 
 import _bootstrap
-from common import OutputTooLarge, die, emit, one_line, run_capped
+from common import ResponseTooLargeError, die, emit, one_line, run_capped
 
 HEY_WEB = "https://app.hey.com"
 READ_ALL_BUDGET = 100
@@ -70,7 +70,7 @@ def _try_hey(acc: dict, args: list[str], timeout: int = 40) -> tuple[dict | None
         proc = run_capped(cmd, env, timeout)
     except subprocess.TimeoutExpired:
         return None, "hey timed out"
-    except OutputTooLarge:
+    except ResponseTooLargeError:
         return None, "hey sent more output than expected"
     stdout = (proc.stdout or "").strip()
     stderr = (proc.stderr or "").strip()

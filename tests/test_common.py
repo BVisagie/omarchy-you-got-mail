@@ -529,11 +529,11 @@ class RunCappedTests(unittest.TestCase):
         self.assertEqual(proc.returncode, 3)
 
     def test_stops_a_program_that_prints_too_much(self) -> None:
-        with self.assertRaises(common.OutputTooLarge):
+        with self.assertRaises(common.ResponseTooLargeError):
             self._run("import sys\nwhile True: sys.stdout.write('x' * 4096)")
 
     def test_too_much_on_stderr_also_stops_it(self) -> None:
-        with self.assertRaises(common.OutputTooLarge):
+        with self.assertRaises(common.ResponseTooLargeError):
             self._run("import sys\nwhile True: sys.stderr.write('x' * 4096)")
 
     def test_output_at_the_limit_is_fine(self) -> None:

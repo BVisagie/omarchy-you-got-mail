@@ -482,17 +482,13 @@ def provider_path(provider: str) -> Path:
     return path
 
 
-class OutputTooLarge(Exception):
-    """A program printed more than the caller allows."""
-
-
 def run_capped(
     cmd: list[str], env: dict, timeout: float, limit: int = MAX_CLI_OUTPUT
 ) -> subprocess.CompletedProcess:
     """Like subprocess.run(capture_output=True, text=True), with a size cap.
 
     A program that prints more than `limit` bytes on either stream is killed
-    and OutputTooLarge is raised, so a runaway reply cannot fill memory.
+    and ResponseTooLargeError is raised, so a runaway reply cannot fill memory.
     """
     proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=env)
     captured: dict[str, bytes] = {}
@@ -521,12 +517,14 @@ def run_capped(
     except subprocess.TimeoutExpired:
         proc.kill()
         proc.wait()
+        for thread in threads:
+            thread.join(1)
         raise
     finally:
         for stream in (proc.stdout, proc.stderr):
             stream.close()
     if too_large.is_set():
-        raise OutputTooLarge(f"printed more than {limit // (1024 * 1024)} MB")
+        raise ResponseTooLargeError(f"printed more than {limit // (1024 * 1024)} MB")
     return subprocess.CompletedProcess(
         cmd,
         returncode,

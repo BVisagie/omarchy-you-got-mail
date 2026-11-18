@@ -379,8 +379,11 @@ class ProviderDataBoundsTests(unittest.TestCase):
         )
         self.assertEqual(payload["unread"], 0)
         self.assertEqual([m["ts"] for m in payload["messages"]], [0, 0])
-        payload = self._list({"a": {"ok": True, "unread": True, "messages": []}})
-        self.assertEqual(payload["unread"], 0)
+        for odd in (True, "²", "9" * 5000, "1e3", float("nan"), None, [3]):
+            payload = self._list({"a": {"ok": True, "unread": odd, "messages": []}})
+            self.assertEqual(payload["unread"], 0, odd)
+        payload = self._list({"a": {"ok": True, "unread": " 12 ", "messages": []}})
+        self.assertEqual(payload["unread"], 12)
         payload = self._list({"a": {"ok": True, "unread": 10**12, "messages": []}})
         self.assertEqual(payload["unread"], orchestrate.MAX_COUNT)
 

@@ -50,8 +50,11 @@ def _bounded_int(value, ceiling: int) -> int:
         number = value
     elif isinstance(value, float) and math.isfinite(value):
         number = int(value)
-    elif isinstance(value, str) and value.strip().isdigit():
-        number = int(value.strip())
+    elif isinstance(value, str) and value.strip().isascii():
+        try:
+            number = int(value.strip())
+        except ValueError:
+            return 0
     else:
         return 0
     return min(max(number, 0), ceiling)
