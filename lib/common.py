@@ -489,21 +489,28 @@ def provider_path(provider: str) -> Path:
 # still holds open. What the program itself wrote is already in the pipe.
 EXIT_GRACE = 0.5
 
-# Process groups run_capped started and has not finished with. They are in
-# sessions of their own, so a Ctrl+C at the terminal does not reach them;
-# stop_active() does.
+# Process groups run_capped started whose leaders are not yet reaped. They
+# are in sessions of their own, so a Ctrl+C at the terminal does not reach
+# them; stop_active() does. One lock covers starting, registering, stopping
+# and unregistering, so a stop can neither miss a group nor reach one whose
+# id was freed and reused.
 _ACTIVE_GROUPS: set[int] = set()
 _ACTIVE_LOCK = threading.Lock()
+_CANCELLED = threading.Event()
+
+
+class Cancelled(Exception):
+    """stop_active() ran: no new command starts in this process."""
 
 
 def stop_active() -> None:
     with _ACTIVE_LOCK:
-        groups = list(_ACTIVE_GROUPS)
-    for group in groups:
-        try:
-            os.killpg(group, signal.SIGKILL)
-        except OSError:
-            pass
+        _CANCELLED.set()
+        for group in _ACTIVE_GROUPS:
+            try:
+                os.killpg(group, signal.SIGKILL)
+            except OSError:
+                pass
 
 
 def run_capped(
@@ -521,12 +528,20 @@ def run_capped(
     # In its own process group, a stop also reaches anything it started. A
     # command run from inside such a group stays in it (own_group=False), so
     # stopping the outer one stops it as well.
-    proc = subprocess.Popen(
-        cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=env, start_new_session=own_group
-    )
-    if own_group:
-        with _ACTIVE_LOCK:
+    with _ACTIVE_LOCK:
+        if _CANCELLED.is_set():
+            raise Cancelled("stopped")
+        proc = subprocess.Popen(
+            cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=env, start_new_session=own_group
+        )
+        if own_group:
             _ACTIVE_GROUPS.add(proc.pid)
+
+    def reap() -> int:
+        # Unregistered first: once reaped, its id may belong to someone else.
+        with _ACTIVE_LOCK:
+            _ACTIVE_GROUPS.discard(proc.pid)
+        return proc.wait()
 
     # The leader is only reaped (proc.wait) after its group is stopped. Until
     # then its PID, which is the group's id, cannot be reused, so the stop
@@ -572,7 +587,7 @@ def run_capped(
                 buffer += chunk
                 if len(buffer) > limit:
                     stop()
-                    proc.wait()
+                    reap()
                     raise ResponseTooLargeError(
                         f"printed more than {limit // (1024 * 1024)} MB"
                     )
@@ -582,12 +597,12 @@ def run_capped(
             time.sleep(0.02)
         if own_group:
             stop()  # a helper that closed its pipes may still be running
-        returncode = proc.wait()
+        returncode = reap()
     except BaseException:
         # A timeout, or an interrupt arriving here: nothing it started runs on.
         if proc.returncode is None:
             stop()
-            proc.wait()
+            reap()
         raise
     finally:
         with _ACTIVE_LOCK:

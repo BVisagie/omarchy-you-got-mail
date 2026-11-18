@@ -635,6 +635,8 @@ class RunCappedTests(unittest.TestCase):
         import threading
         import time
 
+        self.addCleanup(common._CANCELLED.clear)
+
         result = {}
 
         def run() -> None:
@@ -650,6 +652,22 @@ class RunCappedTests(unittest.TestCase):
         self.assertFalse(thread.is_alive())
         self.assertEqual(result["proc"].returncode, -9)
         self.assertEqual(common._ACTIVE_GROUPS, set())
+        # And nothing starts after it.
+        with self.assertRaises(common.Cancelled):
+            self._run("print('late')")
+
+    def test_a_reaped_group_is_no_longer_registered(self) -> None:
+        seen = []
+        real_wait = subprocess.Popen.wait
+
+        def wait(proc, *args, **kwargs):
+            seen.append(proc.pid in common._ACTIVE_GROUPS)
+            return real_wait(proc, *args, **kwargs)
+
+        with patch.object(subprocess.Popen, "wait", wait):
+            self._run("print('ok')")
+        self.assertTrue(seen)
+        self.assertFalse(any(seen))
 
     def test_timeout_kills_the_program(self) -> None:
         with self.assertRaises(subprocess.TimeoutExpired):

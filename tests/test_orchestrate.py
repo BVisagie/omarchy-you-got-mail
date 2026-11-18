@@ -55,12 +55,20 @@ class ProviderResultTests(unittest.TestCase):
             raise KeyboardInterrupt
             yield  # pragma: no cover
 
+        queued = Future()
         with patch.object(orchestrate, "as_completed", side_effect=interrupted), patch.object(
             orchestrate, "stop_active"
         ) as stop:
             with self.assertRaises(KeyboardInterrupt):
-                list(orchestrate._completed([Future()]))
+                list(orchestrate._completed([queued]))
         stop.assert_called_once()
+        self.assertTrue(queued.cancelled())
+
+    def test_a_provider_started_after_a_stop_is_an_account_error(self) -> None:
+        with patch.object(orchestrate, "run_capped", side_effect=orchestrate.Cancelled("stopped")):
+            result = orchestrate._run_provider(_account("gmail", "gmail", "Gmail"), ["read-all"])
+        self.assertFalse(result["ok"])
+        self.assertIn("stopped", result["error"])
 
     def test_argument_the_os_refuses_is_an_account_error(self) -> None:
         with patch.object(orchestrate, "run_capped", side_effect=ValueError("embedded null byte")):

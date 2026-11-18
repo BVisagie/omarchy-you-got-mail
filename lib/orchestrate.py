@@ -12,6 +12,7 @@ from urllib.parse import urlsplit
 
 from common import (
     FETCH_CAP,
+    Cancelled,
     ResponseTooLargeError,
     account_error,
     classify_account_error,
@@ -136,7 +137,9 @@ def _completed(futures):
     try:
         yield from as_completed(futures)
     except BaseException:
-        stop_active()
+        for future in futures:
+            future.cancel()  # queued accounts never start
+        stop_active()  # and none that slips through can start a provider
         raise
 
 
@@ -156,6 +159,8 @@ def _run_provider(account: dict, args: list[str], timeout: int = LIST_TIMEOUT) -
         return {"ok": False, "error": f"{account['id']}: timed out"}
     except ResponseTooLargeError:
         return {"ok": False, "error": f"{account['id']}: provider sent more output than expected"}
+    except Cancelled:
+        return {"ok": False, "error": f"{account['id']}: stopped"}
     except (OSError, ValueError) as exc:
         return {"ok": False, "error": f"{account['id']}: {exc}"}
     text = (proc.stdout or "").strip()
