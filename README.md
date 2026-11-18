@@ -8,6 +8,8 @@ listed. Gmail, HEY, Outlook, Fastmail and IMAP are built in.
   <img src="preview.png" alt="You've Got Mail — unread mailbox, Accounts, and Shortcuts overview, with sample mail" width="960">
 </p>
 
+<p align="center"><sub>Sample mail, version 2.8.0.</sub></p>
+
 ## Requirements
 
 - [Omarchy](https://omarchy.org/) 4.5 or later. On Omarchy 4.0, use
@@ -43,8 +45,8 @@ sign-in and fix is in [docs/ACCOUNTS.md](docs/ACCOUNTS.md).
 ## Using it
 
 Click the bar icon to open the panel, and a message to open it in the browser
-and take it off the pile. Middle-click refreshes; right-click opens every
-inbox with unread mail. In the panel, `?` lists every key and `m` shows your
+and take it off the pile (an IMAP account opens its webmail, if you gave
+one). Middle-click refreshes; right-click opens every inbox with unread mail. In the panel, `?` lists every key and `m` shows your
 accounts. A `!` on the mailbox means mail needs attention, and the tooltip
 says why.
 
@@ -63,14 +65,17 @@ More in [docs/UPDATING.md](docs/UPDATING.md), including staying on Omarchy
 
 ## Removing it
 
+To remove accounts and sign out of each provider, do it first, while the
+plugin's command is still there: see
+[docs/ACCOUNTS.md § Revoking access](docs/ACCOUNTS.md#revoking-access). Then:
+
 ```bash
 omarchy plugin remove bvisagie.you-got-mail
 ```
 
 That leaves `~/.config/omarchy-you-got-mail/` (accounts and secrets) and
 `~/.cache/omarchy-you-got-mail/` in place; delete them yourself if the machine
-is changing hands. To sign out of each provider as well, see
-[docs/ACCOUNTS.md § Revoking access](docs/ACCOUNTS.md#revoking-access).
+is changing hands.
 
 ## Documentation
 

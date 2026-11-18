@@ -21,7 +21,7 @@
 | Header envelope-open or `A` | mark all unread as read (click or press twice to confirm) |
 | `a` | mark the message under the cursor as read, without opening it |
 | Header external-link or `i` | same as right-click |
-| Click a message | open **that** thread in the browser and take it off the pile |
+| Click a message | open **that** thread in the browser and take it off the pile; an IMAP account opens its webmail inbox if one is set, and otherwise only marks the message read |
 | `↑` `↓` or `j` `k` | move through mail or account actions; scroll help |
 | `Enter`, `Space` or `o` | open the selected message or account action |
 | `n` / `p` | next page, previous page |
@@ -115,8 +115,10 @@ starts or reloads, when you page, and when reading mail brings older unread
 into view. Mail that arrived while the computer slept or was offline gets one
 sound, on the next successful refresh. It plays at most once every
 `soundCooldownSec` seconds; mail that arrives in between gets one sound when
-that time is up. It never plays while Do Not Disturb is on. Because it comes
-with a refresh, it can lag new mail by up to one refresh interval.
+that time is up. It never plays while Do Not Disturb is on. New mail is
+noticed at the next refresh: within one refresh interval with timed checks,
+or when you next open the panel or refresh with them off. The sound then
+plays at once, or when the quiet time ends.
 
 To use your own sound, set `soundFile` to a local audio file, with a full
 path or one starting with `~`, such as `~/Music/ding.oga`. Sounds longer than
@@ -150,7 +152,7 @@ their tools are shown as they arrive.
 
 ## Screenshots
 
-Taken with sample mail.
+Sample mail, version 2.8.0.
 
 <p align="center">
   <img src="screenshots/accounts.png" alt="Accounts with unread totals, check times, individual inbox links, and Add account" width="360">

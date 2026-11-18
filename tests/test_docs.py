@@ -8,7 +8,7 @@ from pathlib import Path
 
 from support import ROOT
 
-LINK = re.compile(r"\]\(([^)\s]+)\)|<img[^>]*\bsrc=\"([^\"]+)\"")
+LINK = re.compile(r"\]\(([^)\s]+)\)|<img[^>]*\bsrc=\"([^\"]+)\"|^\[[^\]]+\]:\s*(\S+)", re.M)
 
 
 def _anchors(path: Path) -> set[str]:
@@ -27,7 +27,7 @@ class DocLinkTests(unittest.TestCase):
         docs = [ROOT / "README.md", ROOT / "CHANGELOG.md", *sorted((ROOT / "docs").glob("*.md"))]
         for doc in docs:
             for match in LINK.finditer(doc.read_text(encoding="utf-8")):
-                target = match.group(1) or match.group(2)
+                target = match.group(1) or match.group(2) or match.group(3)
                 if re.match(r"[a-z]+:", target):
                     continue  # https:, mailto:
                 path, _, anchor = target.partition("#")
