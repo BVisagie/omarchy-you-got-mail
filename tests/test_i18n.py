@@ -67,7 +67,7 @@ class CatalogTests(unittest.TestCase):
         qml = (ROOT / "Panel.qml").read_text(encoding="utf-8")
         self.assertIn('Translations { directory: Qt.resolvedUrl("i18n") }', qml)
         self.assertIn("I18n.formatNumber(count)", qml)
-        self.assertIn("Qt.locale(I18n.formatLocale)", qml)
+        self.assertIn("toLocaleDateString(Qt.locale(I18n.formatLocale), Locale.ShortFormat)", qml)
         self.assertNotIn("Qt.formatDate", qml)
         self.assertIn('iconPrev: I18n.rightToLeft ? "\\uF054" : "\\uF053"', qml)
         self.assertIn('iconNext: I18n.rightToLeft ? "\\uF053" : "\\uF054"', qml)

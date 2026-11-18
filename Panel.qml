@@ -627,7 +627,7 @@ Panel {
     if (seconds < 604800) return trn("age.daysShort", Math.floor(seconds / 86400), "%1d", "%1d")
     if (seconds < 2592000) return trn("age.weeksShort", Math.floor(seconds / 604800), "%1w", "%1w")
     // The language picked under Setup > Language, not the shell's start-up one.
-    return Qt.locale(I18n.formatLocale).toString(new Date(ts * 1000), Locale.ShortFormat)
+    return new Date(ts * 1000).toLocaleDateString(Qt.locale(I18n.formatLocale), Locale.ShortFormat)
   }
 
   function oneLine(value) {
@@ -1202,7 +1202,9 @@ Panel {
                 ? Qt.rgba(root.foreground.r, root.foreground.g, root.foreground.b, 0.08)
                 : "transparent"
 
-              Behavior on color { ColorAnimation { duration: Style.duration(80) } }
+              Behavior on color {
+                ColorAnimation { duration: Style.duration(80); easing.type: Easing.Bezier; easing.bezierCurve: Style.easeOut }
+              }
 
               MouseArea {
                 id: rowMouse
