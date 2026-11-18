@@ -120,6 +120,10 @@ class ProviderResultTests(unittest.TestCase):
         ):
             payload = capture_json(orchestrate.cmd_read, opaque)
         self.assertEqual(payload, {"ok": False, "error": "permission denied"})
+        # An ordinary failure is not an interrupt: later commands still run.
+        import common
+
+        self.assertFalse(common._CANCELLED.is_set())
 
     def test_sigterm_takes_the_interrupt_path(self) -> None:
         import signal

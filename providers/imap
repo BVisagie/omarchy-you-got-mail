@@ -43,10 +43,12 @@ class BoundedIMAP(imaplib.IMAP4_SSL):
     """Stops reading a server that sends far more than this widget asks for."""
 
     received = 0
+    over_budget = False
 
     def _count(self, size: int) -> None:
         self.received += size
         if self.received > MAX_SESSION_BYTES:
+            self.over_budget = True
             raise self.abort("the server sent more data than expected")
 
     def read(self, size: int) -> bytes:
@@ -233,6 +235,10 @@ def cmd_list(acc: dict, password: str, limit: int) -> None:
             client.logout()
         except Exception:
             pass
+    # Over the budget even if only at logout: the check fails, as it would
+    # mid-list. (A read or read-all keeps its result: the marks were made.)
+    if getattr(client, "over_budget", False) is True:
+        die("the server sent more data than expected")
     messages.sort(key=lambda m: m["ts"], reverse=True)
     emit(
         {

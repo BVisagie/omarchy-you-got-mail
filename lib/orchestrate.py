@@ -139,24 +139,27 @@ def _error(payload: dict, fallback: str) -> str:
     return _text(payload.get("error"), MAX_ERROR) or fallback
 
 
-def _each(accounts: list[dict], work):
-    """work(account) for every account, up to 8 at once, as each finishes.
+def _each(accounts: list[dict], work) -> list:
+    """work(account) for every account, up to 8 at once; the results in the
+    order they finished.
 
     Providers run in sessions of their own, out of reach of a terminal's
     Ctrl+C, and the pool would wait for them, still reading or marking mail.
     So an interrupt at any point, while submitting or collecting, cancels the
     accounts still queued and stops the providers running before it waits.
     """
+    # All results are gathered before the caller sees any, so what the caller
+    # does with them, even exiting, cannot look like an interrupt here.
     pool = ThreadPoolExecutor(max_workers=min(8, len(accounts)))
     try:
         futures = [pool.submit(work, acc) for acc in accounts]
-        for future in as_completed(futures):
-            yield future.result()
+        results = [future.result() for future in as_completed(futures)]
     except BaseException:
         stop_active()  # and no account that slips through can start one
         pool.shutdown(wait=True, cancel_futures=True)
         raise
     pool.shutdown(wait=True)
+    return results
 
 
 def _run_provider(account: dict, args: list[str], timeout: int = LIST_TIMEOUT) -> dict:
@@ -391,9 +394,9 @@ def cmd_read(opaque: str) -> None:
         payload = _run_provider(acc, ["read", local_id])
         return {"ok": bool(payload.get("ok")), "error": _error(payload, "could not mark as read")}
 
-    for result in _each([acc], work):
-        if not result["ok"]:
-            die(result["error"])
+    (result,) = _each([acc], work)
+    if not result["ok"]:
+        die(result["error"])
     emit({"ok": True})
 
 

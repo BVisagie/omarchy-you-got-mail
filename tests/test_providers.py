@@ -227,6 +227,29 @@ class ImapReadAllTests(unittest.TestCase):
         self.assertEqual([row[0] for row in stored], ["1,2", "3"])
         self.assertTrue(all(row[1] == "+FLAGS" for row in stored))
 
+    def test_list_fails_when_the_budget_runs_out_at_logout(self) -> None:
+        imap = self.imap
+
+        class FakeClient:
+            over_budget = False
+
+            def list(self):
+                return "OK", [b'(\\HasNoChildren) "/" "INBOX"']
+
+            def select(self, folder, readonly=False):
+                return "OK", []
+
+            def uid(self, cmd, *args):
+                return "OK", [b""]
+
+            def logout(self):
+                self.over_budget = True
+                raise imap.imaplib.IMAP4.abort("the server sent more data than expected")
+
+        with patch.object(self.imap, "_connect", return_value=FakeClient()):
+            payload = capture_json(self.imap.cmd_list, {"host": "h", "user": "u"}, "pw", 5)
+        self.assertEqual(payload, {"ok": False, "error": "the server sent more data than expected"})
+
     def test_read_all_keeps_its_count_when_the_server_stops_it(self) -> None:
         imap = self.imap
 
