@@ -303,8 +303,11 @@ Panel {
     if (!(n > 0)) n = 25
     return Math.max(1, Math.min(50, n))
   }
+  // 0 turns timed checks off: mail is still checked at start, on open, and
+  // on refresh. Anything else that is not a number means the default.
   readonly property int refreshMs: {
     var n = parseInt(setting("refreshIntervalSec", 60), 10)
+    if (n === 0) return 0
     if (!(n > 0)) n = 60
     return Math.max(15, Math.min(3600, n)) * 1000
   }
@@ -677,7 +680,10 @@ Panel {
     }
   }
 
-  Component.onCompleted: now = Date.now() / 1000
+  Component.onCompleted: {
+    now = Date.now() / 1000
+    if (refreshMs === 0) refresh()
+  }
 
   Process {
     id: listProc
@@ -716,8 +722,8 @@ Panel {
   }
 
   Timer {
-    interval: root.refreshMs
-    running: true
+    interval: Math.max(15000, root.refreshMs)
+    running: root.refreshMs > 0
     repeat: true
     triggeredOnStart: true
     onTriggered: {

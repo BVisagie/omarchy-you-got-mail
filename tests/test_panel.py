@@ -40,6 +40,18 @@ class PanelContractTests(unittest.TestCase):
         self.assertIn("Math.max(0, Math.min(100, n))", volume)
         self.assertIn('String(setting("soundFile", "") || "").trim()', self._property("soundFile"))
 
+    def test_refresh_interval_zero_turns_timed_checks_off(self) -> None:
+        refresh = self._property("refreshMs")
+        self.assertIn("if (n === 0) return 0", refresh)
+        self.assertLess(refresh.index("n === 0"), refresh.index("!(n > 0)"))
+        self.assertIn("Math.max(15, Math.min(3600, n)) * 1000", refresh)
+        timer = self.qml.split("interval: Math.max(15000, root.refreshMs)")[1].split("}")[0]
+        self.assertIn("running: root.refreshMs > 0", timer)
+        self.assertIn("triggeredOnStart: true", timer)
+        self.assertIn("if (refreshMs === 0) refresh()", self.qml)
+        field = [f for f in self.manifest["barWidget"]["schema"] if f["key"] == "refreshIntervalSec"][0]
+        self.assertEqual(field["min"], 0)
+
     def _function(self, name: str) -> str:
         # The same shape tests/panel_harness.cjs extracts.
         found = re.search(rf"^  function {name}\([^\n]*\) \{{.*?^  \}}", self.qml, re.M | re.S)
