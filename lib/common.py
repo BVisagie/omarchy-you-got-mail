@@ -528,14 +528,15 @@ def run_capped(
         thread.start()
     deadline = time.monotonic() + timeout
     try:
+        returncode = proc.wait(max(0.0, deadline - time.monotonic()))
+        if own_group:
+            # Anything it started that is still running is left over, and
+            # may hold the pipes open.
+            stop()
         for thread in threads:
             thread.join(max(0.0, deadline - time.monotonic()))
         if any(thread.is_alive() for thread in threads):
             raise subprocess.TimeoutExpired(cmd, timeout)
-        returncode = proc.wait(max(0.0, deadline - time.monotonic()))
-        if too_large.is_set():
-            for thread in threads:
-                thread.join(1)
     except subprocess.TimeoutExpired:
         stop()
         proc.wait()

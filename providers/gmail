@@ -126,13 +126,14 @@ private_dir "$CACHE_DIR" || die "cache directory is not usable"
 # id inside $(...), so a lookup in a subshell can still mark it.
 TOO_LARGE="$CACHE_DIR/gws.too-large.$$"
 REPLY_FILE="$CACHE_DIR/gws.reply.$$"
+WORK_DIR="$CACHE_DIR/gws.work.$$"
 # A run stopped at its timeout cannot clean up after itself; the next run
 # removes what runs that have ended left behind.
-for left in "$CACHE_DIR"/gws.too-large.* "$CACHE_DIR"/gws.reply.*; do
+for left in "$CACHE_DIR"/gws.too-large.* "$CACHE_DIR"/gws.reply.* "$CACHE_DIR"/gws.work.*; do
   [ -e "$left" ] || continue
-  kill -0 "${left##*.}" 2>/dev/null || rm -f -- "$left"
+  kill -0 "${left##*.}" 2>/dev/null || rm -rf -- "$left"
 done
-trap 'rm -f -- "$TOO_LARGE" "$REPLY_FILE"' EXIT
+trap 'rm -rf -- "$TOO_LARGE" "$REPLY_FILE" "$WORK_DIR"' EXIT
 
 # gws output, capped. The size is counted on the bytes as written, before a
 # command substitution can strip trailing newlines. A reply over the cap
@@ -262,7 +263,9 @@ fill_cache() {
     ' <<<"$1" 2>/dev/null)"
   [ -n "$missing" ] || return 0
 
-  tmp="$(mktemp -d "${TMPDIR:-/tmp}/omarchy-you-got-mail.XXXXXX")" || return 0
+  tmp="$WORK_DIR"
+  rm -rf -- "$tmp"
+  mkdir -m 700 -- "$tmp" || return 0
 
   # Single-quoted so this shell does not expand $1/$id; xargs passes them in.
   # shellcheck disable=SC2016

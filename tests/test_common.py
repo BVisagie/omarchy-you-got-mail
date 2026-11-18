@@ -570,6 +570,20 @@ class RunCappedTests(unittest.TestCase):
             self._run(inner, timeout=1)
         self.assertLess(time.monotonic() - started, 5)
 
+    def test_leftover_children_are_stopped_when_it_exits(self) -> None:
+        import time
+
+        # The program exits at once but leaves a child holding its pipes.
+        started = time.monotonic()
+        proc = self._run(
+            "import subprocess, sys\n"
+            "subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(30)'])\n"
+            "print('done')",
+            timeout=10,
+        )
+        self.assertEqual(proc.stdout.strip(), "done")
+        self.assertLess(time.monotonic() - started, 5)
+
     def test_timeout_kills_the_program(self) -> None:
         with self.assertRaises(subprocess.TimeoutExpired):
             self._run("import time; time.sleep(30)", timeout=0.5)

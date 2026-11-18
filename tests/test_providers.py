@@ -706,6 +706,8 @@ class GmailProviderProcessTests(unittest.TestCase):
             # PID 2**22 + 1 is above Linux's pid_max, so it is never running.
             for name in ("gws.reply.4194305", "gws.too-large.4194305", f"gws.reply.{os.getpid()}"):
                 (cache / name).write_text("x")
+            (cache / "gws.work.4194305").mkdir()
+            (cache / "gws.work.4194305" / "m.raw").write_text("x")
             dirs.append(cache)
 
         payload = self._run(
