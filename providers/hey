@@ -20,7 +20,7 @@ import time
 from datetime import datetime
 
 import _bootstrap
-from common import die, emit, one_line
+from common import OutputTooLarge, die, emit, one_line, run_capped
 
 HEY_WEB = "https://app.hey.com"
 READ_ALL_BUDGET = 100
@@ -67,16 +67,11 @@ def _try_hey(acc: dict, args: list[str], timeout: int = 40) -> tuple[dict | None
         return None, "HEY isn't installed for this bar. See the setup guide."
     cmd = ["hey", *args, "--json"]
     try:
-        proc = subprocess.run(
-            cmd,
-            capture_output=True,
-            text=True,
-            env=env,
-            timeout=timeout,
-            check=False,
-        )
+        proc = run_capped(cmd, env, timeout)
     except subprocess.TimeoutExpired:
         return None, "hey timed out"
+    except OutputTooLarge:
+        return None, "hey sent more output than expected"
     stdout = (proc.stdout or "").strip()
     stderr = (proc.stderr or "").strip()
     payload = _parse_json(stdout) or _parse_json(stderr)

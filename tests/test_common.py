@@ -518,5 +518,32 @@ class ConfigFileTests(unittest.TestCase):
         self.assertEqual(common.max_messages(), 25)
 
 
+class RunCappedTests(unittest.TestCase):
+    def _run(self, script: str, timeout: float = 10, limit: int = 1024):
+        return common.run_capped([sys.executable, "-c", script], dict(os.environ), timeout, limit)
+
+    def test_returns_output_and_exit_code(self) -> None:
+        proc = self._run("import sys; print('out'); print('err', file=sys.stderr); sys.exit(3)")
+        self.assertEqual(proc.stdout.strip(), "out")
+        self.assertEqual(proc.stderr.strip(), "err")
+        self.assertEqual(proc.returncode, 3)
+
+    def test_stops_a_program_that_prints_too_much(self) -> None:
+        with self.assertRaises(common.OutputTooLarge):
+            self._run("import sys\nwhile True: sys.stdout.write('x' * 4096)")
+
+    def test_too_much_on_stderr_also_stops_it(self) -> None:
+        with self.assertRaises(common.OutputTooLarge):
+            self._run("import sys\nwhile True: sys.stderr.write('x' * 4096)")
+
+    def test_output_at_the_limit_is_fine(self) -> None:
+        proc = self._run("import sys; sys.stdout.write('x' * 1024)")
+        self.assertEqual(len(proc.stdout), 1024)
+
+    def test_timeout_kills_the_program(self) -> None:
+        with self.assertRaises(subprocess.TimeoutExpired):
+            self._run("import time; time.sleep(30)", timeout=0.5)
+
+
 if __name__ == "__main__":
     unittest.main()

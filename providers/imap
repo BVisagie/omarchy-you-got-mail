@@ -33,6 +33,33 @@ READ_ALL_BUDGET = 100
 # here as OSError instead of a generic provider kill.
 SOCKET_TIMEOUT = 30
 UID_CHUNK = 80
+# imaplib already caps each line; these cap what one literal and one session
+# may bring in. Header fields for a full page are a few hundred kilobytes.
+MAX_LITERAL = 256 * 1024
+MAX_SESSION_BYTES = 32 * 1024 * 1024
+
+
+class BoundedIMAP(imaplib.IMAP4_SSL):
+    """Stops reading a server that sends far more than this widget asks for."""
+
+    received = 0
+
+    def _count(self, size: int) -> None:
+        self.received += size
+        if self.received > MAX_SESSION_BYTES:
+            raise self.abort("the server sent more data than expected")
+
+    def read(self, size: int) -> bytes:
+        if size > MAX_LITERAL:
+            raise self.abort("the server sent a message part too large to read")
+        data = super().read(size)
+        self._count(len(data))
+        return data
+
+    def readline(self) -> bytes:
+        line = super().readline()
+        self._count(len(line))
+        return line
 
 
 def _decode_header(value: str | None) -> str:
@@ -136,14 +163,14 @@ def _folders(client: imaplib.IMAP4, acc: dict | None = None) -> list[str]:
     return names or ["INBOX"]
 
 
-def _connect(acc: dict, password: str) -> imaplib.IMAP4_SSL:
+def _connect(acc: dict, password: str) -> BoundedIMAP:
     host = str(acc.get("host") or "")
     port = int(acc.get("port") or 993)
     user = str(acc.get("user") or "")
     if not host or not user or not password:
         die("IMAP host, username and password are required")
     ctx = ssl.create_default_context()
-    client = imaplib.IMAP4_SSL(host, port, ssl_context=ctx, timeout=SOCKET_TIMEOUT)
+    client = BoundedIMAP(host, port, ssl_context=ctx, timeout=SOCKET_TIMEOUT)
     client.login(user, password)
     return client
 

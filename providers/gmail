@@ -15,6 +15,9 @@ umask 077
 
 export GOOGLE_WORKSPACE_CLI_KEYRING_BACKEND="${GOOGLE_WORKSPACE_CLI_KEYRING_BACKEND:-file}"
 
+# Most gws output this provider reads; a larger reply is refused, not parsed.
+export GWS_MAX_BYTES=$((8 * 1024 * 1024))
+
 for candidate in "$HOME/.local/share/mise/shims" "$HOME/.local/bin" "$HOME/.bun/bin"; do
   case ":$PATH:" in
     *":$candidate:"*) ;;
@@ -120,7 +123,7 @@ command -v gws >/dev/null 2>&1 || die "Gmail isn't installed for this bar. See t
 private_dir "$CACHE_DIR" || die "cache directory is not usable"
 
 gws_gmail() {
-  gws gmail "$@"
+  gws gmail "$@" | head -c "$GWS_MAX_BYTES"
 }
 
 # Write JSON into the caller's variable. Do not invoke this (or unread_total)
@@ -130,7 +133,10 @@ gws_list() {
   local dest="$1" errfile="$CACHE_DIR/gws.err" out msg
   shift
   [[ "$dest" =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]] || die "internal error"
-  out="$(gws gmail "$@" 2>"$errfile")" || true
+  out="$(gws gmail "$@" 2>"$errfile" | head -c "$((GWS_MAX_BYTES + 1))")" || true
+  if [ "$(printf '%s' "$out" | wc -c)" -gt "$GWS_MAX_BYTES" ]; then
+    gmail_error "gws sent more output than expected"
+  fi
   if printf '%s' "$out" | jq -e 'type == "object" and .error' >/dev/null 2>&1; then
     gmail_error "$(printf '%s' "$out" | jq -r '.error.message // "could not read unread mail"')"
   fi
@@ -238,6 +244,7 @@ fill_cache() {
       params=$(jq -nc --arg id "$id" \
         "{userId:\"me\",id:\$id,format:\"metadata\",metadataHeaders:[\"Subject\",\"From\"]}")
       gws gmail users messages get --params "$params" 2>/dev/null \
+        | head -c "$GWS_MAX_BYTES" \
         | jq -c "{(.id): {
               subject: ((.payload.headers // [] | map(select(.name == \"Subject\")) | .[0].value) // \"\"),
               from: ((.payload.headers // [] | map(select(.name == \"From\")) | .[0].value) // \"\"),

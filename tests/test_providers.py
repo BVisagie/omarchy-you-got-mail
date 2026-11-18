@@ -336,7 +336,7 @@ class ImapFolderTests(unittest.TestCase):
 
     def test_connect_passes_socket_timeout(self) -> None:
         fake = MagicMock()
-        with patch.object(self.imap.imaplib, "IMAP4_SSL", return_value=fake) as ctor:
+        with patch.object(self.imap, "BoundedIMAP", return_value=fake) as ctor:
             client = self.imap._connect(
                 {"host": "imap.example.test", "port": 993, "user": "u"}, "pw"
             )
@@ -345,6 +345,31 @@ class ImapFolderTests(unittest.TestCase):
         kwargs = ctor.call_args.kwargs
         self.assertEqual(kwargs.get("timeout"), 30)
         fake.login.assert_called_once_with("u", "pw")
+
+    def _bounded(self):
+        return self.imap.BoundedIMAP.__new__(self.imap.BoundedIMAP)
+
+    def test_oversized_literal_is_refused_before_reading(self) -> None:
+        client = self._bounded()
+        with patch.object(self.imap.imaplib.IMAP4_SSL, "read") as read:
+            with self.assertRaises(self.imap.imaplib.IMAP4.abort):
+                client.read(self.imap.MAX_LITERAL + 1)
+        read.assert_not_called()
+
+    def test_session_stops_after_its_byte_budget(self) -> None:
+        client = self._bounded()
+        line = b"* " + b"x" * 1_000_000 + b"\r\n"
+        with patch.object(self.imap.imaplib.IMAP4_SSL, "readline", return_value=line):
+            with self.assertRaises(self.imap.imaplib.IMAP4.abort):
+                for _ in range(self.imap.MAX_SESSION_BYTES // len(line) + 2):
+                    client.readline()
+        self.assertGreater(client.received, self.imap.MAX_SESSION_BYTES)
+
+    def test_ordinary_reads_pass_through(self) -> None:
+        client = self._bounded()
+        with patch.object(self.imap.imaplib.IMAP4_SSL, "read", return_value=b"abc"):
+            self.assertEqual(client.read(3), b"abc")
+        self.assertEqual(client.received, 3)
 
 
 class ImapListTimestampTests(unittest.TestCase):
@@ -620,6 +645,19 @@ class GmailProviderProcessTests(unittest.TestCase):
         self.assertEqual(payload["messages"], [])
         self.assertEqual(payload["email"], "you@gmail.com")
 
+
+    def test_oversized_gws_reply_is_refused(self) -> None:
+        payload = self._run(
+            'case " $* " in\n'
+            '  *" users getProfile "*) printf \'{"emailAddress":"you@gmail.com"}\\n\' ;;\n'
+            "  *) printf '{\"messages\":[\"'; head -c 9000000 /dev/zero | tr '\\0' a; printf '\"]}\\n' ;;\n"
+            "esac\n",
+            "list",
+            "--limit",
+            "5",
+        )
+        self.assertFalse(payload["ok"])
+        self.assertIn("more output than expected", payload["error"])
 
 class OutlookUnreadTests(unittest.TestCase):
     @classmethod

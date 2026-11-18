@@ -9,8 +9,11 @@ import re
 import shlex
 import shutil
 import stat
+import subprocess
 import sys
 import tempfile
+import threading
+import time
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -25,6 +28,7 @@ FETCH_CAP = 200
 MAX_HTTP_BODY = 2 * 1024 * 1024
 MAX_HTTP_ERROR = 64 * 1024
 MAX_LOCAL_FILE = 64 * 1024
+MAX_CLI_OUTPUT = 8 * 1024 * 1024
 
 
 class ResponseTooLargeError(ValueError):
@@ -476,3 +480,56 @@ def provider_path(provider: str) -> Path:
     if not path.is_file():
         die(f"provider '{provider}' is not installed")
     return path
+
+
+class OutputTooLarge(Exception):
+    """A program printed more than the caller allows."""
+
+
+def run_capped(
+    cmd: list[str], env: dict, timeout: float, limit: int = MAX_CLI_OUTPUT
+) -> subprocess.CompletedProcess:
+    """Like subprocess.run(capture_output=True, text=True), with a size cap.
+
+    A program that prints more than `limit` bytes on either stream is killed
+    and OutputTooLarge is raised, so a runaway reply cannot fill memory.
+    """
+    proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=env)
+    captured: dict[str, bytes] = {}
+    too_large = threading.Event()
+
+    def drain(name: str, stream) -> None:
+        data = stream.read(limit + 1)
+        if len(data) > limit:
+            too_large.set()
+            proc.kill()
+        captured[name] = data[:limit]
+
+    threads = [
+        threading.Thread(target=drain, args=(name, stream), daemon=True)
+        for name, stream in (("stdout", proc.stdout), ("stderr", proc.stderr))
+    ]
+    for thread in threads:
+        thread.start()
+    deadline = time.monotonic() + timeout
+    try:
+        for thread in threads:
+            thread.join(max(0.0, deadline - time.monotonic()))
+        if any(thread.is_alive() for thread in threads):
+            raise subprocess.TimeoutExpired(cmd, timeout)
+        returncode = proc.wait(max(0.0, deadline - time.monotonic()))
+    except subprocess.TimeoutExpired:
+        proc.kill()
+        proc.wait()
+        raise
+    finally:
+        for stream in (proc.stdout, proc.stderr):
+            stream.close()
+    if too_large.is_set():
+        raise OutputTooLarge(f"printed more than {limit // (1024 * 1024)} MB")
+    return subprocess.CompletedProcess(
+        cmd,
+        returncode,
+        captured.get("stdout", b"").decode("utf-8", "replace"),
+        captured.get("stderr", b"").decode("utf-8", "replace"),
+    )
