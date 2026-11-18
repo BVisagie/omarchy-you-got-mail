@@ -584,6 +584,26 @@ class RunCappedTests(unittest.TestCase):
         self.assertEqual(proc.stdout.strip(), "done")
         self.assertLess(time.monotonic() - started, 5)
 
+    def test_nested_command_returns_although_its_child_holds_the_pipes(self) -> None:
+        import time
+
+        started = time.monotonic()
+        proc = common.run_capped(
+            [
+                sys.executable,
+                "-c",
+                "import subprocess, sys\n"
+                "subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(5)'])\n"
+                "print('done')",
+            ],
+            dict(os.environ),
+            10,
+            own_group=False,
+        )
+        self.assertEqual(proc.stdout.strip(), "done")
+        self.assertEqual(proc.returncode, 0)
+        self.assertLess(time.monotonic() - started, 3)
+
     def test_timeout_kills_the_program(self) -> None:
         with self.assertRaises(subprocess.TimeoutExpired):
             self._run("import time; time.sleep(30)", timeout=0.5)

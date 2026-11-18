@@ -7,13 +7,13 @@ import json
 import os
 import re
 import shlex
+import selectors
 import shutil
 import signal
 import stat
 import subprocess
 import sys
 import tempfile
-import threading
 import time
 from pathlib import Path
 
@@ -483,6 +483,11 @@ def provider_path(provider: str) -> Path:
     return path
 
 
+# After the program exits, how long to wait for output a process it started
+# still holds open. What the program itself wrote is already in the pipe.
+EXIT_GRACE = 0.5
+
+
 def run_capped(
     cmd: list[str],
     env: dict,
@@ -495,65 +500,64 @@ def run_capped(
     A program that prints more than `limit` bytes on either stream is killed
     and ResponseTooLargeError is raised, so a runaway reply cannot fill memory.
     """
-    # In its own process group, a stop also reaches anything it started that
-    # still holds the pipes open. A command run from inside such a group stays
-    # in it (own_group=False), so stopping the outer one stops it as well.
+    # In its own process group, a stop also reaches anything it started. A
+    # command run from inside such a group stays in it (own_group=False), so
+    # stopping the outer one stops it as well.
     proc = subprocess.Popen(
         cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=env, start_new_session=own_group
     )
-    captured: dict[str, bytes] = {}
-    too_large = threading.Event()
 
     def stop() -> None:
-        if not own_group:
-            proc.kill()
-            return
-        try:
-            os.killpg(proc.pid, signal.SIGKILL)
-        except (ProcessLookupError, PermissionError):
-            proc.kill()
-
-    def drain(name: str, stream) -> None:
-        data = stream.read(limit + 1)
-        if len(data) > limit:
-            too_large.set()
-            stop()
-        captured[name] = data[:limit]
-
-    threads = [
-        threading.Thread(target=drain, args=(name, stream), daemon=True)
-        for name, stream in (("stdout", proc.stdout), ("stderr", proc.stderr))
-    ]
-    for thread in threads:
-        thread.start()
-    deadline = time.monotonic() + timeout
-    try:
-        returncode = proc.wait(max(0.0, deadline - time.monotonic()))
         if own_group:
-            # Anything it started that is still running is left over, and
-            # may hold the pipes open.
-            stop()
-        for thread in threads:
-            thread.join(max(0.0, deadline - time.monotonic()))
-        if any(thread.is_alive() for thread in threads):
-            raise subprocess.TimeoutExpired(cmd, timeout)
+            try:
+                os.killpg(proc.pid, signal.SIGKILL)
+                return
+            except (ProcessLookupError, PermissionError):
+                pass
+        proc.kill()
+
+    output = {proc.stdout: bytearray(), proc.stderr: bytearray()}
+    selector = selectors.DefaultSelector()
+    for stream in output:
+        selector.register(stream, selectors.EVENT_READ)
+    deadline = time.monotonic() + timeout
+    exited_at = None
+    try:
+        while selector.get_map():
+            now = time.monotonic()
+            if now > deadline:
+                raise subprocess.TimeoutExpired(cmd, timeout)
+            if exited_at is None and proc.poll() is not None:
+                exited_at = now
+                if own_group:
+                    stop()  # anything it left running
+            elif exited_at is not None and now - exited_at > EXIT_GRACE:
+                break
+            for key, _ in selector.select(0.1):
+                chunk = os.read(key.fd, 65536)
+                if not chunk:
+                    selector.unregister(key.fileobj)
+                    continue
+                buffer = output[key.fileobj]
+                buffer += chunk
+                if len(buffer) > limit:
+                    stop()
+                    proc.wait()
+                    raise ResponseTooLargeError(
+                        f"printed more than {limit // (1024 * 1024)} MB"
+                    )
+        returncode = proc.wait(max(0.0, deadline - time.monotonic()))
     except subprocess.TimeoutExpired:
         stop()
         proc.wait()
-        for thread in threads:
-            thread.join(1)
         raise
     finally:
-        # A reader still blocked (a process that escaped the stop holds the
-        # pipe) owns its stream's lock; closing it would wait as long.
-        for thread, stream in zip(threads, (proc.stdout, proc.stderr)):
-            if not thread.is_alive():
-                stream.close()
-    if too_large.is_set():
-        raise ResponseTooLargeError(f"printed more than {limit // (1024 * 1024)} MB")
+        selector.close()
+        proc.stdout.close()
+        proc.stderr.close()
     return subprocess.CompletedProcess(
         cmd,
         returncode,
-        captured.get("stdout", b"").decode("utf-8", "replace"),
-        captured.get("stderr", b"").decode("utf-8", "replace"),
+        bytes(output[proc.stdout]).decode("utf-8", "replace"),
+        bytes(output[proc.stderr]).decode("utf-8", "replace"),
     )

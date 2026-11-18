@@ -91,7 +91,13 @@ BAD_URL = "invalid:"
 def _url(value) -> str:
     if value is None or value == "":
         return ""
-    url = _clean(value) if isinstance(value, str) else ""
+    if not isinstance(value, str):
+        return BAD_URL
+    try:
+        value.encode("utf-8")  # a lone surrogate would be rewritten, not kept
+    except UnicodeEncodeError:
+        return BAD_URL
+    url = value
     # A control character cannot travel whole to the browser, so a link
     # carrying one, even at its end, is not opened.
     if len(url) > MAX_URL or not url.startswith("https://") or any(

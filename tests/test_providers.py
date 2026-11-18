@@ -704,10 +704,9 @@ class GmailProviderProcessTests(unittest.TestCase):
             cache.mkdir(parents=True, mode=0o700)
             os.chmod(cache.parent, 0o700)
             # PID 2**22 + 1 is above Linux's pid_max, so it is never running.
-            for name in ("gws.reply.4194305", "gws.too-large.4194305", f"gws.reply.{os.getpid()}"):
+            for name in ("gws.4194305.reply", "gws.4194305.too-large",
+                         "gws.4194305.part.abc1.raw", f"gws.{os.getpid()}.part.abc2.json"):
                 (cache / name).write_text("x")
-            (cache / "gws.work.4194305").mkdir()
-            (cache / "gws.work.4194305" / "m.raw").write_text("x")
             dirs.append(cache)
 
         payload = self._run(
@@ -722,7 +721,8 @@ class GmailProviderProcessTests(unittest.TestCase):
         )
         self.assertTrue(payload["ok"], payload)
         left = sorted(p.name for p in dirs[0].glob("gws.*.*"))
-        self.assertEqual(left, [f"gws.reply.{os.getpid()}"])  # a live run's file stays
+        # A live run's files stay; only ended runs' are removed.
+        self.assertEqual(left, [f"gws.{os.getpid()}.part.abc2.json"])
 
     def test_oversized_profile_fails_the_check(self) -> None:
         payload = self._run(
