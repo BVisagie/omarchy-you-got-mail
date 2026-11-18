@@ -946,6 +946,40 @@ class GmailProviderProcessTests(unittest.TestCase):
         payload, cached = self._list_with_details('{"id":"x"}', ids=ids)
         self.assertTrue(payload["ok"], payload)
         self.assertEqual(len(payload["messages"]), 2)
+        self.assertEqual(payload["unread"], 40)  # the total still counts them all
+
+    def test_a_non_string_id_does_not_hide_the_others(self) -> None:
+        payload, cached = self._list_with_details(
+            '{"id":"abc1","snippet":"hi"}', ids='[{"id":7},{"id":"abc1"},{}]'
+        )
+        self.assertTrue(payload["ok"], payload)
+        self.assertEqual([m["id"] for m in payload["messages"]], ["abc1"])
+
+    def test_a_list_reply_of_several_objects_is_not_a_page(self) -> None:
+        payload = self._run(
+            'case " $* " in\n'
+            '  *" messages list "*) printf \'{"messages":[]}\\n{"messages":[{"id":"abc1"}]}\\n\' ;;\n'
+            "  *) printf '{}\\n' ;;\n"
+            "esac\n",
+            "list",
+            "--limit",
+            "2",
+        )
+        self.assertFalse(payload["ok"])
+
+    def test_an_oversized_profile_cache_is_fetched_again(self) -> None:
+        def prepare(cache) -> None:
+            import os
+
+            cache.mkdir(parents=True, mode=0o700)
+            os.chmod(cache.parent, 0o700)
+            profile = cache / "profile.json"
+            profile.write_text('{"emailAddress":"' + "x" * 200_000 + '"}')
+            profile.chmod(0o600)
+
+        payload, cached = self._list_with_details('{"id":"abc1"}', prepare=prepare)
+        self.assertTrue(payload["ok"], payload)
+        self.assertEqual(payload["email"], "you@gmail.com")
 
     def test_an_oversized_old_cache_starts_over(self) -> None:
         def prepare(cache) -> None:

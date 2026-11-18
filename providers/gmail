@@ -191,10 +191,11 @@ gws_list() {
   out="$(gws_gmail "$@" 2>"$errfile")"
   [ "$?" -eq "$NOT_SAVED" ] && fail_not_saved
   fail_if_too_large
-  if printf '%s' "$out" | jq -e 'type == "object" and .error' >/dev/null 2>&1; then
-    gmail_error "$(printf '%s' "$out" | jq -r '.error.message // "could not read unread mail"')"
-  fi
-  if printf '%s' "$out" | jq -e 'type == "object"' >/dev/null 2>&1; then
+  # Exactly one JSON object; a reply holding several is not a page.
+  if printf '%s' "$out" | jq -e -s 'length == 1 and (.[0] | type) == "object"' >/dev/null 2>&1; then
+    if printf '%s' "$out" | jq -e '.error' >/dev/null 2>&1; then
+      gmail_error "$(printf '%s' "$out" | jq -r '.error.message // "could not read unread mail" | tostring | .[0:500]')"
+    fi
     printf -v "$dest" '%s' "$out"
     return 0
   fi
@@ -212,16 +213,22 @@ ensure_json_object() {
   printf '{}\n' | write_private "$file" || fail_not_saved
 }
 
+# An address the links can carry: one line, no spaces, at most 254 characters.
+usable_email() {
+  [[ "$1" =~ ^[^[:space:][:cntrl:]]{1,254}$ ]]
+}
+
 account_email() {
   local cached email
-  if readable_file "$PROFILE_FILE"; then
-    cached="$(jq -r '.emailAddress // empty' "$PROFILE_FILE" 2>/dev/null)"
-    [ -n "$cached" ] && { printf '%s' "$cached"; return 0; }
+  # Measured before jq reads it, like the other cache files.
+  if readable_file "$PROFILE_FILE" && [ "$(wc -c <"$PROFILE_FILE")" -le 4096 ]; then
+    cached="$(jq -r '.emailAddress // empty | strings' "$PROFILE_FILE" 2>/dev/null)"
+    usable_email "$cached" && { printf '%s' "$cached"; return 0; }
   fi
   email="$(gws_gmail users getProfile --params '{"userId":"me"}' 2>/dev/null \
-    | jq -r '.emailAddress // empty' 2>/dev/null)"
+    | jq -r '.emailAddress // empty | strings' 2>/dev/null)"
   [ "$?" -eq "$NOT_SAVED" ] && return "$NOT_SAVED"
-  [ -n "$email" ] || return 1
+  usable_email "$email" || return 1
   printf '{"emailAddress":%s}\n' "$(printf '%s' "$email" | jq -Rs .)" \
     | write_private "$PROFILE_FILE" || return "$NOT_SAVED"
   printf '%s' "$email"
@@ -262,7 +269,7 @@ unread_total() {
   gws_list page users messages list --params "$(
     jq -nc --arg q "$QUERY" --argjson n 500 \
       '{userId:"me",q:$q,maxResults:$n}')"
-  ids="$(printf '%s' "$page" | jq '[.messages[]?.id | select(test("^[0-9a-f]{1,32}$"))] | length' 2>/dev/null)"
+  ids="$(printf '%s' "$page" | jq '[.messages[]?.id | strings | select(test("^[0-9a-f]{1,32}$"))] | length' 2>/dev/null)"
   case "$ids" in
     ''|*[!0-9]*) printf -v "$dest" '%s' "$listed" ;;
     *) printf -v "$dest" '%s' "$ids" ;;
@@ -431,7 +438,7 @@ render() {
 }
 
 cmd_list() {
-  local token="" max page ids next unread email listed
+  local token="" max page all_ids ids next unread email listed
 
   while [ $# -gt 0 ]; do
     case "$1" in
@@ -446,14 +453,15 @@ cmd_list() {
   gws_list page users messages list --params "$(
     jq -nc --arg q "$QUERY" --argjson n "$max" --arg t "$token" \
       '{userId:"me",q:$q,maxResults:$n} + (if $t == "" then {} else {pageToken:$t} end)')"
-  # No more than were asked for, however many the reply holds.
-  ids="$(printf '%s' "$page" | jq -c --argjson n "$max" \
-    '[.messages[]?.id | select(test("^[0-9a-f]{1,32}$"))][0:$n]' 2>/dev/null)"
-  [ -n "$ids" ] || ids='[]'
+  all_ids="$(printf '%s' "$page" | jq -c '[.messages[]?.id | strings | select(test("^[0-9a-f]{1,32}$"))]' 2>/dev/null)"
+  [ -n "$all_ids" ] || all_ids='[]'
+  # Counted whole, for the unread total; no more than were asked for are
+  # looked up and shown, however many the reply holds.
+  listed="$(printf '%s' "$all_ids" | jq 'length')"
+  ids="$(printf '%s' "$all_ids" | jq -c --argjson n "$max" '.[0:$n]')"
   next="$(printf '%s' "$page" | jq -r '.nextPageToken // empty' 2>/dev/null)"
   case "$next" in *[!A-Za-z0-9_-]*) next="" ;; esac
 
-  listed="$(printf '%s' "$ids" | jq 'length')"
   unread_total unread "$listed" "$next" "$token"
   email="$(account_email)"
   case "$?" in
@@ -492,7 +500,7 @@ cmd_read_all() {
     gws_list page users messages list --params "$(
       jq -nc --arg q "$QUERY" --argjson n 500 --arg t "$token" \
         '{userId:"me",q:$q,maxResults:$n} + (if $t == "" then {} else {pageToken:$t} end)')"
-    ids="$(printf '%s' "$page" | jq -c '[.messages[]?.id | select(test("^[0-9a-f]{1,32}$"))]' 2>/dev/null)"
+    ids="$(printf '%s' "$page" | jq -c '[.messages[]?.id | strings | select(test("^[0-9a-f]{1,32}$"))]' 2>/dev/null)"
     [ -n "$ids" ] || ids='[]'
     all="$(jq -nc --argjson a "$all" --argjson b "$ids" \
       'reduce $b[] as $id ($a; if index($id) then . else . + [$id] end)')"
