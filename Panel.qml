@@ -212,7 +212,8 @@ Panel {
   readonly property bool badgeShown: badgeCount > 0 || showAlertBadge
   readonly property bool barVertical: bar ? bar.vertical : false
   // A vertical bar has room for three digits; the tooltip keeps the count.
-  readonly property string badgeText: showAlertBadge ? "!" : (barVertical && badgeCount > 999 ? "1k+" : String(badgeCount))
+  // In the language's own digits, like the tooltip.
+  readonly property string badgeText: showAlertBadge ? "!" : (barVertical && badgeCount > 999 ? tr("badge.overThousand", "1k+") : I18n.formatNumber(badgeCount))
   readonly property int badgeWidth: badgeShown
     ? Math.max(Style.space(12), badgeText.length * Style.space(6) + Style.space(8))
     : 0
@@ -626,7 +627,7 @@ Panel {
     if (seconds < 604800) return trn("age.daysShort", Math.floor(seconds / 86400), "%1d", "%1d")
     if (seconds < 2592000) return trn("age.weeksShort", Math.floor(seconds / 604800), "%1w", "%1w")
     // The language picked under Setup > Language, not the shell's start-up one.
-    return Qt.locale(I18n.formatLocale).toString(new Date(ts * 1000), "d MMM")
+    return Qt.locale(I18n.formatLocale).toString(new Date(ts * 1000), Locale.ShortFormat)
   }
 
   function oneLine(value) {

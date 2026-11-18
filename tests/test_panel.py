@@ -73,7 +73,8 @@ class PanelContractTests(unittest.TestCase):
         self.assertIn("text: root.badgeText", badge)
         self.assertNotIn("pressScale", badge)  # Omarchy 4.0's WidgetButton has none.
         text = self._property("badgeText")
-        self.assertIn('barVertical && badgeCount > 999 ? "1k+"', text)
+        self.assertIn('barVertical && badgeCount > 999 ? tr("badge.overThousand", "1k+")', text)
+        self.assertIn("I18n.formatNumber(badgeCount)", text)
         self.assertIn("onPressed: function(b) { root.barPressed(b) }", button)
 
     def _function(self, name: str) -> str:

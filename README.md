@@ -95,6 +95,7 @@ newest commit. On Omarchy 4.0, pin the checkout to the last release that
 supports it instead of updating:
 
 ```bash
+git -C ~/.config/omarchy/plugins/bvisagie.you-got-mail fetch origin tag v2.10.0
 git -C ~/.config/omarchy/plugins/bvisagie.you-got-mail checkout v2.10.0
 omarchy restart shell
 ```
@@ -155,10 +156,11 @@ To open or close the panel from the keyboard, add a binding to
 `~/.config/hypr/bindings.lua`:
 
 ```lua
-o.bind("SUPER + SHIFT + M", "Mail", { panel = "bvisagie.you-got-mail" })
+o.bind("SUPER + CTRL + M", "Mail", { panel = "bvisagie.you-got-mail" })
 ```
 
-Pick a key that is free (`omarchy menu keybindings --print` lists them).
+`SUPER + CTRL + M` is free on a stock Omarchy 4.5; `omarchy menu keybindings
+--print` lists what is taken on yours.
 
 The panel follows the language picked under **Setup > Language**. Its text
 lives in `i18n/en.json`; it ships in English only for now, and a translation

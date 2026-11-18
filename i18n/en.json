@@ -42,6 +42,7 @@
     "other": "%1 minutes ago"
   },
   "ago.now": "just now",
+  "badge.overThousand": "1k+",
   "check.lastFull": "Last full check: %1",
   "check.lastFullNever": "No successful check of all accounts yet",
   "check.never": "Not checked successfully yet",
