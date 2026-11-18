@@ -166,6 +166,18 @@ def _folders(client: imaplib.IMAP4, acc: dict | None = None) -> list[str]:
     return names or ["INBOX"]
 
 
+def _close(client) -> None:
+    """Log out of a healthy session; just drop one that went over budget,
+    since a logout would read from it again or wait for its timeout."""
+    try:
+        if getattr(client, "over_budget", False) is True:
+            client.shutdown()
+        else:
+            client.logout()
+    except Exception:
+        pass
+
+
 def _connect(acc: dict, password: str) -> BoundedIMAP:
     host = str(acc.get("host") or "")
     port = int(acc.get("port") or 993)
@@ -232,10 +244,7 @@ def cmd_list(acc: dict, password: str, limit: int) -> None:
                     }
                 )
     finally:
-        try:
-            client.logout()
-        except Exception:
-            pass
+        _close(client)
     # Over the budget even if only at logout: the check fails, as it would
     # mid-list. (A read or read-all keeps its result: the marks were made.)
     if getattr(client, "over_budget", False) is True:
@@ -274,10 +283,7 @@ def cmd_read(acc: dict, password: str, local_id: str) -> None:
         if typ != "OK":
             die("could not mark as read")
     finally:
-        try:
-            client.logout()
-        except Exception:
-            pass
+        _close(client)
     emit({"ok": True})
 
 
@@ -336,10 +342,7 @@ def cmd_read_all(acc: dict, password: str) -> None:
         emit({"ok": False, "marked": marked, "error": str(exc) or "could not mark as read"})
         return
     finally:
-        try:
-            client.logout()
-        except Exception:
-            pass
+        _close(client)
     emit({"ok": True, "marked": marked})
 
 

@@ -89,8 +89,9 @@ def _text(value, limit: int) -> str:
 
 
 # The panel opens only links of this shape (MailState.validUrl); anything else
-# is unusable here too, so the CLI and the panel agree.
-PANEL_URL = re.compile(r"https://[A-Za-z0-9.-]+(?::\d+)?(?:[/?#][^\s]*)?")
+# is unusable here too, so the CLI and the panel agree. JavaScript's \s also
+# covers U+FEFF, which Python's does not, and its \d is ASCII only.
+PANEL_URL = re.compile(r"https://[A-Za-z0-9.-]+(?::[0-9]+)?(?:[/?#][^\s\ufeff]*)?")
 
 # A link that is present but unusable stays unusable: an empty link would let
 # a click mark the message read without opening anything.
