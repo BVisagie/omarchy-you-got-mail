@@ -1013,6 +1013,26 @@ class GmailProviderProcessTests(unittest.TestCase):
         self.assertEqual(payload["marked"], 0)
         self.assertEqual(batches, [])
 
+    def test_read_all_stops_at_a_newline_only_page_token(self) -> None:
+        payload, batches = self._read_all('{"messages":[{"id":"abc1"}],"nextPageToken":"\\n"}')
+        self.assertFalse(payload["ok"])
+        self.assertEqual(batches, [])
+
+    def test_list_refuses_an_overlong_page_token(self) -> None:
+        token = "a" * 140_000
+        payload = self._run(
+            'case " $* " in\n'
+            '  *" users getProfile "*) printf \'{"emailAddress":"you@gmail.com"}\\n\' ;;\n'
+            f"  *\" messages list \"*) printf '%s\\n' '{{\"messages\":[],\"nextPageToken\":\"{token}\"}}' ;;\n"
+            "  *) printf '{}\\n' ;;\n"
+            "esac\n",
+            "list",
+            "--limit",
+            "2",
+        )
+        self.assertFalse(payload["ok"])
+        self.assertIn("unusable page token", payload["error"])
+
     def test_a_thread_link_uses_a_whole_thread_id_or_the_message_id(self) -> None:
         # Gmail ids are hex; a thread id that is not one, or too long, is
         # never cut into another link: the message id is used instead.

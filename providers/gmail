@@ -204,6 +204,20 @@ gws_list() {
   gmail_error "${msg:-could not read unread mail}"
 }
 
+# The page's nextPageToken into the named variable: "" when there is none,
+# failure when one is there but unusable. Checked in jq on the JSON value
+# itself, before bash could strip a newline-only token to nothing.
+page_token() {
+  local dest="$1" token
+  [[ "$dest" =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]] || die "internal error"
+  token="$(printf '%s' "$2" | jq -r '
+      if (.nextPageToken // "") == "" then ""
+      elif (.nextPageToken | type) == "string"
+           and (.nextPageToken | test("\\A[A-Za-z0-9_-]{1,512}\\z")) then .nextPageToken
+      else error("unusable") end' 2>/dev/null)" || return 1
+  printf -v "$dest" '%s' "$token"
+}
+
 ensure_json_object() {
   local file="$1"
   # Measured before jq reads it: a cache grown by an older version without
@@ -294,7 +308,7 @@ fill_labels_from_cache() {
   fetched="$(gws_gmail users labels list --params '{"userId":"me"}' 2>/dev/null \
     | jq -c '[.labels[]? | select(.type == "user")
               | {key: (.id | tostring | .[0:64]), value: ((.name // "") | tostring | split("/") | last | strings | .[0:60])}]
-              | .[0:500] | from_entries' 2>/dev/null)"
+              | .[0:10000] | from_entries' 2>/dev/null)"
   [ "$?" -eq "$NOT_SAVED" ] && return "$NOT_SAVED"
   [ -n "$fetched" ] || return 0
   printf '%s\n' "$fetched" | write_private "$LABEL_FILE" || return "$NOT_SAVED"
@@ -466,8 +480,7 @@ cmd_list() {
   # looked up and shown, however many the reply holds.
   listed="$(printf '%s' "$all_ids" | jq 'length')"
   ids="$(printf '%s' "$all_ids" | jq -c --argjson n "$max" '.[0:$n]')"
-  next="$(printf '%s' "$page" | jq -r '.nextPageToken // empty' 2>/dev/null)"
-  case "$next" in *[!A-Za-z0-9_-]*) next="" ;; esac
+  page_token next "$page" || gmail_error "Gmail sent an unusable page token"
 
   unread_total unread "$listed" "$next" "$token"
   email="$(account_email)"
@@ -512,13 +525,9 @@ cmd_read_all() {
     # Through stdin: the collected ids outgrow what one argument can carry.
     all="$(printf '%s\n%s\n' "$all" "$ids" | jq -cs '(.[0] + .[1]) | unique')" \
       || fail_read_all "$marked" "could not collect unread mail"
-    next="$(printf '%s' "$page" | jq -r '.nextPageToken // empty | tostring' 2>/dev/null)"
     # A token that is there but unusable is not the last page: stop before
     # marking only part of the mail.
-    case "$next" in
-      *[!A-Za-z0-9_-]*) fail_read_all 0 "Gmail sent an unusable page token" ;;
-    esac
-    [ "${#next}" -le 512 ] || fail_read_all 0 "Gmail sent an unusable page token"
+    page_token next "$page" || fail_read_all 0 "Gmail sent an unusable page token"
     [ -z "$next" ] && break
     case "$seen" in
       *"|$next|"*) die "gmail repeated a page token" ;;
