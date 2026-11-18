@@ -125,23 +125,29 @@ private_dir "$CACHE_DIR" || die "cache directory is not usable"
 # Marked when any gws reply in this run is over the cap. $$ stays this run's
 # id inside $(...), so a lookup in a subshell can still mark it.
 TOO_LARGE="$CACHE_DIR/gws.too-large.$$"
-trap 'rm -f -- "$TOO_LARGE"' EXIT
+REPLY_FILE="$CACHE_DIR/gws.reply.$$"
+# A run stopped at its timeout cannot clean up after itself; the next run
+# removes what runs that have ended left behind.
+for left in "$CACHE_DIR"/gws.too-large.* "$CACHE_DIR"/gws.reply.*; do
+  [ -e "$left" ] || continue
+  kill -0 "${left##*.}" 2>/dev/null || rm -f -- "$left"
+done
+trap 'rm -f -- "$TOO_LARGE" "$REPLY_FILE"' EXIT
 
 # gws output, capped. The size is counted on the bytes as written, before a
 # command substitution can strip trailing newlines. A reply over the cap
 # prints nothing, fails, and marks TOO_LARGE for fail_if_too_large.
 gws_gmail() {
-  local reply rc
-  reply="$(mktemp "$CACHE_DIR/gws.XXXXXX")" || return 1
-  gws gmail "$@" | head -c "$((GWS_MAX_BYTES + 1))" >"$reply"
+  local rc
+  gws gmail "$@" | head -c "$((GWS_MAX_BYTES + 1))" >"$REPLY_FILE"
   rc=${PIPESTATUS[0]}
-  if [ "$(wc -c <"$reply")" -gt "$GWS_MAX_BYTES" ]; then
+  if [ "$(wc -c <"$REPLY_FILE")" -gt "$GWS_MAX_BYTES" ]; then
     : >"$TOO_LARGE"
-    rm -f -- "$reply"
+    rm -f -- "$REPLY_FILE"
     return 1
   fi
-  cat -- "$reply"
-  rm -f -- "$reply"
+  cat -- "$REPLY_FILE"
+  rm -f -- "$REPLY_FILE"
   return "$rc"
 }
 
@@ -268,6 +274,7 @@ fill_cache() {
       gws gmail users messages get --params "$params" 2>/dev/null \
         | head -c "$((GWS_MAX_BYTES + 1))" > "$out/$id.raw"
       if [ "$(wc -c < "$out/$id.raw")" -gt "$GWS_MAX_BYTES" ]; then
+        rm -f "$out/$id.raw"
         : > "$out/too-large"
         exit 0
       fi
@@ -279,6 +286,7 @@ fill_cache() {
               threadId: (.threadId // .id),
               lab: [(.labelIds // [])[] | select(startswith(\"Label_\"))]
             }}" < "$out/$id.raw" > "$out/$id.json" 2>/dev/null
+      rm -f "$out/$id.raw"
     '
 
   while IFS= read -r id; do

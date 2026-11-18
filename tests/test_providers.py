@@ -593,7 +593,7 @@ class GmailProviderProcessTests(unittest.TestCase):
         '"reason":"authError"}}'
     )
 
-    def _run(self, gws_body: str, *args: str) -> dict:
+    def _run(self, gws_body: str, *args: str, prepare=None) -> dict:
         import json
         import os
         import shutil
@@ -619,6 +619,8 @@ class GmailProviderProcessTests(unittest.TestCase):
         env["HOME"] = str(ROOT.parent)
         env.pop("YOU_GOT_MAIL_ROOT", None)
         env["GOOGLE_WORKSPACE_CLI_KEYRING_BACKEND"] = "file"
+        if prepare:
+            prepare(tmp / "cache" / "omarchy-you-got-mail" / "gmail-test")
         proc = subprocess.run(
             ["bash", str(ROOT / "providers" / "gmail"), *args],
             capture_output=True,
@@ -692,6 +694,33 @@ class GmailProviderProcessTests(unittest.TestCase):
         )
         self.assertFalse(payload["ok"])
         self.assertIn("more output than expected", payload["error"])
+
+    def test_files_left_by_a_stopped_run_are_removed(self) -> None:
+        import os
+
+        dirs = []
+
+        def prepare(cache) -> None:
+            cache.mkdir(parents=True, mode=0o700)
+            os.chmod(cache.parent, 0o700)
+            # PID 2**22 + 1 is above Linux's pid_max, so it is never running.
+            for name in ("gws.reply.4194305", "gws.too-large.4194305", f"gws.reply.{os.getpid()}"):
+                (cache / name).write_text("x")
+            dirs.append(cache)
+
+        payload = self._run(
+            'case " $* " in\n'
+            '  *" users getProfile "*) printf \'{"emailAddress":"you@gmail.com"}\\n\' ;;\n'
+            '  *) printf \'{"messages":[]}\\n\' ;;\n'
+            "esac\n",
+            "list",
+            "--limit",
+            "5",
+            prepare=prepare,
+        )
+        self.assertTrue(payload["ok"], payload)
+        left = sorted(p.name for p in dirs[0].glob("gws.*.*"))
+        self.assertEqual(left, [f"gws.reply.{os.getpid()}"])  # a live run's file stays
 
     def test_oversized_profile_fails_the_check(self) -> None:
         payload = self._run(

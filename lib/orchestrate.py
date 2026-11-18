@@ -91,8 +91,9 @@ BAD_URL = "invalid:"
 def _url(value) -> str:
     if value is None or value == "":
         return ""
-    url = _clean(value).strip() if isinstance(value, str) else ""
-    # A control character cannot travel whole to the browser.
+    url = _clean(value) if isinstance(value, str) else ""
+    # A control character cannot travel whole to the browser, so a link
+    # carrying one, even at its end, is not opened.
     if len(url) > MAX_URL or not url.startswith("https://") or any(
         ord(ch) < 0x20 or ord(ch) == 0x7F for ch in url
     ):
