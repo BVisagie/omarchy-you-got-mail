@@ -17,6 +17,17 @@
     "displayName": "You've Got Mail",
     "description": "A mailbox whose flag raises for unread mail from Gmail, Outlook, Fastmail, IMAP, and HEY. Click a row to open it.",
     "category": "Apps",
+    "aliases": [
+      "mail",
+      "email",
+      "inbox",
+      "unread",
+      "gmail",
+      "outlook",
+      "hey",
+      "fastmail",
+      "imap"
+    ],
     "allowMultiple": false,
     "defaultSection": "right",
     "defaults": {
