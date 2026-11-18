@@ -73,7 +73,8 @@ class PanelContractTests(unittest.TestCase):
         self.assertIn("text: root.badgeText", badge)
         self.assertNotIn("pressScale", badge)  # Omarchy 4.0's WidgetButton has none.
         text = self._property("badgeText")
-        self.assertIn('barVertical && badgeCount > 999 ? "1k+"', text)
+        self.assertIn('barVertical && badgeCount > 999 ? tr("badge.overThousand", "%1k+", [I18n.formatNumber(1)])', text)
+        self.assertIn("I18n.formatNumber(badgeCount)", text)
         self.assertIn("onPressed: function(b) { root.barPressed(b) }", button)
 
     def _function(self, name: str) -> str:
@@ -95,8 +96,8 @@ class PanelContractTests(unittest.TestCase):
         self.assertNotIn("visible:", button)  # Shown in the mail, Accounts and Help views.
         self.assertIn("iconText: root.soundEnabled ? root.iconSoundOn : root.iconSoundOff", button)
         self.assertRegex(button, r'tooltipText: root\.soundEnabled\s+'
-                                 r'\? "Turn off the new-mail sound \(s\)"\s+'
-                                 r': "Turn on the new-mail sound \(s\)"')
+                                 r'\? root\.tr\("tip\.soundOff", "Turn off the new-mail sound \(s\)"\)\s+'
+                                 r': root\.tr\("tip\.soundOn", "Turn on the new-mail sound \(s\)"\)')
         self.assertIn("foreground: root.soundEnabled ? root.accent : root.foreground", button)
         self.assertIn("hoverColor: root.accent", button)
 
@@ -129,11 +130,12 @@ class PanelContractTests(unittest.TestCase):
         self.assertIn('if (existing !== "id") entry[existing] = root.settings[existing]', persist)
         self.assertIn("root.settings = entry", persist)
         self.assertEqual(self.qml.count("updateEntryInline("), 1)
+        # Omarchy 4.5's shell always has updateEntryInline; no older-shell check.
         self.assertIn(
-            'if (root.bar && root.bar.shell && typeof root.bar.shell.updateEntryInline === "function")\n'
-            "      root.bar.shell.updateEntryInline(root.moduleName, entry)",
+            "if (root.bar && root.bar.shell) root.bar.shell.updateEntryInline(root.moduleName, entry)",
             persist,
         )
+        self.assertNotIn("typeof", persist)
 
     def test_manifest_declares_sound_settings(self) -> None:
         widget = self.manifest["barWidget"]
@@ -217,7 +219,7 @@ class PanelContractTests(unittest.TestCase):
             "showAlertBadge: hasAlert && (unread === 0 || !reachable)", self.qml
         )
         self.assertIn(
-            'if (root.needsSignIn && (root.unread === 0 || !root.reachable)) return "Sign-in needed"',
+            'if (root.needsSignIn && (root.unread === 0 || !root.reachable)) return tr("title.signIn", "Sign-in needed")',
             self.qml,
         )
 
@@ -232,18 +234,24 @@ class PanelContractTests(unittest.TestCase):
         self.assertIn("Style.space(64)", self.qml)
         self.assertIn("Math.max(Style.space(40)", self.qml)
 
+    def _docs(self) -> str:
+        paths = [ROOT / "README.md", *sorted((ROOT / "docs").glob("*.md"))]
+        return "\n".join(path.read_text(encoding="utf-8") for path in paths)
+
     def test_readme_uses_https_install(self) -> None:
         readme = (ROOT / "README.md").read_text(encoding="utf-8")
         self.assertIn("https://github.com/BVisagie/omarchy-you-got-mail.git", readme)
         self.assertIn("omarchy plugin update bvisagie.you-got-mail", readme)
-        self.assertIn("omarchy plugin update bvisagie.you-got-mail --yes", readme)
-        self.assertIn("`q`", readme)
-        self.assertIn("~/.bun/bin", readme)
-        self.assertIn("YOU_GOT_MAIL_IMAP_PASSWORD", readme)
-        self.assertIn("gws auth setup", readme)
-        self.assertIn("accounts login", readme)
-        self.assertIn("GOOGLE_WORKSPACE_CLI_KEYRING_BACKEND=file", readme)
-        self.assertIn("No sudo or pkexec is required", readme)
+        self.assertIn("No sudo is needed", readme)
+        # The details live in docs/; the README links to them.
+        docs = self._docs()
+        self.assertIn("Add `--yes` to skip the diff", docs)
+        self.assertIn("`q`", docs)
+        self.assertIn("~/.bun/bin", docs)
+        self.assertIn("YOU_GOT_MAIL_IMAP_PASSWORD", docs)
+        self.assertIn("gws auth setup", docs)
+        self.assertIn("accounts login", docs)
+        self.assertIn("GOOGLE_WORKSPACE_CLI_KEYRING_BACKEND=file", docs)
         self.assertNotIn("must be public", readme)
         self.assertTrue((ROOT / "preview.png").is_file(), "marketplace listing wants root preview.png")
         self.assertIn("preview.png", readme)
@@ -297,9 +305,9 @@ class PanelContractTests(unittest.TestCase):
         self.assertNotIn("messages = []", self.qml)
         self.assertRegex(self.qml, r't === "a"\)\s+root\.markCursorRead\(\)')
         self.assertRegex(self.qml, r't === "A"\)\s+root\.requestMarkAll\(\)')
-        readme = (ROOT / "README.md").read_text(encoding="utf-8")
-        self.assertIn("Header envelope-open or `A`", readme)
-        self.assertIn("mark the message under the cursor as read, without opening it", readme)
+        usage = (ROOT / "docs" / "USAGE.md").read_text(encoding="utf-8")
+        self.assertIn("Header envelope-open or `A`", usage)
+        self.assertIn("mark the message under the cursor as read, without opening it", usage)
 
     def test_refresh_requests_are_coalesced(self) -> None:
         self.assertIn("property bool refreshPending", self.qml)

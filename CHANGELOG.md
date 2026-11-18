@@ -2,6 +2,29 @@
 
 Versions match `manifest.json`. Git tags are created at release time.
 
+## 3.0.0
+
+For Omarchy 4.5. On Omarchy 4.0, stay on 2.10.0 (see docs/UPDATING.md).
+
+- The panel follows the language picked under Setup > Language. Its text is
+  read from `i18n/en.json` through Omarchy's translations, with plural forms,
+  numbers in the language's own digits and separators, and dates in its own
+  format. It ships in English; a translation is one more file in `i18n/`.
+  Mail and provider messages are shown as they arrive.
+- Check times read in words ("Checked 12 minutes ago") so they translate
+  well.
+- Back and forward chevrons swap in right-to-left languages.
+- Animations follow Omarchy's animation setting, so they stop when
+  animations are turned off, and ease out like the rest of the shell.
+- The manifest lists search aliases (mail, email, inbox, unread, and the
+  providers).
+- The README is short, and the details moved to docs/USAGE.md (controls,
+  keybinding, settings, sound, languages) and docs/UPDATING.md (updating,
+  staying on Omarchy 4.0), beside docs/ACCOUNTS.md. A keybinding example for
+  the panel is new.
+- Accounts, credentials and existing settings are unchanged. Run
+  `omarchy restart shell` after updating.
+
 ## 2.10.0
 
 Hardening for mail data, and the last release for Omarchy 4.0. Version 3.0.0

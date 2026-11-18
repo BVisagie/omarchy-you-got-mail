@@ -62,7 +62,7 @@ Outlook reuses the Azure client id already in `secrets/<id>.json`.
 |---|---|
 | `~/.config/omarchy-you-got-mail/accounts.json` | Account list. No secrets. |
 | `~/.config/omarchy-you-got-mail/secrets/<id>.json` | Tokens and passwords, mode `600`. |
-| `~/.config/omarchy/shell.json` | Widget settings: `max` (page size) and `refreshIntervalSec`. |
+| `~/.config/omarchy/shell.json` | Widget settings; see [USAGE.md § Settings](USAGE.md#settings). |
 | `~/.config/omarchy-you-got-mail/config` | Optional leftover CLI `max = 25`. The panel does not read this. |
 | `~/.cache/omarchy-you-got-mail/` | Gmail message cache and Outlook folder/profile cache. Safe to delete. |
 
@@ -259,7 +259,7 @@ Not personal Outlook.com (see [Outlook](#outlook)).
 
 ```text
 host, port (993), username, password or app password
-webmail URL (optional) — opened when you click a message
+webmail URL (optional, https:// only) — opened when you click a message
 ```
 
 Unread is every selectable folder except special-use mailboxes (RFC 6154
@@ -269,8 +269,10 @@ spam, drafts, and sent. User folders and Gmail labels with no special-use
 flag still count. Category labels (Promotions and the like) are not
 special-use; pin an explicit `folders` list if they inflate the badge.
 
-There is no standard “open this IMAP message in the browser” URL; if you
-leave webmail empty, click still marks the message read.
+There is no standard “open this IMAP message in the browser” URL, so a click
+opens the webmail inbox. If you leave webmail empty, a click only marks the
+message read; an address that is not `https://` is refused, and the click
+leaves the message unread.
 
 Optional `"folders": ["INBOX", "INBOX/Work"]` on the account object is an
 allow-list: those names are used as-is, with no LIST and no skip filters.
@@ -347,20 +349,11 @@ you did not just receive from Microsoft.
 
 ## More than one account
 
-The badge is the sum of unread. The panel is newest-first across every
-account. When more than one account is configured, the account label is
-shown as a chip on each row.
-
-Click a row to open **that** message and mark it read. The header
-external-link (and a right-click on the bar icon) opens **each inbox
-that currently has unread**, one browser tab per account. Accounts at
-zero unread, and IMAP accounts with no webmail URL, are skipped.
-
-To open just one inbox, use **Accounts (`m`) → Open inbox**. This also
-works at zero unread and does not mark messages read. The Accounts view
-shows each mailbox's unread count and last successful check. Failed
-accounts say **Unavailable** and retain their previous check time; accounts
-without a valid HTTPS webmail URL have no Open inbox action.
+Every account goes on one pile: the badge is the sum of unread, rows are
+newest-first, and each row carries its account's label. To open just one
+inbox, even at zero unread, use **Accounts (`m`) → Open inbox**. What a click
+on a row, a right-click and each key do is in
+[USAGE.md § Controls](USAGE.md#controls).
 
 ## Troubleshooting
 
@@ -372,13 +365,12 @@ without a valid HTTPS webmail URL have no Open inbox action.
 | `{Provider} isn't installed for this bar` / `hey-cli not found` / `gws: command not found` | Binary not on the bar’s PATH | Install into `~/.local/bin`, mise shims, or `~/.bun/bin`; middle-click the icon to retry. |
 | `No OAuth client configured` | Current `gws` needs a Desktop OAuth client | `gws auth setup` (needs gcloud) or save a Desktop client JSON as `~/.config/gws/client_secret.json`, then `GOOGLE_WORKSPACE_CLI_KEYRING_BACKEND=file gws auth login -s gmail`. |
 | Google **Access blocked / access_denied** | Unverified OAuth client, or missing test user | Add yourself as a test user, or use `-s gmail` only. |
-| Badge in the hundreds, Gmail web shows 2 | The other Gmail bar plugin, raw `UNREAD`, or an old build using Gmail's `resultSizeEstimate` (often 201) | Disable `jankeesvw.gmail-inbox` if it is still on the bar. This plugin counts Inbox + your labels, not Trash. Update if the badge is stuck on 201. |
-| Added Outlook and Gmail disappeared | `accounts.json` created without Gmail | Current builds keep Gmail. If an older build already dropped it: `$PLUGIN accounts add gmail`. |
+| Badge in the hundreds, Gmail web shows 2 | Another Gmail bar plugin counting Gmail's raw `UNREAD` | Disable `jankeesvw.gmail-inbox` if it is still on the bar. This plugin counts Inbox and your own labels, not Trash or archived Promotions without a label of yours. |
+| Gmail is missing after adding another account | `accounts.json` was written without it | `$PLUGIN accounts add gmail`. |
 | HEY lists nothing | Looking at Feed / Paper Trail | Only Imbox unseen is unread. Confirm `hey box imbox --json`. |
-| Outlook signed in but rows wrap into a wall of text | Old plugin build | Update: Graph `bodyPreview` has line breaks; current builds flatten them. |
 | Warning naming a mailbox at the top of the panel | That account failed; others still listed | Fix that provider (auth, PATH, token); middle-click to retry |
 | `{Provider} needs you to sign in again` / `invalid_grant` / `Token has been expired or revoked` | Refresh token revoked. Gmail Testing OAuth clients last 7 days. | Click the panel's sign-in command or ▶ to open a terminal, or run `$PLUGIN accounts login <id>`. Publish a Gmail Desktop client to Production so this stops weekly. |
-| Panel says caught up, Gmail web still has unread | Expired `gws` token that older builds treated as zero messages. Folders/labels are already in the pile (`in:inbox OR has:userlabels`). | Update to 2.6.2+. The bar shows `!` and **Sign-in needed**, not an empty pile. Then `$PLUGIN accounts login gmail`. |
+| Panel says caught up, Gmail web still has unread | The mail is in a place this pile leaves out: Trash, Spam, or archived Promotions/Updates without a label of yours | Inbox and your own labels are counted (`in:inbox OR has:userlabels`). An expired sign-in shows `!` and **Sign-in needed**, not an empty pile. |
 | `Couldn't reach {Provider}` | TLS, DNS, or the host refused the connection | Check the network; for IMAP confirm host/port. Middle-click to retry. |
 | `accounts add` or `accounts login` refuses to run | Needs a real terminal | Run `$PLUGIN accounts login …` in a terminal, not piped. |
 | A message returns after marking it read, with an action error | The provider did not confirm the read; the row and count were restored | Fix the reported problem, then retry. Dismiss the notice with × or `x`; a clean mark-all success also clears it. |

@@ -81,10 +81,26 @@ test('account checks distinguish partial success, total outage and recovery', ()
 test('check labels use a controlled clock and cope with unset and future checks', () => {
   assert.equal(state.checkLabel(0, 1000), 'Not checked successfully yet');
   assert.equal(state.checkLabel(1000, 1000), 'Checked just now');
-  assert.equal(state.checkLabel(1000, 1720), 'Checked 12m ago');
-  assert.equal(state.checkLabel(1000, 8200), 'Checked 2h ago');
-  assert.equal(state.checkLabel(1000, 173800), 'Checked 2d ago');
+  assert.equal(state.checkLabel(1000, 1720), 'Checked 12 minutes ago');
+  assert.equal(state.checkLabel(1000, 1060), 'Checked 1 minute ago');
+  assert.equal(state.checkLabel(1000, 8200), 'Checked 2 hours ago');
+  assert.equal(state.checkLabel(1000, 173800), 'Checked 2 days ago');
   assert.equal(state.checkLabel(2000, 1000), 'Checked just now');
+});
+
+test('text goes through the translator it is given', () => {
+  const seen = [];
+  const T = {
+    t: (key, english, args) => { seen.push(key); return '<' + key + '>' + (args || []).join(',') },
+    n: (key, count) => { seen.push(key); return '<' + key + ':' + count + '>' },
+  };
+  assert.equal(state.checkLabel(1000, 1720, T), '<check.when><ago.minutes:12>');
+  assert.equal(state.readError('', 1, T), '<read.processFailed>');
+  const entries = state.accountEntries([{id: 'a', account: 'Mail', ok: true, unread: 3, searchUrl: ''}], {}, 0, T);
+  assert.equal(entries[0].action, '<account.noWebmail>');
+  assert.ok(entries[0].detail.startsWith('<count.unread:3> · '));
+  assert.ok(state.shortcuts(T).every(row => row.title.startsWith('<help.')));
+  assert.equal(state.fill('%2 of %1', [3, 1]), '1 of 3');
 });
 
 test('accounts with duplicate names, zero unread and unavailable webmail remain distinct', () => {

@@ -14,6 +14,9 @@ Column {
   property color urgent: Color.urgent
   property color accent: Color.accent
   property string fontFamily: Style.font.family
+  // The panel's Translations; English when there is none.
+  property QtObject strings: null
+  function tr(key, english) { return strings ? strings.t(key, english) : english }
 
   readonly property string iconRun: ""
   readonly property string iconCopy: ""
@@ -63,7 +66,9 @@ Column {
         ? Qt.rgba(root.foreground.r, root.foreground.g, root.foreground.b, 0.14)
         : Qt.rgba(root.foreground.r, root.foreground.g, root.foreground.b, 0.07)
 
-      Behavior on color { ColorAnimation { duration: 60 } }
+      Behavior on color {
+        ColorAnimation { duration: Style.duration(60); easing.type: Easing.Bezier; easing.bezierCurve: Style.easeOut }
+      }
 
       Text {
         id: commandText
@@ -90,7 +95,7 @@ Column {
 
       PanelToolTip {
         visible: chipMouse.containsMouse
-        text: "Sign in in a terminal"
+        text: root.tr("tip.signIn", "Sign in in a terminal")
         fontFamily: root.fontFamily
       }
     }
@@ -103,7 +108,7 @@ Column {
 
       PanelActionButton {
         iconText: root.iconRun
-        tooltipText: "Sign in in a terminal"
+        tooltipText: root.tr("tip.signIn", "Sign in in a terminal")
         foreground: root.foreground
         hoverColor: root.accent
         fontFamily: root.fontFamily
@@ -113,7 +118,7 @@ Column {
 
       PanelActionButton {
         iconText: root.copied ? root.iconCopied : root.iconCopy
-        tooltipText: root.copied ? "Copied" : "Copy command"
+        tooltipText: root.copied ? root.tr("tip.copied", "Copied") : root.tr("tip.copy", "Copy command")
         foreground: root.foreground
         hoverColor: root.accent
         fontFamily: root.fontFamily
@@ -129,7 +134,7 @@ Column {
 
   Text {
     visible: root.isSetup
-    text: "Open setup guide"
+    text: root.tr("account.openGuide", "Open setup guide")
     textFormat: Text.PlainText
     font.family: root.fontFamily
     font.pixelSize: Style.font.caption
