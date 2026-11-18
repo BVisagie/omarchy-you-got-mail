@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+import ipaddress
 import json
 import math
 import os
+import re
 import subprocess
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -113,8 +115,15 @@ def _url(value) -> str:
         parts.port
     except ValueError:
         return BAD_URL
-    if not parts.hostname:
+    host = parts.hostname
+    if not host:
         return BAD_URL
+    # A dotted number is an IPv4 address, and must be a valid one.
+    if re.fullmatch(r"[0-9.]+", host):
+        try:
+            ipaddress.IPv4Address(host)
+        except ValueError:
+            return BAD_URL
     return url
 
 
@@ -128,19 +137,24 @@ def _error(payload: dict, fallback: str) -> str:
     return _text(payload.get("error"), MAX_ERROR) or fallback
 
 
-def _completed(futures):
-    """as_completed, but an interrupt also stops the providers still running.
+def _each(accounts: list[dict], work):
+    """work(account) for every account, up to 8 at once, as each finishes.
 
-    They run in sessions of their own, out of reach of a terminal's Ctrl+C,
-    and the pool would otherwise wait for them, still reading or marking mail.
+    Providers run in sessions of their own, out of reach of a terminal's
+    Ctrl+C, and the pool would wait for them, still reading or marking mail.
+    So an interrupt at any point, while submitting or collecting, cancels the
+    accounts still queued and stops the providers running before it waits.
     """
+    pool = ThreadPoolExecutor(max_workers=min(8, len(accounts)))
     try:
-        yield from as_completed(futures)
+        futures = [pool.submit(work, acc) for acc in accounts]
+        for future in as_completed(futures):
+            yield future.result()
     except BaseException:
-        for future in futures:
-            future.cancel()  # queued accounts never start
-        stop_active()  # and none that slips through can start a provider
+        stop_active()  # and no account that slips through can start one
+        pool.shutdown(wait=True, cancel_futures=True)
         raise
+    pool.shutdown(wait=True)
 
 
 def _run_provider(account: dict, args: list[str], timeout: int = LIST_TIMEOUT) -> dict:
@@ -251,22 +265,19 @@ def cmd_list(page_token: str) -> None:
         return acc, payload, time.time()
 
     checked_at: dict[str, float] = {}
-    with ThreadPoolExecutor(max_workers=min(8, len(accounts))) as pool:
-        futures = [pool.submit(work, acc) for acc in accounts]
-        for fut in _completed(futures):
-            acc, payload, finished_at = fut.result()
-            if not payload.get("ok"):
-                msg = account_error(acc, _error(payload, "failed"))
-                errors.append(msg)
-                error_by_id[acc["id"]] = msg
-                continue
-            payloads[acc["id"]] = payload
-            checked_at[acc["id"]] = finished_at
-            unread += _count(payload.get("unread"))
-            email = _text(payload.get("email"), MAX_TEXT)
-            if email:
-                emails.append(email)
-            merged.extend(_tag_messages(acc, payload, int(fetch)))
+    for acc, payload, finished_at in _each(accounts, work):
+        if not payload.get("ok"):
+            msg = account_error(acc, _error(payload, "failed"))
+            errors.append(msg)
+            error_by_id[acc["id"]] = msg
+            continue
+        payloads[acc["id"]] = payload
+        checked_at[acc["id"]] = finished_at
+        unread += _count(payload.get("unread"))
+        email = _text(payload.get("email"), MAX_TEXT)
+        if email:
+            emails.append(email)
+        merged.extend(_tag_messages(acc, payload, int(fetch)))
 
     inboxes = []
     signin = False
@@ -376,15 +387,12 @@ def cmd_read_all() -> None:
     def work(acc: dict) -> tuple[dict, dict]:
         return acc, _run_provider(acc, ["read-all"], timeout=READ_ALL_TIMEOUT)
 
-    with ThreadPoolExecutor(max_workers=min(8, len(accounts))) as pool:
-        futures = [pool.submit(work, acc) for acc in accounts]
-        for fut in _completed(futures):
-            acc, payload = fut.result()
-            marked += _count(payload.get("marked"))
-            if payload.get("ok"):
-                succeeded += 1
-                continue
-            errors.append(account_error(acc, _error(payload, "failed")))
+    for acc, payload in _each(accounts, work):
+        marked += _count(payload.get("marked"))
+        if payload.get("ok"):
+            succeeded += 1
+            continue
+        errors.append(account_error(acc, _error(payload, "failed")))
 
     signin = any(needs_sign_in(e) for e in errors)
     if succeeded == 0:

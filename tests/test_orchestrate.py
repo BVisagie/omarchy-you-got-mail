@@ -48,21 +48,52 @@ class ProviderResultTests(unittest.TestCase):
             self.assertFalse(result["ok"])
             self.assertIn("invalid JSON", result["error"])
 
-    def test_interrupt_stops_the_providers_still_running(self) -> None:
-        from concurrent.futures import Future
+    def _interrupted_each(self, raise_on_submit: int | None):
+        import threading
+        import time
+        from concurrent.futures import ThreadPoolExecutor
 
-        def interrupted(futures):
-            raise KeyboardInterrupt
-            yield  # pragma: no cover
+        started = []
+        lock = threading.Lock()
 
-        queued = Future()
-        with patch.object(orchestrate, "as_completed", side_effect=interrupted), patch.object(
-            orchestrate, "stop_active"
-        ) as stop:
+        class Pool(ThreadPoolExecutor):
+            submitted = 0
+
+            def submit(self, fn, *args):
+                Pool.submitted += 1
+                if Pool.submitted == raise_on_submit:
+                    raise KeyboardInterrupt
+                return super().submit(fn, *args)
+
+        def work(acc: dict):
+            with lock:
+                started.append(acc["id"])
+            time.sleep(0.2)
+            return acc
+
+        from contextlib import ExitStack
+
+        accounts = [_account(f"a{i}", "imap", "A") for i in range(12)]
+        with ExitStack() as stack:
+            stack.enter_context(patch.object(orchestrate, "ThreadPoolExecutor", Pool))
+            stop = stack.enter_context(patch.object(orchestrate, "stop_active"))
+            if raise_on_submit is None:
+                stack.enter_context(
+                    patch.object(orchestrate, "as_completed", side_effect=KeyboardInterrupt)
+                )
             with self.assertRaises(KeyboardInterrupt):
-                list(orchestrate._completed([queued]))
+                list(orchestrate._each(accounts, work))
+        return started, stop
+
+    def test_interrupt_while_collecting_cancels_queued_accounts(self) -> None:
+        started, stop = self._interrupted_each(None)
         stop.assert_called_once()
-        self.assertTrue(queued.cancelled())
+        self.assertLessEqual(len(started), 8)  # the 4 queued never start
+
+    def test_interrupt_while_submitting_also_stops_providers(self) -> None:
+        started, stop = self._interrupted_each(3)
+        stop.assert_called_once()
+        self.assertLessEqual(len(started), 2)
 
     def test_a_provider_started_after_a_stop_is_an_account_error(self) -> None:
         with patch.object(orchestrate, "run_capped", side_effect=orchestrate.Cancelled("stopped")):
@@ -488,7 +519,7 @@ class ProviderDataBoundsTests(unittest.TestCase):
         # message read without opening it.
         self.assertEqual(payload["messages"][0]["url"], orchestrate.BAD_URL)
         self.assertEqual(payload["inboxes"][0]["searchUrl"], "")
-        for bad in ("https://mail.example.test/a\x00b", "https://mail.example.test/\x7f",
+        for bad in ("https://256.0.0.1/mail", "https://1.2.3/mail", "https://mail.example.test/a\x00b", "https://mail.example.test/\x7f",
                     "https://mail.example.test/m\n", " https://mail.example.test/m",
                     "https://mail.example.test/a\ud800/b", "https://mail.example:65536/m",
                     "https:///no-host", "https://mail.example:port/m"):
@@ -496,6 +527,10 @@ class ProviderDataBoundsTests(unittest.TestCase):
             row["url"] = bad
             payload = self._list({"a": {"ok": True, "unread": 1, "messages": [row]}})
             self.assertEqual(payload["messages"][0]["url"], orchestrate.BAD_URL)
+        row = message("ip", 1)
+        row["url"] = "https://192.168.1.10:8443/mail"
+        payload = self._list({"a": {"ok": True, "unread": 1, "messages": [row]}})
+        self.assertEqual(payload["messages"][0]["url"], "https://192.168.1.10:8443/mail")
         url = "https://mail.example.test/#search/invalid:thing"
         payload = self._list({"a": {"ok": True, "unread": 0, "searchUrl": url, "messages": []}})
         self.assertEqual(payload["inboxes"][0]["searchUrl"], url)

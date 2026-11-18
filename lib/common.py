@@ -562,12 +562,13 @@ def run_capped(
             return True
 
     output = {proc.stdout: bytearray(), proc.stderr: bytearray()}
-    selector = selectors.DefaultSelector()
-    for stream in output:
-        selector.register(stream, selectors.EVENT_READ)
+    selector = None
     deadline = time.monotonic() + timeout
     exited_at = None
     try:
+        selector = selectors.DefaultSelector()
+        for stream in output:
+            selector.register(stream, selectors.EVENT_READ)
         while selector.get_map():
             now = time.monotonic()
             if now > deadline:
@@ -605,9 +606,9 @@ def run_capped(
             reap()
         raise
     finally:
-        with _ACTIVE_LOCK:
-            _ACTIVE_GROUPS.discard(proc.pid)
-        selector.close()
+        # Already unregistered by reap(), once, before the PID was freed.
+        if selector is not None:
+            selector.close()
         proc.stdout.close()
         proc.stderr.close()
     # Invalid UTF-8 stays visible as lone surrogates, so the checks after
