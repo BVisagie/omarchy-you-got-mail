@@ -17,6 +17,8 @@ export GOOGLE_WORKSPACE_CLI_KEYRING_BACKEND="${GOOGLE_WORKSPACE_CLI_KEYRING_BACK
 
 # Most gws output this provider reads; a larger reply is refused, not parsed.
 export GWS_MAX_BYTES=$((8 * 1024 * 1024))
+# The message cache keeps 1000 entries of a few kilobytes each.
+CACHE_MAX_BYTES=$((8 * 1024 * 1024))
 
 for candidate in "$HOME/.local/share/mise/shims" "$HOME/.local/bin" "$HOME/.bun/bin"; do
   case ":$PATH:" in
@@ -307,13 +309,15 @@ fill_cache() {
         : > "$too_large" || exit 1
         exit 0
       fi
-      parsed=$(jq -c "{(.id): {
-              subject: ((.payload.headers // [] | map(select(.name == \"Subject\")) | .[0].value) // \"\"),
-              from: ((.payload.headers // [] | map(select(.name == \"From\")) | .[0].value) // \"\"),
-              snippet: (.snippet // \"\"),
+      # Each field is cut here, so a part stays a few kilobytes and the merge
+      # of a full page stays small whatever gws sent.
+      parsed=$(jq -c "{((.id // \"\") | tostring | .[0:64]): {
+              subject: ((.payload.headers // [] | map(select(.name == \"Subject\")) | .[0].value) // \"\" | tostring | .[0:1000]),
+              from: ((.payload.headers // [] | map(select(.name == \"From\")) | .[0].value) // \"\" | tostring | .[0:1000]),
+              snippet: (.snippet // \"\" | tostring | .[0:1000]),
               ts: ((.internalDate // \"0\") | tonumber? // 0),
-              threadId: (.threadId // .id),
-              lab: [(.labelIds // [])[] | select(startswith(\"Label_\"))]
+              threadId: (.threadId // .id | tostring | .[0:64]),
+              lab: [(.labelIds // [])[] | strings | select(startswith(\"Label_\")) | .[0:64]][0:50]
             }}" < "$out.raw" 2>/dev/null)
       rm -f "$out.raw"
       [ -n "$parsed" ] || exit 0
@@ -451,6 +455,10 @@ cmd_list() {
 
   ensure_json_object "$CACHE_FILE"
   ensure_json_object "$LABEL_FILE"
+  # A cache grown by an older version without these limits starts over.
+  if [ "$(wc -c <"$CACHE_FILE")" -gt "$CACHE_MAX_BYTES" ]; then
+    printf '{}\n' | write_private "$CACHE_FILE" || fail_not_saved
+  fi
   fill_cache "$ids"
   fill_labels_from_cache "$ids" || fail_not_saved
   fail_if_too_large

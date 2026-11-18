@@ -881,6 +881,30 @@ class GmailProviderProcessTests(unittest.TestCase):
         self.assertFalse(payload["ok"])
         self.assertIn("could not save message details", payload["error"])
 
+    def test_message_details_are_cut_before_they_are_cached(self) -> None:
+        import json
+
+        dirs = []
+
+        def prepare(cache) -> None:
+            dirs.append(cache)
+
+        payload = self._run(
+            'case " $* " in\n'
+            '  *" users getProfile "*) printf \'{"emailAddress":"you@gmail.com"}\\n\' ;;\n'
+            '  *" messages list "*) printf \'{"messages":[{"id":"abc1"}],"resultSizeEstimate":1}\\n\' ;;\n'
+            "  *\" messages get \"*) printf '{\"id\":\"abc1\",\"snippet\":\"'; head -c 500000 /dev/zero | tr '\\0' a; printf '\"}\\n' ;;\n"
+            "  *) printf '{}\\n' ;;\n"
+            "esac\n",
+            "list",
+            "--limit",
+            "5",
+            prepare=prepare,
+        )
+        self.assertTrue(payload["ok"], payload)
+        cached = json.loads((dirs[0] / "messages.json").read_text())
+        self.assertEqual(len(cached["abc1"]["snippet"]), 1000)
+
     def test_one_message_list_succeeds_with_its_subject(self) -> None:
         payload = self._run(self.GWS_ONE_MESSAGE, "list", "--limit", "5")
         self.assertTrue(payload["ok"], payload)
