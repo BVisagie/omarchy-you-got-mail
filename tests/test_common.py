@@ -518,5 +518,169 @@ class ConfigFileTests(unittest.TestCase):
         self.assertEqual(common.max_messages(), 25)
 
 
+
+class OneLineTests(unittest.TestCase):
+    def test_joiners_stay_and_invisible_marks_go(self) -> None:
+        self.assertEqual(common.one_line("👩\u200d💻"), "👩\u200d💻")
+        self.assertEqual(common.one_line("می\u200cخواهم"), "می\u200cخواهم")
+        self.assertEqual(common.one_line("a\u200bb\u202ec\ufeff"), "abc")
+
+
+class RunCappedTests(unittest.TestCase):
+    def _run(self, script: str, timeout: float = 10, limit: int = 1024):
+        return common.run_capped([sys.executable, "-c", script], dict(os.environ), timeout, limit)
+
+    def test_returns_output_and_exit_code(self) -> None:
+        proc = self._run("import sys; print('out'); print('err', file=sys.stderr); sys.exit(3)")
+        self.assertEqual(proc.stdout.strip(), "out")
+        self.assertEqual(proc.stderr.strip(), "err")
+        self.assertEqual(proc.returncode, 3)
+
+    def test_stops_a_program_that_prints_too_much(self) -> None:
+        with self.assertRaises(common.ResponseTooLargeError):
+            self._run("import sys\nwhile True: sys.stdout.write('x' * 4096)")
+
+    def test_too_much_on_stderr_also_stops_it(self) -> None:
+        with self.assertRaises(common.ResponseTooLargeError):
+            self._run("import sys\nwhile True: sys.stderr.write('x' * 4096)")
+
+    def test_output_at_the_limit_is_fine(self) -> None:
+        proc = self._run("import sys; sys.stdout.write('x' * 1024)")
+        self.assertEqual(len(proc.stdout), 1024)
+
+    def test_timeout_reaches_a_child_holding_the_pipes(self) -> None:
+        import time
+
+        started = time.monotonic()
+        with self.assertRaises(subprocess.TimeoutExpired):
+            self._run(
+                "import subprocess, sys, time\n"
+                "subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(30)'])\n"
+                "time.sleep(30)",
+                timeout=0.5,
+            )
+        self.assertLess(time.monotonic() - started, 5)
+
+    def test_outer_stop_reaches_a_nested_command(self) -> None:
+        import time
+
+        # The inner command stays in the outer group, so the outer timeout
+        # stops it too instead of leaving it running unsupervised.
+        inner = (
+            "import os, sys\n"
+            f"sys.path.insert(0, {str(Path(common.__file__).parent)!r})\n"
+            "import common\n"
+            "common.run_capped([sys.executable, '-c', 'import time; time.sleep(30)'],"
+            " dict(os.environ), 30, own_group=False)"
+        )
+        started = time.monotonic()
+        with self.assertRaises(subprocess.TimeoutExpired):
+            self._run(inner, timeout=1)
+        self.assertLess(time.monotonic() - started, 5)
+
+    def test_leftover_children_are_stopped_when_it_exits(self) -> None:
+        import time
+
+        # The program exits at once but leaves a child holding its pipes.
+        started = time.monotonic()
+        proc = self._run(
+            "import subprocess, sys\n"
+            "subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(30)'])\n"
+            "print('done')",
+            timeout=10,
+        )
+        self.assertEqual(proc.stdout.strip(), "done")
+        self.assertLess(time.monotonic() - started, 5)
+
+    def test_nested_command_returns_although_its_child_holds_the_pipes(self) -> None:
+        import time
+
+        started = time.monotonic()
+        proc = common.run_capped(
+            [
+                sys.executable,
+                "-c",
+                "import subprocess, sys\n"
+                "subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(5)'])\n"
+                "print('done')",
+            ],
+            dict(os.environ),
+            10,
+            own_group=False,
+        )
+        self.assertEqual(proc.stdout.strip(), "done")
+        self.assertEqual(proc.returncode, 0)
+        self.assertLess(time.monotonic() - started, 3)
+
+    def test_invalid_utf8_stays_visible(self) -> None:
+        proc = self._run("import sys; sys.stdout.buffer.write(b'a\\xffb')")
+        self.assertEqual(proc.stdout, "a\udcffb")
+        with self.assertRaises(UnicodeEncodeError):
+            proc.stdout.encode("utf-8")
+
+    def test_helper_that_closed_its_pipes_is_stopped(self) -> None:
+        import time
+
+        proc = self._run(
+            "import subprocess, sys\n"
+            "p = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(30)'],"
+            " stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)\n"
+            "print(p.pid)"
+        )
+        pid = int(proc.stdout)
+        for _ in range(40):
+            try:
+                state = Path(f"/proc/{pid}/stat").read_text().split(")")[-1].split()[0]
+            except FileNotFoundError:
+                break
+            if state == "Z":
+                break
+            time.sleep(0.05)
+        else:
+            self.fail("helper still running")
+
+    def test_stop_active_reaches_a_running_command(self) -> None:
+        import threading
+        import time
+
+        self.addCleanup(common._CANCELLED.clear)
+
+        result = {}
+
+        def run() -> None:
+            result["proc"] = self._run("import time; time.sleep(30)", timeout=30)
+
+        thread = threading.Thread(target=run)
+        started = time.monotonic()
+        thread.start()
+        while not common._ACTIVE_GROUPS and time.monotonic() - started < 5:
+            time.sleep(0.02)
+        common.stop_active()
+        thread.join(5)
+        self.assertFalse(thread.is_alive())
+        self.assertEqual(result["proc"].returncode, -9)
+        self.assertEqual(common._ACTIVE_GROUPS, set())
+        # And nothing starts after it.
+        with self.assertRaises(common.Cancelled):
+            self._run("print('late')")
+
+    def test_a_reaped_group_is_no_longer_registered(self) -> None:
+        seen = []
+        real_wait = subprocess.Popen.wait
+
+        def wait(proc, *args, **kwargs):
+            seen.append(proc.pid in common._ACTIVE_GROUPS)
+            return real_wait(proc, *args, **kwargs)
+
+        with patch.object(subprocess.Popen, "wait", wait):
+            self._run("print('ok')")
+        self.assertTrue(seen)
+        self.assertFalse(any(seen))
+
+    def test_timeout_kills_the_program(self) -> None:
+        with self.assertRaises(subprocess.TimeoutExpired):
+            self._run("import time; time.sleep(30)", timeout=0.5)
+
+
 if __name__ == "__main__":
     unittest.main()

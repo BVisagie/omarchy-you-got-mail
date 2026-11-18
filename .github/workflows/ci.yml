@@ -4,19 +4,33 @@ on:
   push:
   pull_request:
 
+permissions:
+  contents: read
+
 jobs:
   test:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7.0.1
-
-      - uses: actions/setup-python@v7.0.0
         with:
-          python-version: "3.12"
+          persist-credentials: false
 
-      - uses: actions/setup-node@v7.0.0
+      - uses: actions/setup-python@v7.1.0
         with:
-          node-version: "22"
+          python-version: "3.x"
+
+      - uses: actions/setup-node@v7.1.0
+        with:
+          node-version: "lts/*"
+
+      # Omarchy refuses a plugin folder with a symlink in it, and the plugin
+      # marketplace holds back any file named like an installer for review.
+      - name: Plugin folder rules
+        run: |
+          links=$(git ls-files -s | awk '$1 == "120000" { print $4 }')
+          if [ -n "$links" ]; then echo "tracked symlinks: $links"; exit 1; fi
+          names=$(git ls-files | grep -iE 'install|setup' || true)
+          if [ -n "$names" ]; then echo "installer-like file names: $names"; exit 1; fi
 
       - name: Panel behavior
         run: |
@@ -42,4 +56,4 @@ jobs:
         with:
           scandir: '.'
           ignore_paths: tests
-          version: v0.10.0
+          version: v0.11.0

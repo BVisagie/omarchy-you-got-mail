@@ -16,17 +16,145 @@ def _account(acc_id: str, provider: str, label: str) -> dict:
 class ProviderResultTests(unittest.TestCase):
     def test_nonzero_provider_exit_cannot_report_success(self) -> None:
         process = subprocess.CompletedProcess([], 1, '{"ok":true}', '')
-        with patch.object(orchestrate.subprocess, "run", return_value=process):
+        with patch.object(orchestrate, "run_capped", return_value=process):
             result = orchestrate._run_provider(_account("gmail", "gmail", "Gmail"), ["read", "one"])
         self.assertFalse(result["ok"])
         self.assertIn("exited 1", result["error"])
 
     def test_successful_exit_preserves_provider_failure(self) -> None:
         process = subprocess.CompletedProcess([], 0, '{"ok":false,"error":"permission denied"}', '')
-        with patch.object(orchestrate.subprocess, "run", return_value=process):
+        with patch.object(orchestrate, "run_capped", return_value=process):
             result = orchestrate._run_provider(_account("gmail", "gmail", "Gmail"), ["read", "one"])
         self.assertFalse(result["ok"])
         self.assertEqual(result["error"], "permission denied")
+
+    def _result(self, stdout: str, code: int = 0) -> dict:
+        process = subprocess.CompletedProcess([], code, stdout, "")
+        with patch.object(orchestrate, "run_capped", return_value=process):
+            return orchestrate._run_provider(_account("gmail", "gmail", "Gmail"), ["list"])
+
+    def test_only_a_json_true_is_success(self) -> None:
+        for ok in ('"false"', '"true"', "1", "null"):
+            self.assertFalse(self._result('{"ok":%s}' % ok)["ok"], ok)
+        self.assertTrue(self._result('{"ok":true}')["ok"])
+
+    def test_line_separators_inside_json_strings_are_fine(self) -> None:
+        result = self._result('log line\n{"ok":true,"messages":[{"subject":"a\u2028b\u2029c"}]}')
+        self.assertTrue(result["ok"])
+
+    def test_malformed_json_is_an_account_error(self) -> None:
+        for text in ('{"ok":true,"unread":' + "9" * 5000 + "}", "[" * 100_000, "{not json"):
+            result = self._result(text)
+            self.assertFalse(result["ok"])
+            self.assertIn("invalid JSON", result["error"])
+
+    def _interrupted_each(self, raise_on_submit: int | None):
+        import threading
+        import time
+        from concurrent.futures import ThreadPoolExecutor
+
+        started = []
+        lock = threading.Lock()
+
+        class Pool(ThreadPoolExecutor):
+            submitted = 0
+
+            def submit(self, fn, *args):
+                Pool.submitted += 1
+                if Pool.submitted == raise_on_submit:
+                    raise KeyboardInterrupt
+                return super().submit(fn, *args)
+
+        def work(acc: dict):
+            with lock:
+                started.append(acc["id"])
+            time.sleep(0.2)
+            return acc
+
+        from contextlib import ExitStack
+
+        accounts = [_account(f"a{i}", "imap", "A") for i in range(12)]
+        with ExitStack() as stack:
+            stack.enter_context(patch.object(orchestrate, "ThreadPoolExecutor", Pool))
+            stop = stack.enter_context(patch.object(orchestrate, "stop_active"))
+            if raise_on_submit is None:
+                stack.enter_context(
+                    patch.object(orchestrate, "as_completed", side_effect=KeyboardInterrupt)
+                )
+            with self.assertRaises(KeyboardInterrupt):
+                list(orchestrate._each(accounts, work))
+        return started, stop
+
+    def test_interrupt_while_collecting_cancels_queued_accounts(self) -> None:
+        started, stop = self._interrupted_each(None)
+        stop.assert_called_once()
+        self.assertLessEqual(len(started), 8)  # the 4 queued never start
+
+    def test_interrupt_while_submitting_also_stops_providers(self) -> None:
+        started, stop = self._interrupted_each(3)
+        stop.assert_called_once()
+        self.assertLessEqual(len(started), 2)
+
+    def test_read_runs_its_provider_off_the_main_thread(self) -> None:
+        import threading
+
+        acc = _account("a", "gmail", "Gmail")
+        threads = []
+
+        def run(account: dict, args: list[str]) -> dict:
+            threads.append(threading.current_thread() is threading.main_thread())
+            return {"ok": True}
+
+        opaque = orchestrate.encode_id("a", "m1")
+        with patch.object(orchestrate, "load_accounts", return_value=[acc]), patch.object(
+            orchestrate, "_run_provider", side_effect=run
+        ):
+            self.assertEqual(capture_json(orchestrate.cmd_read, opaque), {"ok": True})
+        self.assertEqual(threads, [False])
+
+    def test_failed_read_reports_its_error(self) -> None:
+        acc = _account("a", "gmail", "Gmail")
+        opaque = orchestrate.encode_id("a", "m1")
+        with patch.object(orchestrate, "load_accounts", return_value=[acc]), patch.object(
+            orchestrate, "_run_provider", return_value={"ok": False, "error": "permission denied"}
+        ):
+            payload = capture_json(orchestrate.cmd_read, opaque)
+        self.assertEqual(payload, {"ok": False, "error": "permission denied"})
+        # An ordinary failure is not an interrupt: later commands still run.
+        import common
+
+        self.assertFalse(common._CANCELLED.is_set())
+
+    def test_sigterm_takes_the_interrupt_path(self) -> None:
+        import signal
+
+        import cli
+
+        previous = signal.getsignal(signal.SIGTERM)
+        self.addCleanup(signal.signal, signal.SIGTERM, previous)
+        with patch.object(cli, "cmd_list"), patch.object(cli.sys, "argv", ["you-got-mail", "list"]):
+            cli.main()
+        self.assertIs(signal.getsignal(signal.SIGTERM), signal.default_int_handler)
+
+    def test_a_provider_started_after_a_stop_is_an_account_error(self) -> None:
+        with patch.object(orchestrate, "run_capped", side_effect=orchestrate.Cancelled("stopped")):
+            result = orchestrate._run_provider(_account("gmail", "gmail", "Gmail"), ["read-all"])
+        self.assertFalse(result["ok"])
+        self.assertIn("stopped", result["error"])
+
+    def test_argument_the_os_refuses_is_an_account_error(self) -> None:
+        with patch.object(orchestrate, "run_capped", side_effect=ValueError("embedded null byte")):
+            result = orchestrate._run_provider(_account("gmail", "gmail", "Gmail"), ["read", "a\x00"])
+        self.assertFalse(result["ok"])
+        self.assertIn("embedded null byte", result["error"])
+
+    def test_oversized_provider_output_is_an_account_error(self) -> None:
+        with patch.object(
+            orchestrate, "run_capped", side_effect=orchestrate.ResponseTooLargeError("big")
+        ):
+            result = orchestrate._run_provider(_account("gmail", "gmail", "Gmail"), ["list"])
+        self.assertFalse(result["ok"])
+        self.assertIn("more output than expected", result["error"])
 
 
 class AccountStatusTests(unittest.TestCase):
@@ -348,6 +476,152 @@ class ReadAllTests(unittest.TestCase):
         self.assertFalse(payload["ok"])
         self.assertEqual(payload["marked"], 0)
         self.assertEqual(payload["error"], "a: timed out")
+
+
+class ProviderDataBoundsTests(unittest.TestCase):
+    """Provider output is untrusted: odd values are cleaned, not fatal."""
+
+    def _list(self, payloads: dict) -> dict:
+        accounts = [_account(acc_id, "gmail", acc_id.title()) for acc_id in payloads]
+        with patch.object(orchestrate, "load_accounts", return_value=accounts), patch.object(
+            orchestrate, "_run_provider", side_effect=lambda acc, args: payloads[acc["id"]]
+        ):
+            return capture_json(orchestrate.cmd_list, "")
+
+    def test_non_numeric_counts_do_not_fail_other_accounts(self) -> None:
+        payload = self._list(
+            {
+                "odd": {"ok": True, "unread": "lots", "messages": [message("x", "soon")]},
+                "good": {"ok": True, "unread": 3, "messages": [message("g", 100)]},
+            }
+        )
+        self.assertTrue(payload["ok"])
+        self.assertEqual(payload["unread"], 3)
+        self.assertEqual({box["unread"] for box in payload["inboxes"]}, {0, 3})
+        odd = [m for m in payload["messages"] if m["id"].startswith("odd:")]
+        self.assertEqual(odd[0]["ts"], 0)
+
+    def test_counts_and_times_are_clamped(self) -> None:
+        payload = self._list(
+            {"a": {"ok": True, "unread": -5, "messages": [message("far", 10**12), message("neg", -1)]}}
+        )
+        self.assertEqual(payload["unread"], 0)
+        self.assertEqual([m["ts"] for m in payload["messages"]], [0, 0])
+        for odd in (True, "²", "9" * 5000, "1e3", float("nan"), None, [3]):
+            payload = self._list({"a": {"ok": True, "unread": odd, "messages": []}})
+            self.assertEqual(payload["unread"], 0, odd)
+        payload = self._list({"a": {"ok": True, "unread": " 12 ", "messages": []}})
+        self.assertEqual(payload["unread"], 12)
+        payload = self._list({"a": {"ok": True, "unread": 10**12, "messages": []}})
+        self.assertEqual(payload["unread"], orchestrate.MAX_COUNT)
+        # The sum stays inside QML's 32-bit int too.
+        many = {f"a{i}": {"ok": True, "unread": orchestrate.MAX_COUNT, "messages": []} for i in range(300)}
+        self.assertEqual(self._list(many)["unread"], orchestrate.MAX_COUNT)
+
+    def test_text_is_cut_to_size_and_kept_plain(self) -> None:
+        row = message("a", 100, subject="<img src=https://example.invalid/t>" + "s" * 5000)
+        row["from"] = "f" * 5000
+        row["snippet"] = "n" * 5000
+        row["labels"] = ["l" * 500] * 50 + [None, 7]
+        payload = self._list({"a": {"ok": True, "unread": 1, "messages": [row]}})
+        msg = payload["messages"][0]
+        self.assertTrue(msg["subject"].startswith("<img src=https://example.invalid/t>"))
+        self.assertLessEqual(len(msg["subject"]), orchestrate.MAX_TEXT)
+        self.assertLessEqual(len(msg["from"]), orchestrate.MAX_TEXT)
+        self.assertLessEqual(len(msg["snippet"]), orchestrate.MAX_SNIPPET)
+        self.assertEqual(len(msg["labels"]), orchestrate.MAX_LABELS)
+        self.assertTrue(all(len(lab) <= orchestrate.MAX_LABEL for lab in msg["labels"]))
+
+    def test_lone_surrogates_neither_crash_nor_reach_the_output(self) -> None:
+        import json
+
+        bad = message("\ud800", 2)
+        row = message("ok", 1, subject="Hi \udc00 there")
+        payload = self._list({"a": {"ok": True, "unread": 2, "messages": [bad, row]}})
+        self.assertEqual(len(payload["messages"]), 1)
+        json.dumps(payload, ensure_ascii=False).encode("utf-8")
+
+    def test_only_known_fields_reach_the_panel(self) -> None:
+        row = message("a", 100)
+        row["extra"] = "x" * 10_000
+        payload = self._list({"a": {"ok": True, "unread": 1, "messages": [row]}})
+        self.assertEqual(
+            set(payload["messages"][0]),
+            {"id", "account", "subject", "from", "snippet", "ts", "url", "labels"},
+        )
+
+    def test_bad_ids_and_urls_are_dropped(self) -> None:
+        # 385 characters encode to 514: too long for the panel's id check.
+        rows = [message("i" * 385, 100), {"id": True}, {"id": ["x"]}, "row", message("a\x00b", 75),
+                message("ok", 50)]
+        rows[-1]["url"] = "javascript:alert(1)"
+        payload = self._list(
+            {"a": {"ok": True, "unread": 2, "searchUrl": "http://plain.test/", "messages": rows}}
+        )
+        self.assertEqual(len(payload["messages"]), 1)
+        # A bad link must not become "no link", or a click would mark the
+        # message read without opening it.
+        self.assertEqual(payload["messages"][0]["url"], orchestrate.BAD_URL)
+        self.assertEqual(payload["inboxes"][0]["searchUrl"], "")
+        for bad in ("https://256.0.0.1/mail", "https://1.2.3.4.5/mail", "https://mail.123/inbox",
+                    "https://08.1/mail", "https://1.16777216/mail", "https://4294967296/mail",
+                    "https://mail.0x1f/inbox", "https://bad host/inbox", "https://mail.example.test/a\ufeffb",
+                    "https://mail.example.test:\u0663/m",
+                    "https://user@mail.example.test/m", "https://[::1]/m", "https://mail.example.test/a\x00b", "https://mail.example.test/\x7f",
+                    "https://mail.example.test/m\n", " https://mail.example.test/m",
+                    "https://mail.example.test/a\ud800/b", "https://mail.example:65536/m",
+                    "https:///no-host", "https://mail.example:port/m"):
+            row = message("ctl", 1)
+            row["url"] = bad
+            payload = self._list({"a": {"ok": True, "unread": 1, "messages": [row]}})
+            self.assertEqual(payload["messages"][0]["url"], orchestrate.BAD_URL)
+        for good in ("https://192.168.1.10:8443/mail", "https://192.168.1.10./mail",
+                     "https://127.1:8443/mail", "https://0x7f.1/mail", "https://0177.0.0.1/mail",
+                     "https://3232235786/mail"):
+            row = message("ip", 1)
+            row["url"] = good
+            payload = self._list({"a": {"ok": True, "unread": 1, "messages": [row]}})
+            self.assertEqual(payload["messages"][0]["url"], good)
+        payload = self._list(
+            {"a": {"ok": True, "unread": 0, "searchUrl": "https://bad host/inbox", "messages": []}}
+        )
+        self.assertEqual(payload["inboxes"][0]["searchUrl"], "")
+        payload = self._list(
+            {"a": {"ok": True, "unread": 0, "searchUrl": "https://m.test/\ufeff", "messages": []}}
+        )
+        self.assertEqual(payload["inboxes"][0]["searchUrl"], "")
+        payload = self._list(
+            {"a": {"ok": True, "unread": 0, "searchUrl": "https://127.1:2096/", "messages": []}}
+        )
+        self.assertEqual(payload["inboxes"][0]["searchUrl"], "https://127.1:2096/")
+        url = "https://mail.example.test/#search/invalid:thing"
+        payload = self._list({"a": {"ok": True, "unread": 0, "searchUrl": url, "messages": []}})
+        self.assertEqual(payload["inboxes"][0]["searchUrl"], url)
+        row = message("none", 1)
+        row["url"] = ""
+        payload = self._list({"a": {"ok": True, "unread": 1, "messages": [row]}})
+        self.assertEqual(payload["messages"][0]["url"], "")
+
+    def test_longest_id_the_panel_accepts_is_kept(self) -> None:
+        tagged = orchestrate._tag_messages(
+            _account("a", "gmail", "Gmail"), {"messages": [message("i" * 384, 1)]}, 5
+        )
+        self.assertEqual(len(tagged[0]["id"].split(":", 1)[1]), 512)
+
+    def test_rows_are_capped_at_what_was_asked_for(self) -> None:
+        rows = [message(f"m{i}", 1000 - i) for i in range(500)]
+        tagged = orchestrate._tag_messages(_account("a", "gmail", "Gmail"), {"messages": rows}, 25)
+        self.assertEqual(len(tagged), 25)
+        self.assertEqual(orchestrate._tag_messages(_account("a", "gmail", "Gmail"), {"messages": "x"}, 25), [])
+
+    def test_long_provider_error_is_cut(self) -> None:
+        payload = self._list(
+            {
+                "a": {"ok": False, "error": "e" * 5000},
+                "b": {"ok": True, "unread": 0, "messages": []},
+            }
+        )
+        self.assertLessEqual(len(payload["warning"]), orchestrate.MAX_ERROR + 50)
 
 
 if __name__ == "__main__":

@@ -2,6 +2,44 @@
 
 Versions match `manifest.json`. Git tags are created at release time.
 
+## 2.10.0
+
+Hardening for mail data, and the last release for Omarchy 4.0. Version 3.0.0
+needs Omarchy 4.5.
+
+- On Omarchy 4.5 the bar mailbox and its count were drawn tiny, because 4.5
+  fits a bar button's whole icon into the bar's icon size. The count now
+  sits beside the mailbox, or under it on a vertical bar, and both are full
+  size. Clicks and the tooltip work on either.
+- Everything a provider sends back is checked before the panel sees it. A
+  count or time that is not a number no longer fails every account: it is
+  read as 0. Subjects, senders, previews, labels and ids are cut to size, and
+  only the fields the panel shows are passed on.
+- A message link the browser could not open (not `https://`, a bad host or
+  port, control characters) is passed on as `invalid:`. Clicking that row
+  does nothing, so the message stays unread instead of being marked read
+  without opening.
+- IMAP servers, `hey` and `gws` can no longer send an unbounded reply. IMAP
+  stops at 256 KB for one message part or 32 MB for one check; `hey`, `gws`
+  and each provider stop at 8 to 16 MB. Each counts as a failed check for
+  that account.
+- Gmail: a reply from `gws` that failed, was cut short, or could not be
+  saved (for example on a full disk) fails the check instead of showing
+  mail without details or the wrong account's links. Previews are decoded
+  before they are shortened, so they no longer end in a broken `&am`.
+- Subjects and names keep zero-width joiners, so Persian text and emoji such
+  as 👩‍💻 show as written.
+- Ctrl+C or SIGTERM to `you-got-mail` (for example during `read-all`) stops
+  every provider it started, including accounts still waiting their turn.
+- `refreshIntervalSec: 0` turns timed checks off. Mail is still checked when
+  the plugin starts, when you open the panel, and when you refresh.
+- CI uses current Python and Node releases and ShellCheck 0.11.0, reads the
+  repository without write access, and fails on a tracked symlink or a file
+  named like an installer, both of which Omarchy or its plugin marketplace
+  refuse. Dependabot proposes action updates weekly.
+- Accounts, credentials and existing settings are unchanged. On Omarchy 4.5,
+  run `omarchy restart shell` after updating.
+
 ## 2.9.0
 
 An optional "You've got mail!" sound when new unread mail arrives.

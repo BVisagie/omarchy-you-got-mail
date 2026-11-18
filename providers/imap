@@ -33,6 +33,40 @@ READ_ALL_BUDGET = 100
 # here as OSError instead of a generic provider kill.
 SOCKET_TIMEOUT = 30
 UID_CHUNK = 80
+# imaplib already caps each line; these cap what one literal and one session
+# may bring in. Header fields for a full page are a few hundred kilobytes.
+MAX_LITERAL = 256 * 1024
+MAX_SESSION_BYTES = 32 * 1024 * 1024
+
+
+class BoundedIMAP(imaplib.IMAP4_SSL):
+    """Stops reading a server that sends far more than this widget asks for."""
+
+    received = 0
+    over_budget = False
+
+    def _count(self, size: int) -> None:
+        self.received += size
+        if self.received > MAX_SESSION_BYTES:
+            self.over_budget = True
+            raise self.abort("the server sent more data than expected")
+
+    def read(self, size: int) -> bytes:
+        if size > MAX_LITERAL:
+            self.over_budget = True
+            raise self.abort("the server sent a message part too large to read")
+        data = super().read(size)
+        self._count(len(data))
+        return data
+
+    def readline(self) -> bytes:
+        try:
+            line = super().readline()
+        except self.error:
+            self.over_budget = True  # imaplib's own limit on one line
+            raise
+        self._count(len(line))
+        return line
 
 
 def _decode_header(value: str | None) -> str:
@@ -136,14 +170,26 @@ def _folders(client: imaplib.IMAP4, acc: dict | None = None) -> list[str]:
     return names or ["INBOX"]
 
 
-def _connect(acc: dict, password: str) -> imaplib.IMAP4_SSL:
+def _close(client) -> None:
+    """Log out of a healthy session; just drop one that went over budget,
+    since a logout would read from it again or wait for its timeout."""
+    try:
+        if getattr(client, "over_budget", False) is True:
+            client.shutdown()
+        else:
+            client.logout()
+    except Exception:
+        pass
+
+
+def _connect(acc: dict, password: str) -> BoundedIMAP:
     host = str(acc.get("host") or "")
     port = int(acc.get("port") or 993)
     user = str(acc.get("user") or "")
     if not host or not user or not password:
         die("IMAP host, username and password are required")
     ctx = ssl.create_default_context()
-    client = imaplib.IMAP4_SSL(host, port, ssl_context=ctx, timeout=SOCKET_TIMEOUT)
+    client = BoundedIMAP(host, port, ssl_context=ctx, timeout=SOCKET_TIMEOUT)
     client.login(user, password)
     return client
 
@@ -202,10 +248,11 @@ def cmd_list(acc: dict, password: str, limit: int) -> None:
                     }
                 )
     finally:
-        try:
-            client.logout()
-        except Exception:
-            pass
+        _close(client)
+    # Over the budget even if only at logout: the check fails, as it would
+    # mid-list. (A read or read-all keeps its result: the marks were made.)
+    if getattr(client, "over_budget", False) is True:
+        die("the server sent more data than expected")
     messages.sort(key=lambda m: m["ts"], reverse=True)
     emit(
         {
@@ -240,10 +287,7 @@ def cmd_read(acc: dict, password: str, local_id: str) -> None:
         if typ != "OK":
             die("could not mark as read")
     finally:
-        try:
-            client.logout()
-        except Exception:
-            pass
+        _close(client)
     emit({"ok": True})
 
 
@@ -298,11 +342,11 @@ def cmd_read_all(acc: dict, password: str) -> None:
                     emit({"ok": False, "marked": marked, "error": "could not mark as read"})
                     return
                 marked += len(chunk)
+    except (imaplib.IMAP4.error, OSError) as exc:
+        emit({"ok": False, "marked": marked, "error": str(exc) or "could not mark as read"})
+        return
     finally:
-        try:
-            client.logout()
-        except Exception:
-            pass
+        _close(client)
     emit({"ok": True, "marked": marked})
 
 

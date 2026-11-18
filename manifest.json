@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "id": "bvisagie.you-got-mail",
   "name": "You've Got Mail",
-  "version": "2.9.0",
+  "version": "2.10.0",
   "author": "BVisagie",
   "description": "Unread-only mailbox for Gmail, Outlook, Fastmail, IMAP, and HEY. One pile across accounts; click a row to open it.",
   "homepage": "https://github.com/BVisagie/omarchy-you-got-mail",
@@ -41,7 +41,8 @@
         "key": "refreshIntervalSec",
         "type": "integer",
         "label": "Refresh interval (seconds)",
-        "min": 15,
+        "description": "0 turns timed checks off; mail is still checked when the panel opens.",
+        "min": 0,
         "max": 3600,
         "step": 15,
         "defaultValue": 60

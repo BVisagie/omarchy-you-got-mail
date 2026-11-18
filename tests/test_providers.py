@@ -6,6 +6,14 @@ from unittest.mock import MagicMock, patch
 from support import capture_json, load_provider
 
 
+def shutil_which(name: str) -> str:
+    import shutil
+
+    found = shutil.which(name)
+    assert found, name
+    return found
+
+
 class FastmailReadTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls) -> None:
@@ -227,6 +235,87 @@ class ImapReadAllTests(unittest.TestCase):
         self.assertEqual([row[0] for row in stored], ["1,2", "3"])
         self.assertTrue(all(row[1] == "+FLAGS" for row in stored))
 
+    def test_list_fails_when_the_budget_runs_out_at_logout(self) -> None:
+        imap = self.imap
+
+        class FakeClient:
+            over_budget = False
+
+            def list(self):
+                return "OK", [b'(\\HasNoChildren) "/" "INBOX"']
+
+            def select(self, folder, readonly=False):
+                return "OK", []
+
+            def uid(self, cmd, *args):
+                return "OK", [b""]
+
+            def logout(self):
+                self.over_budget = True
+                raise imap.imaplib.IMAP4.abort("the server sent more data than expected")
+
+        with patch.object(self.imap, "_connect", return_value=FakeClient()):
+            payload = capture_json(self.imap.cmd_list, {"host": "h", "user": "u"}, "pw", 5)
+        self.assertEqual(payload, {"ok": False, "error": "the server sent more data than expected"})
+
+    def test_an_overlong_line_marks_the_session_over_budget(self) -> None:
+        client = self.imap.BoundedIMAP.__new__(self.imap.BoundedIMAP)
+        with patch.object(
+            self.imap.imaplib.IMAP4_SSL, "readline", side_effect=self.imap.imaplib.IMAP4.error("got more than 1000000 bytes")
+        ):
+            with self.assertRaises(self.imap.imaplib.IMAP4.error):
+                client.readline()
+        self.assertTrue(client.over_budget)
+
+    def test_a_session_over_budget_is_dropped_not_logged_out(self) -> None:
+        from unittest.mock import MagicMock
+
+        client = MagicMock(over_budget=True)
+        self.imap._close(client)
+        client.shutdown.assert_called_once()
+        client.logout.assert_not_called()
+        healthy = MagicMock(over_budget=False)
+        self.imap._close(healthy)
+        healthy.logout.assert_called_once()
+        healthy.shutdown.assert_not_called()
+
+    def test_an_oversized_literal_marks_the_session_over_budget(self) -> None:
+        client = self.imap.BoundedIMAP.__new__(self.imap.BoundedIMAP)
+        with self.assertRaises(self.imap.imaplib.IMAP4.abort):
+            client.read(self.imap.MAX_LITERAL + 1)
+        self.assertTrue(client.over_budget)
+
+    def test_read_all_keeps_its_count_when_the_server_stops_it(self) -> None:
+        imap = self.imap
+
+        class FakeClient:
+            stores = 0
+
+            def list(self):
+                return "OK", [b'(\\HasNoChildren) "/" "INBOX"']
+
+            def select(self, folder, readonly=False):
+                return "OK", []
+
+            def uid(self, cmd, *args):
+                if cmd == "search":
+                    return "OK", [b"1 2 3"]
+                self.stores += 1
+                if self.stores == 2:
+                    raise imap.imaplib.IMAP4.abort("the server sent more data than expected")
+                return "OK", []
+
+            def logout(self):
+                return "OK", []
+
+        with patch.object(self.imap, "_connect", return_value=FakeClient()), patch.object(
+            self.imap, "UID_CHUNK", 2
+        ):
+            payload = capture_json(self.imap.cmd_read_all, {"host": "h", "user": "u"}, "pw")
+        self.assertEqual(
+            payload, {"ok": False, "marked": 2, "error": "the server sent more data than expected"}
+        )
+
     def test_read_all_uses_configured_folders(self) -> None:
         listed = []
         selected = []
@@ -336,7 +425,7 @@ class ImapFolderTests(unittest.TestCase):
 
     def test_connect_passes_socket_timeout(self) -> None:
         fake = MagicMock()
-        with patch.object(self.imap.imaplib, "IMAP4_SSL", return_value=fake) as ctor:
+        with patch.object(self.imap, "BoundedIMAP", return_value=fake) as ctor:
             client = self.imap._connect(
                 {"host": "imap.example.test", "port": 993, "user": "u"}, "pw"
             )
@@ -345,6 +434,31 @@ class ImapFolderTests(unittest.TestCase):
         kwargs = ctor.call_args.kwargs
         self.assertEqual(kwargs.get("timeout"), 30)
         fake.login.assert_called_once_with("u", "pw")
+
+    def _bounded(self):
+        return self.imap.BoundedIMAP.__new__(self.imap.BoundedIMAP)
+
+    def test_oversized_literal_is_refused_before_reading(self) -> None:
+        client = self._bounded()
+        with patch.object(self.imap.imaplib.IMAP4_SSL, "read") as read:
+            with self.assertRaises(self.imap.imaplib.IMAP4.abort):
+                client.read(self.imap.MAX_LITERAL + 1)
+        read.assert_not_called()
+
+    def test_session_stops_after_its_byte_budget(self) -> None:
+        client = self._bounded()
+        line = b"* " + b"x" * 1_000_000 + b"\r\n"
+        with patch.object(self.imap.imaplib.IMAP4_SSL, "readline", return_value=line):
+            with self.assertRaises(self.imap.imaplib.IMAP4.abort):
+                for _ in range(self.imap.MAX_SESSION_BYTES // len(line) + 2):
+                    client.readline()
+        self.assertGreater(client.received, self.imap.MAX_SESSION_BYTES)
+
+    def test_ordinary_reads_pass_through(self) -> None:
+        client = self._bounded()
+        with patch.object(self.imap.imaplib.IMAP4_SSL, "read", return_value=b"abc"):
+            self.assertEqual(client.read(3), b"abc")
+        self.assertEqual(client.received, 3)
 
 
 class ImapListTimestampTests(unittest.TestCase):
@@ -537,7 +651,7 @@ class GmailProviderProcessTests(unittest.TestCase):
         '"reason":"authError"}}'
     )
 
-    def _run(self, gws_body: str, *args: str) -> dict:
+    def _run(self, gws_body: str, *args: str, prepare=None, bins=None) -> dict:
         import json
         import os
         import shutil
@@ -556,6 +670,10 @@ class GmailProviderProcessTests(unittest.TestCase):
         gws = bindir / "gws"
         gws.write_text("#!/usr/bin/env bash\n" + gws_body, encoding="utf-8")
         gws.chmod(0o755)
+        for name, body in (bins or {}).items():
+            tool = bindir / name
+            tool.write_text("#!/usr/bin/env bash\n" + body, encoding="utf-8")
+            tool.chmod(0o755)
         env = os.environ.copy()
         env["PATH"] = str(bindir) + os.pathsep + env.get("PATH", "")
         env["XDG_CACHE_HOME"] = str(tmp / "cache")
@@ -563,6 +681,8 @@ class GmailProviderProcessTests(unittest.TestCase):
         env["HOME"] = str(ROOT.parent)
         env.pop("YOU_GOT_MAIL_ROOT", None)
         env["GOOGLE_WORKSPACE_CLI_KEYRING_BACKEND"] = "file"
+        if prepare:
+            prepare(tmp / "cache" / "omarchy-you-got-mail" / "gmail-test")
         proc = subprocess.run(
             ["bash", str(ROOT / "providers" / "gmail"), *args],
             capture_output=True,
@@ -620,6 +740,554 @@ class GmailProviderProcessTests(unittest.TestCase):
         self.assertEqual(payload["messages"], [])
         self.assertEqual(payload["email"], "you@gmail.com")
 
+
+    def test_oversized_message_details_fail_the_check(self) -> None:
+        payload = self._run(
+            'case " $* " in\n'
+            '  *" users getProfile "*) printf \'{"emailAddress":"you@gmail.com"}\\n\' ;;\n'
+            '  *" messages list "*) printf \'{"messages":[{"id":"abc1"}],"resultSizeEstimate":1}\\n\' ;;\n'
+            '  *" labels list "*) printf \'{"labels":[]}\\n\' ;;\n'
+            "  *\" messages get \"*) printf '{\"id\":\"abc1\",\"snippet\":\"'; head -c 9000000 /dev/zero | tr '\\0' a; printf '\"}\\n' ;;\n"
+            "  *) printf '{}\\n' ;;\n"
+            "esac\n",
+            "list",
+            "--limit",
+            "5",
+        )
+        self.assertFalse(payload["ok"])
+        self.assertIn("more output than expected", payload["error"])
+
+    def test_files_left_by_a_stopped_run_are_removed(self) -> None:
+        import os
+
+        dirs = []
+
+        def prepare(cache) -> None:
+            cache.mkdir(parents=True, mode=0o700)
+            os.chmod(cache.parent, 0o700)
+            # PID 2**22 + 1 is above Linux's pid_max, so it is never running.
+            for name in ("gws.4194305.reply", "gws.4194305.too-large",
+                         "gws.4194305.part.abc1.raw", f"gws.{os.getpid()}.part.abc2.json"):
+                (cache / name).write_text("x")
+            dirs.append(cache)
+
+        payload = self._run(
+            'case " $* " in\n'
+            '  *" users getProfile "*) printf \'{"emailAddress":"you@gmail.com"}\\n\' ;;\n'
+            '  *) printf \'{"messages":[]}\\n\' ;;\n'
+            "esac\n",
+            "list",
+            "--limit",
+            "5",
+            prepare=prepare,
+        )
+        self.assertTrue(payload["ok"], payload)
+        left = sorted(p.name for p in dirs[0].glob("gws.*.*"))
+        # A live run's files stay; only ended runs' are removed.
+        self.assertEqual(left, [f"gws.{os.getpid()}.part.abc2.json"])
+
+    def test_a_reply_that_cannot_be_saved_fails_the_check(self) -> None:
+        # head stands in for a full disk: it reads its input but cannot write.
+        real_head = shutil_which("head")
+        payload = self._run(
+            'case " $* " in\n'
+            '  *" users getProfile "*) printf \'{"emailAddress":"you@gmail.com"}\\n\' ;;\n'
+            '  *) printf \'{"messages":[{"id":"abc1"}],"resultSizeEstimate":1}\\n\' ;;\n'
+            "esac\n",
+            "list",
+            "--limit",
+            "5",
+            bins={"head": f'"{real_head}" "$@" >/dev/null; exit 1\n'},
+        )
+        self.assertFalse(payload["ok"])
+
+    def test_message_details_that_cannot_be_saved_fail_the_check(self) -> None:
+        real_head = shutil_which("head")
+        payload = self._run(
+            'case " $* " in\n'
+            '  *" users getProfile "*) printf \'{"emailAddress":"you@gmail.com"}\\n\' ;;\n'
+            '  *" messages list "*) printf \'{"messages":[{"id":"abc1"}],"resultSizeEstimate":1}\\n\' ;;\n'
+            '  *" messages get "*) printf \'{"id":"abc1","snippet":"hi"}\\n\' ;;\n'
+            "  *) printf '{}\\n' ;;\n"
+            "esac\n",
+            "list",
+            "--limit",
+            "5",
+            # Only the message-details reply cannot be written.
+            bins={"head": 'data=$(cat); [[ $data == *snippet* ]] && exit 1\n'
+                          f'printf "%s" "$data" | "{real_head}" "$@"\n'},
+        )
+        self.assertFalse(payload["ok"])
+        self.assertIn("could not save message details", payload["error"])
+
+    GWS_ONE_MESSAGE = (
+        'case " $* " in\n'
+        '  *" users getProfile "*) printf \'{"emailAddress":"you@gmail.com"}\\n\' ;;\n'
+        '  *" messages list "*) printf \'{"messages":[{"id":"abc1"}],"resultSizeEstimate":1}\\n\' ;;\n'
+        '  *" messages get "*) printf \'{"id":"abc1","snippet":"hi","payload":{"headers":[{"name":"Subject","value":"Invoice"}]}}\\n\' ;;\n'
+        "  *) printf '{}\\n' ;;\n"
+        "esac\n"
+    )
+
+    def test_a_profile_that_cannot_be_saved_fails_the_check(self) -> None:
+        real_head = shutil_which("head")
+        payload = self._run(
+            self.GWS_ONE_MESSAGE,
+            "list",
+            "--limit",
+            "5",
+            bins={"head": 'data=$(cat); [[ $data == *emailAddress* ]] && exit 1\n'
+                          f'printf "%s" "$data" | "{real_head}" "$@"\n'},
+        )
+        self.assertFalse(payload["ok"])
+        self.assertIn("could not write to the Gmail cache", payload["error"])
+
+    def test_a_message_cache_that_cannot_be_written_fails_the_check(self) -> None:
+        real_mv = shutil_which("mv")
+        payload = self._run(
+            self.GWS_ONE_MESSAGE,
+            "list",
+            "--limit",
+            "5",
+            bins={"mv": 'for last; do :; done; [[ $last == */messages.json ]] && exit 1\n'
+                        f'exec "{real_mv}" "$@"\n'},
+        )
+        self.assertFalse(payload["ok"])
+        # The empty cache it starts from cannot be written either.
+        self.assertIn("could not write to the Gmail cache", payload["error"])
+
+    def test_a_merged_message_cache_that_cannot_be_written_fails_the_check(self) -> None:
+        real_mv = shutil_which("mv")
+
+        def prepare(cache) -> None:
+            import os
+
+            cache.mkdir(parents=True, mode=0o700)
+            os.chmod(cache.parent, 0o700)
+            (cache / "messages.json").write_text("{}\n")
+            (cache / "labels.json").write_text("{}\n")
+            (cache / "messages.json").chmod(0o600)
+            (cache / "labels.json").chmod(0o600)
+
+        payload = self._run(
+            self.GWS_ONE_MESSAGE,
+            "list",
+            "--limit",
+            "5",
+            prepare=prepare,
+            bins={"mv": 'for last; do :; done; [[ $last == */messages.json ]] && exit 1\n'
+                        f'exec "{real_mv}" "$@"\n'},
+        )
+        self.assertFalse(payload["ok"])
+        self.assertIn("could not save message details", payload["error"])
+
+    def test_message_details_are_cut_before_they_are_cached(self) -> None:
+        import json
+
+        dirs = []
+
+        def prepare(cache) -> None:
+            dirs.append(cache)
+
+        payload = self._run(
+            'case " $* " in\n'
+            '  *" users getProfile "*) printf \'{"emailAddress":"you@gmail.com"}\\n\' ;;\n'
+            '  *" messages list "*) printf \'{"messages":[{"id":"abc1"}],"resultSizeEstimate":1}\\n\' ;;\n'
+            "  *\" messages get \"*) printf '{\"id\":\"abc1\",\"snippet\":\"'; head -c 500000 /dev/zero | tr '\\0' a; printf '\"}\\n' ;;\n"
+            "  *) printf '{}\\n' ;;\n"
+            "esac\n",
+            "list",
+            "--limit",
+            "5",
+            prepare=prepare,
+        )
+        self.assertTrue(payload["ok"], payload)
+        cached = json.loads((dirs[0] / "messages.json").read_text())
+        self.assertEqual(len(cached["abc1"]["snippet"]), 400)
+
+    def _list_with_details(self, details: str, ids: str = '[{"id":"abc1"}]', prepare=None) -> tuple:
+        import json
+
+        dirs = []
+
+        def keep(cache) -> None:
+            if prepare:
+                prepare(cache)
+            dirs.append(cache)
+
+        payload = self._run(
+            'case " $* " in\n'
+            '  *" users getProfile "*) printf \'{"emailAddress":"you@gmail.com"}\\n\' ;;\n'
+            f'  *" messages list "*) printf \'{{"messages":{ids},"resultSizeEstimate":1}}\\n\' ;;\n'
+            f"  *\" messages get \"*) printf '%s\\n' '{details}' ;;\n"
+            "  *) printf '{}\\n' ;;\n"
+            "esac\n",
+            "list",
+            "--limit",
+            "2",
+            prepare=keep,
+        )
+        path = dirs[0] / "messages.json"
+        return payload, (json.loads(path.read_text()) if path.exists() else {})
+
+    def test_message_details_must_be_one_object_for_the_asked_id(self) -> None:
+        for details in ('{"id":"abc1","snippet":"a"} {"id":"zzz9","snippet":"b"}',
+                        '{"id":"other","snippet":"a"}', '[{"id":"abc1"}]'):
+            payload, cached = self._list_with_details(details)
+            self.assertTrue(payload["ok"], payload)
+            self.assertEqual(cached, {}, details)
+
+    def test_an_out_of_range_internal_date_is_zero(self) -> None:
+        payload, cached = self._list_with_details('{"id":"abc1","internalDate":"' + "9" * 5000 + '"}')
+        self.assertEqual(cached["abc1"]["ts"], 0)
+
+    def test_no_more_ids_are_looked_up_than_were_asked_for(self) -> None:
+        ids = "[" + ",".join(f'{{"id":"a{i:03x}"}}' for i in range(40)) + "]"
+        payload, cached = self._list_with_details('{"id":"x"}', ids=ids)
+        self.assertTrue(payload["ok"], payload)
+        self.assertEqual(len(payload["messages"]), 2)
+        self.assertEqual(payload["unread"], 40)  # the total still counts them all
+
+    def test_a_non_string_id_does_not_hide_the_others(self) -> None:
+        payload, cached = self._list_with_details(
+            '{"id":"abc1","snippet":"hi"}', ids='[{"id":7},{"id":"abc1"},{}]'
+        )
+        self.assertTrue(payload["ok"], payload)
+        self.assertEqual([m["id"] for m in payload["messages"]], ["abc1"])
+
+    def test_odd_entries_and_ids_do_not_hide_the_others(self) -> None:
+        payload, cached = self._list_with_details(
+            '{"id":"abc1","snippet":"hi"}', ids='[false,{"id":"abc2\\\\n"},{"id":"abc1"}]'
+        )
+        self.assertTrue(payload["ok"], payload)
+        self.assertEqual([m["id"] for m in payload["messages"]], ["abc1"])
+        self.assertEqual(payload["unread"], 1)
+
+    def test_an_address_with_a_trailing_newline_is_unknown(self) -> None:
+        payload = self._run(
+            'case " $* " in\n'
+            '  *" users getProfile "*) printf \'{"emailAddress":"you@gmail.com\\\\n"}\\n\' ;;\n'
+            "  *) printf '{\"messages\":[]}\\n' ;;\n"
+            "esac\n",
+            "list",
+            "--limit",
+            "2",
+        )
+        self.assertTrue(payload["ok"], payload)
+        self.assertEqual(payload["email"], "")
+
+    def _read_all(self, list_reply: str) -> tuple:
+        import json
+
+        dirs = []
+        payload = self._run(
+            'case " $* " in\n'
+            f"  *\" messages list \"*) printf '%s\\n' '{list_reply}' ;;\n"
+            '  *" batchModify "*) printf \'%s\\n\' "$*" >> "$XDG_CACHE_HOME/batches.log"; printf \'{}\\n\' ;;\n'
+            "  *) printf '{}\\n' ;;\n"
+            "esac\n",
+            "read-all",
+            prepare=dirs.append,
+        )
+        log = dirs[0].parent.parent / "batches.log"
+        batches = []
+        if log.exists():
+            for line in log.read_text().splitlines():
+                body = line[line.index("--json ") + len("--json "):]
+                batches.append(json.loads(body)["ids"])
+        return payload, batches
+
+    def test_read_all_handles_more_ids_than_one_argument_holds(self) -> None:
+        # 32-character ids: 5000 of them are about 175 kB, past Linux's
+        # 128 kB limit on one argument.
+        ids = [f"{i:032x}" for i in range(5000)]
+        reply = '{"messages":[' + ",".join(f'{{"id":"{i}"}}' for i in ids) + "]}"
+        payload, batches = self._read_all(reply)
+        self.assertEqual(payload, {"ok": True, "marked": 5000})
+        marked = [i for batch in batches for i in batch]
+        self.assertEqual(sorted(marked), sorted(ids))  # every id, exactly once
+
+    def test_read_all_stops_at_an_unusable_page_token(self) -> None:
+        payload, batches = self._read_all('{"messages":[{"id":"abc1"}],"nextPageToken":"bad token!"}')
+        self.assertFalse(payload["ok"])
+        self.assertEqual(payload["marked"], 0)
+        self.assertEqual(batches, [])
+
+    def test_read_all_stops_at_a_newline_only_page_token(self) -> None:
+        payload, batches = self._read_all('{"messages":[{"id":"abc1"}],"nextPageToken":"\\n"}')
+        self.assertFalse(payload["ok"])
+        self.assertEqual(batches, [])
+
+    def test_read_all_stops_at_a_page_token_that_is_not_a_string(self) -> None:
+        for token in ("false", "0", "[]"):
+            payload, batches = self._read_all('{"messages":[{"id":"abc1"}],"nextPageToken":' + token + "}")
+            self.assertFalse(payload["ok"], token)
+            self.assertEqual(batches, [], token)
+
+    def test_read_all_refuses_a_later_page_with_null_messages(self) -> None:
+        payload = self._run(
+            'case " $* " in\n'
+            "  *pageToken*) printf '{\"messages\":null}\\n' ;;\n"
+            "  *\" messages list \"*) printf '{\"messages\":[{\"id\":\"abc1\"}],\"nextPageToken\":\"p2\"}\\n' ;;\n"
+            '  *" batchModify "*) echo marked >> "$XDG_CACHE_HOME/batches.log"; printf \'{}\\n\' ;;\n'
+            "  *) printf '{}\\n' ;;\n"
+            "esac\n",
+            "read-all",
+        )
+        self.assertFalse(payload["ok"])
+        self.assertEqual(payload.get("marked", 0), 0)
+
+    def test_a_profile_reply_must_be_one_object(self) -> None:
+        payload = self._run(
+            'case " $* " in\n'
+            "  *\" users getProfile \"*) printf '{\"emailAddress\":\"other@gmail.com\"}\\n{\"error\":{}}\\n' ;;\n"
+            "  *\" messages list \"*) printf '{\"messages\":[]}\\n' ;;\n"
+            "  *) printf '{}\\n' ;;\n"
+            "esac\n",
+            "list",
+            "--limit",
+            "2",
+        )
+        self.assertTrue(payload["ok"], payload)
+        self.assertEqual(payload["email"], "")
+
+    def test_nothing_from_a_failed_lookup_is_used(self) -> None:
+        payload = self._run(
+            'case " $* " in\n'
+            "  *\" users getProfile \"*) printf '{\"emailAddress\":\"other@gmail.com\"}\\n'; exit 2 ;;\n"
+            "  *\" messages list \"*) printf '{\"messages\":[{\"id\":\"abc1\"}]}\\n' ;;\n"
+            "  *\" messages get \"*) printf '{\"id\":\"abc1\",\"threadId\":\"beef\",\"snippet\":\"x\"}\\n'; exit 2 ;;\n"
+            "  *) printf '{}\\n' ;;\n"
+            "esac\n",
+            "list",
+            "--limit",
+            "2",
+        )
+        self.assertTrue(payload["ok"], payload)
+        self.assertEqual(payload["email"], "")
+        self.assertNotIn("authuser", payload["messages"][0]["url"])
+        self.assertTrue(payload["messages"][0]["url"].endswith("#all/abc1"))
+
+    def test_a_page_from_a_failed_gws_is_not_used(self) -> None:
+        payload = self._run(
+            'case " $* " in\n'
+            "  *\" messages list \"*) printf '{\"messages\":[{\"id\":\"abc1\"}]}\\n'; exit 2 ;;\n"
+            '  *" batchModify "*) echo marked >> "$XDG_CACHE_HOME/batches.log"; printf \'{}\\n\' ;;\n'
+            "  *) printf '{}\\n' ;;\n"
+            "esac\n",
+            "read-all",
+        )
+        self.assertFalse(payload["ok"])
+        self.assertEqual(payload.get("marked", 0), 0)
+
+    def test_read_all_refuses_messages_that_are_not_a_list(self) -> None:
+        payload, batches = self._read_all('{"messages":{"metadata":{"id":"abcd"}}}')
+        self.assertFalse(payload["ok"])
+        self.assertEqual(batches, [])
+
+    def test_read_all_refuses_a_reply_holding_a_nul_byte(self) -> None:
+        payload = self._run(
+            'case " $* " in\n'
+            "  *\" messages list \"*) printf '{\"messages\":[{\"id\":\"ab\\000cd\"}]}\\n' ;;\n"
+            '  *" batchModify "*) echo marked >> "$XDG_CACHE_HOME/batches.log"; printf \'{}\\n\' ;;\n'
+            "  *) printf '{}\\n' ;;\n"
+            "esac\n",
+            "read-all",
+        )
+        self.assertFalse(payload["ok"])
+
+    def test_a_repeated_id_is_one_row_and_one_lookup(self) -> None:
+        payload, cached = self._list_with_details(
+            '{"id":"abc1","snippet":"hi"}', ids='[{"id":"abc1"},{"id":"abc1"},{"id":"abc2"}]'
+        )
+        self.assertTrue(payload["ok"], payload)
+        self.assertEqual([m["id"] for m in payload["messages"]], ["abc1", "abc2"])
+        self.assertEqual(payload["unread"], 2)
+
+    def test_list_refuses_an_overlong_page_token(self) -> None:
+        token = "a" * 140_000
+        payload = self._run(
+            'case " $* " in\n'
+            '  *" users getProfile "*) printf \'{"emailAddress":"you@gmail.com"}\\n\' ;;\n'
+            f"  *\" messages list \"*) printf '%s\\n' '{{\"messages\":[],\"nextPageToken\":\"{token}\"}}' ;;\n"
+            "  *) printf '{}\\n' ;;\n"
+            "esac\n",
+            "list",
+            "--limit",
+            "2",
+        )
+        self.assertFalse(payload["ok"])
+        self.assertIn("unusable page token", payload["error"])
+
+    def test_a_thread_link_uses_a_whole_thread_id_or_the_message_id(self) -> None:
+        # Gmail ids are hex; a thread id that is not one, or too long, is
+        # never cut into another link: the message id is used instead.
+        for thread, expected in (("abcdef12", "abcdef12"), ("a" * 70, "abc1"), ("zz", "abc1")):
+            details = '{"id":"abc1","threadId":"' + thread + '"}'
+            payload, cached = self._list_with_details(details)
+            self.assertTrue(payload["ok"], payload)
+            self.assertTrue(payload["messages"][0]["url"].endswith("#all/" + expected), thread)
+
+    def test_label_names_are_cut_when_shown(self) -> None:
+        import json
+
+        def prepare(cache) -> None:
+            import os
+
+            cache.mkdir(parents=True, mode=0o700)
+            os.chmod(cache.parent, 0o700)
+            (cache / "labels.json").write_text(json.dumps({"Label_1": "n" * 5000}))
+            (cache / "messages.json").write_text(
+                json.dumps({"abc1": {"subject": "s", "lab": ["Label_1"] * 30, "ts": 1}})
+            )
+            for name in ("labels.json", "messages.json"):
+                (cache / name).chmod(0o600)
+
+        payload, cached = self._list_with_details('{"id":"abc1"}', prepare=prepare)
+        labels = payload["messages"][0]["labels"]
+        self.assertLessEqual(len(labels), 10)
+        self.assertTrue(all(len(name) <= 60 for name in labels))
+
+    def test_a_list_reply_of_several_objects_is_not_a_page(self) -> None:
+        payload = self._run(
+            'case " $* " in\n'
+            '  *" messages list "*) printf \'{"messages":[]}\\n{"messages":[{"id":"abc1"}]}\\n\' ;;\n'
+            "  *) printf '{}\\n' ;;\n"
+            "esac\n",
+            "list",
+            "--limit",
+            "2",
+        )
+        self.assertFalse(payload["ok"])
+
+    def test_an_oversized_profile_cache_is_fetched_again(self) -> None:
+        def prepare(cache) -> None:
+            import os
+
+            cache.mkdir(parents=True, mode=0o700)
+            os.chmod(cache.parent, 0o700)
+            profile = cache / "profile.json"
+            profile.write_text('{"emailAddress":"' + "x" * 200_000 + '"}')
+            profile.chmod(0o600)
+
+        payload, cached = self._list_with_details('{"id":"abc1"}', prepare=prepare)
+        self.assertTrue(payload["ok"], payload)
+        self.assertEqual(payload["email"], "you@gmail.com")
+
+    def test_an_oversized_old_cache_starts_over(self) -> None:
+        def prepare(cache) -> None:
+            import os
+
+            cache.mkdir(parents=True, mode=0o700)
+            os.chmod(cache.parent, 0o700)
+            big = cache / "messages.json"
+            big.write_text('{"old":"' + "x" * (17 * 1024 * 1024) + '"}')
+            big.chmod(0o600)
+
+        payload, cached = self._list_with_details('{"id":"abc1","snippet":"hi"}', prepare=prepare)
+        self.assertTrue(payload["ok"], payload)
+        self.assertNotIn("old", cached)
+        self.assertIn("abc1", cached)
+
+    def test_a_preview_is_decoded_before_it_is_cut(self) -> None:
+        snippet = "word " * 40 + "fish &amp; chips"  # 216 characters decoded
+        payload, cached = self._list_with_details('{"id":"abc1","snippet":"' + snippet + '"}')
+        self.assertTrue(payload["ok"], payload)
+        self.assertTrue(payload["messages"][0]["snippet"].endswith("fish & chips"))
+        self.assertEqual(cached["abc1"]["v"], 2)
+
+    def test_a_long_from_header_still_gives_the_whole_name(self) -> None:
+        sender = "Ada Lovelace <" + "a" * 400 + "@example.com>"
+        details = '{"id":"abc1","payload":{"headers":[{"name":"From","value":"' + sender + '"}]}}'
+        payload, cached = self._list_with_details(details)
+        self.assertEqual(payload["messages"][0]["from"], "Ada Lovelace")
+
+    def test_a_label_reply_must_be_one_object_with_a_list(self) -> None:
+        import json
+
+        def prepare(cache) -> None:
+            import os
+
+            cache.mkdir(parents=True, mode=0o700)
+            os.chmod(cache.parent, 0o700)
+            (cache / "messages.json").write_text(json.dumps({"abc1": {"v": 2, "subject": "s", "lab": ["Label_1"]}}))
+            (cache / "messages.json").chmod(0o600)
+
+        payload = self._run(
+            'case " $* " in\n'
+            '  *" users getProfile "*) printf \'{"emailAddress":"you@gmail.com"}\\n\' ;;\n'
+            '  *" messages list "*) printf \'{"messages":[{"id":"abc1"}]}\\n\' ;;\n'
+            "  *\" labels list \"*) printf '{\"labels\":[{\"id\":\"Label_1\",\"name\":\"Work\",\"type\":\"user\"}]}\\n{\"error\":{}}\\n' ;;\n"
+            "  *) printf '{}\\n' ;;\n"
+            "esac\n",
+            "list",
+            "--limit",
+            "2",
+            prepare=prepare,
+        )
+        self.assertTrue(payload["ok"], payload)
+        self.assertEqual(payload["messages"][0]["labels"], [])
+
+    def test_an_older_cache_entry_is_still_decoded_when_shown(self) -> None:
+        import json
+
+        def prepare(cache) -> None:
+            import os
+
+            cache.mkdir(parents=True, mode=0o700)
+            os.chmod(cache.parent, 0o700)
+            (cache / "messages.json").write_text(json.dumps({"abc1": {"subject": "A &amp; B", "ts": 1}}))
+            (cache / "messages.json").chmod(0o600)
+
+        payload, cached = self._list_with_details('{"id":"abc1"}', prepare=prepare)
+        self.assertEqual(payload["messages"][0]["subject"], "A & B")
+
+    def test_one_message_list_succeeds_with_its_subject(self) -> None:
+        payload = self._run(self.GWS_ONE_MESSAGE, "list", "--limit", "5")
+        self.assertTrue(payload["ok"], payload)
+        self.assertEqual(payload["messages"][0]["subject"], "Invoice")
+
+    def test_oversized_profile_fails_the_check(self) -> None:
+        payload = self._run(
+            'case " $* " in\n'
+            "  *\" users getProfile \"*) printf '{\"emailAddress\":\"'; head -c 9000000 /dev/zero | tr '\\0' a; printf '@gmail.com\"}\\n' ;;\n"
+            "  *) printf '{\"messages\":[]}\\n' ;;\n"
+            "esac\n",
+            "list",
+            "--limit",
+            "5",
+        )
+        self.assertFalse(payload["ok"])
+        self.assertIn("more output than expected", payload["error"])
+
+    def test_one_byte_over_counts_the_trailing_newline(self) -> None:
+        # Valid JSON padded so that, with its newline, it is the cap plus one.
+        cap = 8 * 1024 * 1024
+        body = '{"messages":[]}'
+        payload = self._run(
+            'case " $* " in\n'
+            '  *" users getProfile "*) printf \'{"emailAddress":"you@gmail.com"}\\n\' ;;\n'
+            f"  *) printf '%s' '{body}'; head -c {cap - len(body)} /dev/zero | tr '\\0' ' '; printf '\\n' ;;\n"
+            "esac\n",
+            "list",
+            "--limit",
+            "5",
+        )
+        self.assertFalse(payload["ok"])
+        self.assertIn("more output than expected", payload["error"])
+
+    def test_oversized_gws_reply_is_refused(self) -> None:
+        payload = self._run(
+            'case " $* " in\n'
+            '  *" users getProfile "*) printf \'{"emailAddress":"you@gmail.com"}\\n\' ;;\n'
+            "  *) printf '{\"messages\":[\"'; head -c 9000000 /dev/zero | tr '\\0' a; printf '\"]}\\n' ;;\n"
+            "esac\n",
+            "list",
+            "--limit",
+            "5",
+        )
+        self.assertFalse(payload["ok"])
+        self.assertIn("more output than expected", payload["error"])
 
 class OutlookUnreadTests(unittest.TestCase):
     @classmethod

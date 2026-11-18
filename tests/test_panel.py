@@ -40,6 +40,42 @@ class PanelContractTests(unittest.TestCase):
         self.assertIn("Math.max(0, Math.min(100, n))", volume)
         self.assertIn('String(setting("soundFile", "") || "").trim()', self._property("soundFile"))
 
+    def test_refresh_interval_zero_turns_timed_checks_off(self) -> None:
+        refresh = self._property("refreshMs")
+        # Only an explicit 0 turns checks off; "0oops" is not a setting.
+        self.assertIn('if (raw === 0 || raw === "0") return 0', refresh)
+        self.assertLess(refresh.index("raw === 0"), refresh.index("!(n > 0)"))
+        self.assertIn("Math.max(15, Math.min(3600, n)) * 1000", refresh)
+        timer = self.qml.split("interval: Math.max(15000, root.refreshMs)")[1].split("}")[0]
+        self.assertIn("running: root.refreshMs > 0", timer)
+        # Settings arrive after load: the first check is one turn later, not
+        # the timer's start, so a saved 0 still checks once.
+        self.assertNotIn("triggeredOnStart", timer)
+        self.assertIn("Qt.callLater(root.refresh)", self.qml.split("Component.onCompleted:")[1].split("}")[0])
+        field = [f for f in self.manifest["barWidget"]["schema"] if f["key"] == "refreshIntervalSec"][0]
+        self.assertEqual(field["min"], 0)
+
+    def test_badge_sits_beside_the_icon_not_inside_it(self) -> None:
+        # Omarchy 4.5 scales a BarIconButton's whole icon to the bar icon size.
+        button = self.qml.split("  BarIconButton {\n    id: button")[1].split("\n  }\n")[0]
+        icon = button.split("iconComponent: Component {")[1]
+        self.assertIn("MailSlotIcon {", icon)
+        self.assertNotIn("Rectangle", icon)
+        self.assertNotIn("Row", icon)
+        # A WidgetButton registers with the bar, so clicks reach it while the
+        # panel is open, and it carries the bar's tooltip contract.
+        self.assertIn("  WidgetButton {\n    id: badgeArea", self.qml)
+        badge = self.qml.split("id: badgeArea")[1].split("\n  }\n")[0]
+        self.assertIn("hasVisualContent: root.badgeShown", badge)
+        self.assertIn("labelVisible: false", badge)
+        self.assertIn("tooltipText: button.tooltipText", badge)
+        self.assertIn("onPressed: function(b) { root.barPressed(b) }", badge)
+        self.assertIn("text: root.badgeText", badge)
+        self.assertNotIn("pressScale", badge)  # Omarchy 4.0's WidgetButton has none.
+        text = self._property("badgeText")
+        self.assertIn('barVertical && badgeCount > 999 ? "1k+"', text)
+        self.assertIn("onPressed: function(b) { root.barPressed(b) }", button)
+
     def _function(self, name: str) -> str:
         # The same shape tests/panel_harness.cjs extracts.
         found = re.search(rf"^  function {name}\([^\n]*\) \{{.*?^  \}}", self.qml, re.M | re.S)
@@ -169,7 +205,7 @@ class PanelContractTests(unittest.TestCase):
     def test_empty_partial_failure_uses_warning_not_caught_up(self) -> None:
         self.assertIn("function barTooltip()", self.qml)
         self.assertIn("Sign-in needed", self.qml)
-        self.assertIn('text: root.showAlertBadge ? "!" : root.badgeCount', self.qml)
+        self.assertIn('readonly property string badgeText: showAlertBadge ? "!"', self.qml)
         self.assertIn("property bool needsSignIn", self.qml)
         self.assertIn("readonly property bool hasAlert", self.qml)
         self.assertIn("opacity: root.hasAlert ? 0.5 : 1", self.qml)

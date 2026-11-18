@@ -15,6 +15,47 @@ umask 077
 
 export GOOGLE_WORKSPACE_CLI_KEYRING_BACKEND="${GOOGLE_WORKSPACE_CLI_KEYRING_BACKEND:-file}"
 
+# Most gws output this provider reads; a larger reply is refused, not parsed.
+export GWS_MAX_BYTES=$((8 * 1024 * 1024))
+
+# The HTML entities Gmail puts in previews and headers, decoded once, and the
+# sender's display name taken from a From header.
+# shellcheck disable=SC2016  # $raw and $m are jq's, not the shell's.
+export ENTITY_JQ='def entity:
+  gsub("&lt;";"<") | gsub("&gt;";">") | gsub("&quot;";"\"")
+  | gsub("&#39;";"'"'"'") | gsub("&nbsp;";" ") | gsub("&amp;";"&")
+  | gsub("[\\r\\n\\t]+"; " ") | gsub(" +"; " ")
+  | ltrimstr(" ") | rtrimstr(" ");
+def sender:
+  . as $raw
+  | (capture("^\\s*\"?(?<name>[^\"<]*?)\"?\\s*<(?<addr>[^>]+)>\\s*$") // null) as $m
+  | if $m == null then ($raw | ltrimstr(" ") | rtrimstr(" "))
+    elif ($m.name | length) > 0 then $m.name
+    else $m.addr end;'
+
+# One message's details, from a reply (read with jq -s) that is exactly one
+# object for the message asked about. Text is decoded, then cut to what the
+# panel shows, so a part stays a few kilobytes whatever gws sent.
+# shellcheck disable=SC2016  # $id and $name are jq's, not the shell's.
+export DETAILS_JQ='
+  select(length == 1 and (.[0] | type) == "object" and (.[0].id | tostring) == $id)
+  | .[0]
+  | def header($name): ((.payload.headers // [] | map(select(.name == $name)) | .[0].value) // "") | tostring;
+  {($id): {
+    v: 2,
+    subject: (header("Subject") | entity | .[0:300]),
+    from: (header("From") | entity | sender | .[0:300]),
+    snippet: (.snippet // "" | tostring | entity | .[0:400]),
+    ts: ((.internalDate // "0") | tostring | if test("\\A[0-9]{1,16}\\z") then tonumber else 0 end),
+    threadId: ((.threadId | strings | select(test("\\A[0-9a-f]{1,32}\\z"))) // $id),
+    lab: [(.labelIds // [])[] | strings | select(startswith("Label_")) | .[0:64]][0:10]
+  }}'
+# The message cache keeps 1000 entries. Fields are cut to what the panel
+# shows (300, 300 and 400 characters, 10 labels), so even escaped or multibyte
+# text keeps a full cache under about 10 MiB, inside this limit on reading it
+# back.
+CACHE_MAX_BYTES=$((16 * 1024 * 1024))
+
 for candidate in "$HOME/.local/share/mise/shims" "$HOME/.local/bin" "$HOME/.bun/bin"; do
   case ":$PATH:" in
     *":$candidate:"*) ;;
@@ -112,53 +153,154 @@ private_dir() {
   [[ "$owner" == "$(id -u)" ]] || return 1
   chmod 700 -- "$dir" 2>/dev/null || return 1
   find "$dir" -mindepth 1 -maxdepth 1 ! -type f -exec rm -rf -- {} + 2>/dev/null
-  find "$dir" -mindepth 1 -maxdepth 1 -type f -exec chmod 600 -- {} + 2>/dev/null
+  # Another run's gws.<pid>.* files come and go; umask 077 made them private.
+  find "$dir" -mindepth 1 -maxdepth 1 -type f ! -name 'gws.*.*' -exec chmod 600 -- {} + 2>/dev/null
 }
 
 command -v jq >/dev/null 2>&1 || die "jq not found on PATH"
 command -v gws >/dev/null 2>&1 || die "Gmail isn't installed for this bar. See the setup guide."
 private_dir "$CACHE_DIR" || die "cache directory is not usable"
 
+# Marked when any gws reply in this run is over the cap. $$ stays this run's
+# id inside $(...), so a lookup in a subshell can still mark it.
+# Each run keeps its working files as gws.<pid>.* in the cache folder. They
+# are plain files, which private_dir leaves alone, so runs can overlap.
+RUN_FILES="$CACHE_DIR/gws.$$"
+TOO_LARGE="$RUN_FILES.too-large"
+REPLY_FILE="$RUN_FILES.reply"
+# A run stopped at its timeout cannot clean up after itself; the next run
+# removes what runs that have ended left behind.
+for left in "$CACHE_DIR"/gws.*.*; do
+  [ -f "$left" ] || continue
+  owner="${left#"$CACHE_DIR"/gws.}"
+  owner="${owner%%.*}"
+  case "$owner" in ''|*[!0-9]*) continue ;; esac
+  kill -0 "$owner" 2>/dev/null || rm -f -- "$left"
+done
+# Files under this run's own PID can only be an ended run's.
+rm -f -- "$RUN_FILES".*
+trap 'rm -f -- "$RUN_FILES".*' EXIT
+
+# gws output, capped. The size is counted on the bytes as written, before a
+# command substitution can strip trailing newlines. A reply over the cap
+# prints nothing, fails, and marks TOO_LARGE for fail_if_too_large.
 gws_gmail() {
-  gws gmail "$@"
+  local rc saved
+  gws gmail "$@" | head -c "$((GWS_MAX_BYTES + 1))" >"$REPLY_FILE"
+  rc=${PIPESTATUS[0]} saved=${PIPESTATUS[1]}
+  # A reply that could not be saved whole (a full disk) is no reply.
+  if [ "$saved" -ne 0 ]; then
+    rm -f -- "$REPLY_FILE"
+    return "$NOT_SAVED"
+  fi
+  if [ "$(wc -c <"$REPLY_FILE")" -gt "$GWS_MAX_BYTES" ]; then
+    rm -f -- "$REPLY_FILE"
+    # Without the mark the oversize would pass for an optional lookup failing.
+    : >"$TOO_LARGE" || return "$NOT_SAVED"
+    return 1
+  fi
+  # bash drops NUL bytes from what it reads, which could turn a malformed
+  # reply into a different, valid-looking one: refuse it instead.
+  if [ "$(tr -d '\000' <"$REPLY_FILE" | wc -c)" -ne "$(wc -c <"$REPLY_FILE")" ]; then
+    rm -f -- "$REPLY_FILE"
+    return 1
+  fi
+  cat -- "$REPLY_FILE"
+  rm -f -- "$REPLY_FILE"
+  return "$rc"
+}
+
+# Returned when a reply or cache file could not be written (a full disk).
+# It survives $(...) and pipes (pipefail), so a lookup in a subshell can
+# still fail the check instead of passing for "no answer".
+NOT_SAVED=75
+fail_not_saved() {
+  gmail_error "could not write to the Gmail cache"
+}
+
+fail_if_too_large() {
+  [ -e "$TOO_LARGE" ] && gmail_error "gws sent more output than expected"
+  return 0
 }
 
 # Write JSON into the caller's variable. Do not invoke this (or unread_total)
 # inside $(...): die() exits 0, so a subshell would capture the error object
 # and the parent would treat it as an empty mailbox.
 gws_list() {
-  local dest="$1" errfile="$CACHE_DIR/gws.err" out msg
+  local dest="$1" errfile="$CACHE_DIR/gws.err" out msg status
   shift
   [[ "$dest" =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]] || die "internal error"
-  out="$(gws gmail "$@" 2>"$errfile")" || true
-  if printf '%s' "$out" | jq -e 'type == "object" and .error' >/dev/null 2>&1; then
-    gmail_error "$(printf '%s' "$out" | jq -r '.error.message // "could not read unread mail"')"
+  out="$(gws_gmail "$@" 2>"$errfile")"
+  status=$?
+  [ "$status" -eq "$NOT_SAVED" ] && fail_not_saved
+  fail_if_too_large
+  # Exactly one JSON object, whose messages key, when present, is a list; a
+  # reply holding several objects, or messages of another shape, is no page.
+  if printf '%s' "$out" | jq -e -s 'length == 1 and (.[0] | type) == "object"
+      and ((.[0] | has("messages") | not) or ((.[0].messages | type) == "array"))' >/dev/null 2>&1; then
+    if printf '%s' "$out" | jq -e '.error' >/dev/null 2>&1; then
+      gmail_error "$(printf '%s' "$out" | jq -r '.error.message // "could not read unread mail" | tostring | .[0:500]')"
+    fi
+    # Only a gws that succeeded has handed over a page.
+    if [ "$status" -eq 0 ]; then
+      printf -v "$dest" '%s' "$out"
+      return 0
+    fi
   fi
-  if printf '%s' "$out" | jq -e 'type == "object"' >/dev/null 2>&1; then
-    printf -v "$dest" '%s' "$out"
-    return 0
-  fi
-  msg="$(tr -s '[:space:]' ' ' <"$errfile" 2>/dev/null)"
+  msg="$(head -c 65536 "$errfile" 2>/dev/null | tr -s '[:space:]' ' ')"
   [ -n "$msg" ] || msg="$(tr -s '[:space:]' ' ' <<<"$out")"
   gmail_error "${msg:-could not read unread mail}"
 }
 
+# The page's nextPageToken into the named variable: "" when there is none,
+# failure when one is there but unusable. Checked in jq on the JSON value
+# itself, before bash could strip a newline-only token to nothing.
+page_token() {
+  local dest="$1" token
+  [[ "$dest" =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]] || die "internal error"
+  token="$(printf '%s' "$2" | jq -r '
+      .nextPageToken as $t
+      | if $t == null or $t == "" then ""
+        elif ($t | type) == "string" and ($t | test("\\A[A-Za-z0-9_-]{1,512}\\z")) then $t
+        else error("unusable") end' 2>/dev/null)" || return 1
+  printf -v "$dest" '%s' "$token"
+}
+
 ensure_json_object() {
   local file="$1"
-  readable_file "$file" && jq -e 'type == "object"' -- "$file" >/dev/null 2>&1 && return 0
-  printf '{}\n' | write_private "$file"
+  # Measured before jq reads it: a cache grown by an older version without
+  # these limits starts over instead of being parsed.
+  readable_file "$file" && [ "$(wc -c <"$file")" -le "$CACHE_MAX_BYTES" ] \
+    && jq -e 'type == "object"' -- "$file" >/dev/null 2>&1 && return 0
+  printf '{}\n' | write_private "$file" || fail_not_saved
+}
+
+# An address the links can carry: one line, no spaces or control characters,
+# at most 254 characters. Checked in jq on the JSON string itself, before
+# bash could drop a NUL or a trailing newline, and again here.
+# Read with jq -s: only a reply that is exactly one object counts.
+EMAIL_FILTER='select(length == 1 and (.[0] | type) == "object") | .[0].emailAddress | strings
+  | select(length >= 1 and length <= 254 and (test("[\\s[:cntrl:]]") | not))'
+usable_email() {
+  [[ "$1" =~ ^[^[:space:][:cntrl:]]{1,254}$ ]]
 }
 
 account_email() {
-  local cached email
-  if readable_file "$PROFILE_FILE"; then
-    cached="$(jq -r '.emailAddress // empty' "$PROFILE_FILE" 2>/dev/null)"
-    [ -n "$cached" ] && { printf '%s' "$cached"; return 0; }
+  local cached email status
+  # Measured before jq reads it, like the other cache files.
+  if readable_file "$PROFILE_FILE" && [ "$(wc -c <"$PROFILE_FILE")" -le 4096 ]; then
+    cached="$(jq -rs "$EMAIL_FILTER" "$PROFILE_FILE" 2>/dev/null)"
+    usable_email "$cached" && { printf '%s' "$cached"; return 0; }
   fi
   email="$(gws_gmail users getProfile --params '{"userId":"me"}' 2>/dev/null \
-    | jq -r '.emailAddress // empty' 2>/dev/null)"
-  [ -n "$email" ] || return 1
-  printf '{"emailAddress":%s}\n' "$(printf '%s' "$email" | jq -Rs .)" | write_private "$PROFILE_FILE"
+    | jq -rs "$EMAIL_FILTER" 2>/dev/null)"
+  status=$?
+  [ "$status" -eq "$NOT_SAVED" ] && return "$NOT_SAVED"
+  # Nothing from a gws that failed is kept, and nothing is cached from it.
+  [ "$status" -eq 0 ] || return 1
+  usable_email "$email" || return 1
+  printf '{"emailAddress":%s}\n' "$(printf '%s' "$email" | jq -Rs .)" \
+    | write_private "$PROFILE_FILE" || return "$NOT_SAVED"
   printf '%s' "$email"
 }
 
@@ -197,7 +339,8 @@ unread_total() {
   gws_list page users messages list --params "$(
     jq -nc --arg q "$QUERY" --argjson n 500 \
       '{userId:"me",q:$q,maxResults:$n}')"
-  ids="$(printf '%s' "$page" | jq '[.messages[]?.id | select(test("^[0-9a-f]{1,32}$"))] | length' 2>/dev/null)"
+  ids="$(printf '%s' "$page" | jq '[foreach (.messages[]? | objects | .id | strings | select(test("\\A[0-9a-f]{1,32}\\z"))) as $i
+      ({}; .[$i] += 1; if .[$i] == 1 then $i else empty end)] | length' 2>/dev/null)"
   case "$ids" in
     ''|*[!0-9]*) printf -v "$dest" '%s' "$listed" ;;
     *) printf -v "$dest" '%s' "$ids" ;;
@@ -205,7 +348,7 @@ unread_total() {
 }
 
 fill_labels_from_cache() {
-  local ids unknown fetched
+  local ids unknown fetched status
   ids="$1"
 
   unknown="$(jq -r --slurpfile cache "$CACHE_FILE" --slurpfile map "$LABEL_FILE" '
@@ -216,45 +359,69 @@ fill_labels_from_cache() {
   case "$unknown" in ''|*[!0-9]*) return 0 ;; 0) return 0 ;; esac
 
   fetched="$(gws_gmail users labels list --params '{"userId":"me"}' 2>/dev/null \
-    | jq -c '[.labels[]? | select(.type == "user")
-              | {key: .id, value: (.name | split("/") | last)}] | from_entries' 2>/dev/null)"
-  [ -n "$fetched" ] && printf '%s\n' "$fetched" | write_private "$LABEL_FILE"
+    | jq -cs 'select(length == 1 and (.[0] | type) == "object" and (.[0].labels | type) == "array")
+              | [.[0].labels[] | objects | select(.type == "user")
+              | {key: (.id | tostring | .[0:64]), value: ((.name // "") | tostring | split("/") | last | strings | .[0:60])}]
+              | .[0:10000] | from_entries' 2>/dev/null)"
+  status=$?
+  [ "$status" -eq "$NOT_SAVED" ] && return "$NOT_SAVED"
+  # Labels from a gws that failed are not cached; rows just show none.
+  [ "$status" -eq 0 ] || return 0
+  [ -n "$fetched" ] || return 0
+  printf '%s\n' "$fetched" | write_private "$LABEL_FILE" || return "$NOT_SAVED"
 }
 
 fill_cache() {
-  local ids missing tmp id
+  local ids missing parts_prefix="$RUN_FILES.part" id
   missing="$(jq -r --slurpfile cache "$CACHE_FILE" '
       .[] | select($cache[0][.] == null)
     ' <<<"$1" 2>/dev/null)"
   [ -n "$missing" ] || return 0
 
-  tmp="$(mktemp -d "${TMPDIR:-/tmp}/omarchy-you-got-mail.XXXXXX")" || return 0
-
   # Single-quoted so this shell does not expand $1/$id; xargs passes them in.
   # shellcheck disable=SC2016
   local fetch_one='
       id="$1"
-      out="$2"
+      out="$2.$1"
+      too_large="$3"
       params=$(jq -nc --arg id "$id" \
         "{userId:\"me\",id:\$id,format:\"metadata\",metadataHeaders:[\"Subject\",\"From\"]}")
+      # A part that cannot be saved (a full disk) fails the worker, and
+      # with it the check, rather than leaving the message without details.
       gws gmail users messages get --params "$params" 2>/dev/null \
-        | jq -c "{(.id): {
-              subject: ((.payload.headers // [] | map(select(.name == \"Subject\")) | .[0].value) // \"\"),
-              from: ((.payload.headers // [] | map(select(.name == \"From\")) | .[0].value) // \"\"),
-              snippet: (.snippet // \"\"),
-              ts: ((.internalDate // \"0\") | tonumber? // 0),
-              threadId: (.threadId // .id),
-              lab: [(.labelIds // [])[] | select(startswith(\"Label_\"))]
-            }}" > "$out/$id.json" 2>/dev/null
+        | head -c "$((GWS_MAX_BYTES + 1))" > "$out.raw"
+      status=("${PIPESTATUS[@]}")
+      [ "${status[1]}" -eq 0 ] || exit 1
+      # Size first: head stopping an oversized reply also makes gws fail.
+      if [ "$(wc -c < "$out.raw")" -gt "$GWS_MAX_BYTES" ]; then
+        rm -f "$out.raw"
+        : > "$too_large" || exit 1
+        exit 0
+      fi
+      # A gws that failed leaves the message without details, as before.
+      if [ "${status[0]}" -ne 0 ]; then
+        rm -f "$out.raw"
+        exit 0
+      fi
+      parsed=$(jq -c -s --arg id "$id" "$ENTITY_JQ $DETAILS_JQ" < "$out.raw" 2>/dev/null)
+      rm -f "$out.raw"
+      [ -n "$parsed" ] || exit 0
+      printf "%s\n" "$parsed" > "$out.json" || exit 1
     '
 
   while IFS= read -r id; do
     valid_id "$id" || continue
     printf '%s\n' "$id"
-  done <<<"$missing" | xargs -r -P 6 -I {} bash -c "$fetch_one" _ {} "$tmp"
+  done <<<"$missing" | xargs -r -P 6 -I {} bash -c "$fetch_one" _ {} "$parts_prefix" "$TOO_LARGE"
+  if [ "${PIPESTATUS[1]}" -ne 0 ]; then
+    rm -f -- "$parts_prefix".*
+    gmail_error "could not save message details"
+  fi
+
+  fail_if_too_large
 
   shopt -s nullglob
-  local parts=("$tmp"/*.json)
+  local parts=("$parts_prefix".*.json)
   if (( ${#parts[@]} > 0 )); then
     local merged
     merged="$(jq -s '
@@ -265,11 +432,14 @@ fill_cache() {
         | .[0:1000]
         | from_entries
       ' "$CACHE_FILE" "${parts[@]}" 2>/dev/null)"
-    [ -n "$merged" ] && printf '%s\n' "$merged" | write_private "$CACHE_FILE"
+    if [ -z "$merged" ] || ! printf '%s\n' "$merged" | write_private "$CACHE_FILE"; then
+      rm -f -- "$parts_prefix".*
+      gmail_error "could not save message details"
+    fi
   fi
   shopt -u nullglob
 
-  rm -rf -- "$tmp"
+  rm -f -- "$parts_prefix".*
 }
 
 render() {
@@ -286,19 +456,11 @@ render() {
     --arg next "$next" \
     --arg current "$current" \
     --arg search "$search" \
-    --arg authuser "$email" '
-    def entity:
-      gsub("&lt;";"<") | gsub("&gt;";">") | gsub("&quot;";"\"")
-      | gsub("&#39;";"'"'"'") | gsub("&nbsp;";" ") | gsub("&amp;";"&")
-      | gsub("[\\r\\n\\t]+"; " ") | gsub(" +"; " ")
-      | ltrimstr(" ") | rtrimstr(" ");
+    --arg authuser "$email" "$ENTITY_JQ"'
+    # Entries cached since v2 are decoded (and the sender taken) once, when
+    # fetched; older ones here.
+    def decoded($m): if $m.v == 2 then . else entity end;
 
-    def sender:
-      . as $raw
-      | (capture("^\\s*\"?(?<name>[^\"<]*?)\"?\\s*<(?<addr>[^>]+)>\\s*$") // null) as $m
-      | if $m == null then ($raw | ltrimstr(" ") | rtrimstr(" "))
-        elif ($m.name | length) > 0 then $m.name
-        else $m.addr end;
 
     def mail_url($thread):
       if ($authuser | test("^[A-Za-z0-9._+-]+@[A-Za-z0-9.-]+\\.[A-Za-z]{2,}$")) then
@@ -308,7 +470,8 @@ render() {
       end;
 
     ($labelmap[0] // {}) as $names
-    | def mine: [ .[] | $names[.] | select(. != null) ];
+    # Bounded here too, for names an older cache holds at any length.
+    | def mine: [ .[] | $names[.] | strings | .[0:60] ][0:10];
 
     ($cache[0] // {}) as $c
     | {
@@ -322,14 +485,15 @@ render() {
           $ids[]
           | . as $id
           | ($c[$id] // {}) as $m
-          | ($m.threadId // $id) as $thread
+          # A thread id is used whole or not at all: a cut one opens elsewhere.
+          | (($m.threadId | strings | select(test("\\A[0-9a-f]{1,32}\\z"))) // $id) as $thread
           | {
               id: $id,
               threadId: $thread,
-              subject: ((($m.subject // "") | entity) as $s
+              subject: ((($m.subject // "") | tostring | decoded($m)) as $s
                         | if ($s | length) > 0 then $s else "(no subject)" end),
-              from: (($m.from // "") | entity | sender),
-              snippet: (($m.snippet // "") | entity),
+              from: (($m.from // "") | tostring | if $m.v == 2 then . else (entity | sender) end),
+              snippet: (($m.snippet // "") | tostring | decoded($m)),
               ts: (($m.ts // 0) / 1000 | floor),
               labels: (($m.lab // []) | mine),
               url: mail_url($thread)
@@ -339,7 +503,7 @@ render() {
 }
 
 cmd_list() {
-  local token="" max page ids next unread email listed
+  local token="" max page all_ids ids next unread email listed
 
   while [ $# -gt 0 ]; do
     case "$1" in
@@ -354,19 +518,28 @@ cmd_list() {
   gws_list page users messages list --params "$(
     jq -nc --arg q "$QUERY" --argjson n "$max" --arg t "$token" \
       '{userId:"me",q:$q,maxResults:$n} + (if $t == "" then {} else {pageToken:$t} end)')"
-  ids="$(printf '%s' "$page" | jq -c '[.messages[]?.id | select(test("^[0-9a-f]{1,32}$"))]' 2>/dev/null)"
-  [ -n "$ids" ] || ids='[]'
-  next="$(printf '%s' "$page" | jq -r '.nextPageToken // empty' 2>/dev/null)"
-  case "$next" in *[!A-Za-z0-9_-]*) next="" ;; esac
+  all_ids="$(printf '%s' "$page" | jq -c '[foreach (.messages[]? | objects | .id | strings | select(test("\\A[0-9a-f]{1,32}\\z"))) as $i
+      ({}; .[$i] += 1; if .[$i] == 1 then $i else empty end)]' 2>/dev/null)"
+  [ -n "$all_ids" ] || all_ids='[]'
+  # Counted whole, for the unread total; no more than were asked for are
+  # looked up and shown, however many the reply holds.
+  listed="$(printf '%s' "$all_ids" | jq 'length')"
+  ids="$(printf '%s' "$all_ids" | jq -c --argjson n "$max" '.[0:$n]')"
+  page_token next "$page" || gmail_error "Gmail sent an unusable page token"
 
-  listed="$(printf '%s' "$ids" | jq 'length')"
   unread_total unread "$listed" "$next" "$token"
-  email="$(account_email)" || email=""
+  email="$(account_email)"
+  case "$?" in
+    0) ;;
+    "$NOT_SAVED") fail_not_saved ;;
+    *) email="" ;;
+  esac
 
   ensure_json_object "$CACHE_FILE"
   ensure_json_object "$LABEL_FILE"
   fill_cache "$ids"
-  fill_labels_from_cache "$ids"
+  fill_labels_from_cache "$ids" || fail_not_saved
+  fail_if_too_large
   render "$ids" "$unread" "$email" "$next" "$token"
 }
 
@@ -392,12 +565,15 @@ cmd_read_all() {
     gws_list page users messages list --params "$(
       jq -nc --arg q "$QUERY" --argjson n 500 --arg t "$token" \
         '{userId:"me",q:$q,maxResults:$n} + (if $t == "" then {} else {pageToken:$t} end)')"
-    ids="$(printf '%s' "$page" | jq -c '[.messages[]?.id | select(test("^[0-9a-f]{1,32}$"))]' 2>/dev/null)"
+    ids="$(printf '%s' "$page" | jq -c '[foreach (.messages[]? | objects | .id | strings | select(test("\\A[0-9a-f]{1,32}\\z"))) as $i
+      ({}; .[$i] += 1; if .[$i] == 1 then $i else empty end)]' 2>/dev/null)"
     [ -n "$ids" ] || ids='[]'
-    all="$(jq -nc --argjson a "$all" --argjson b "$ids" \
-      'reduce $b[] as $id ($a; if index($id) then . else . + [$id] end)')"
-    next="$(printf '%s' "$page" | jq -r '.nextPageToken // empty' 2>/dev/null)"
-    case "$next" in *[!A-Za-z0-9_-]*) next="" ;; esac
+    # Through stdin: the collected ids outgrow what one argument can carry.
+    all="$(printf '%s\n%s\n' "$all" "$ids" | jq -cs '(.[0] + .[1]) | unique')" \
+      || fail_read_all "$marked" "could not collect unread mail"
+    # A token that is there but unusable is not the last page: stop before
+    # marking only part of the mail.
+    page_token next "$page" || fail_read_all 0 "Gmail sent an unusable page token"
     [ -z "$next" ] && break
     case "$seen" in
       *"|$next|"*) die "gmail repeated a page token" ;;

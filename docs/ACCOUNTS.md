@@ -392,8 +392,10 @@ $PLUGIN list
 ```
 
 `list` prints one JSON object. `unread` is the badge; each message has
-`account`, `subject`, `from`, `snippet`, and an HTTPS `url` or an empty URL
-(for example, IMAP without webmail). The `inboxes` array identifies each
+`account`, `subject`, `from`, `snippet`, and an HTTPS `url`, an empty URL
+(for example, IMAP without webmail), or `invalid:` when the provider sent a
+link the browser could not open. Clicking a row with `invalid:` does
+nothing, so the message stays unread. The `inboxes` array identifies each
 account and includes `checkedAt` Unix seconds only for successful checks.
 
 ## Revoking access

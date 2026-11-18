@@ -198,14 +198,36 @@ Panel {
   readonly property bool showAlertBadge: hasAlert && (unread === 0 || !reachable)
   readonly property color alertColor: bar ? bar.urgent : Color.urgent
 
-  readonly property int badgeWidth: (badgeCount > 0 || showAlertBadge)
-    ? Math.max(Style.space(12), String(showAlertBadge ? "!" : badgeCount).length * Style.space(6) + Style.space(8))
+  readonly property bool badgeShown: badgeCount > 0 || showAlertBadge
+  readonly property bool barVertical: bar ? bar.vertical : false
+  // A vertical bar has room for three digits; the tooltip keeps the count.
+  readonly property string badgeText: showAlertBadge ? "!" : (barVertical && badgeCount > 999 ? "1k+" : String(badgeCount))
+  readonly property int badgeWidth: badgeShown
+    ? Math.max(Style.space(12), badgeText.length * Style.space(6) + Style.space(8))
     : 0
-  readonly property int barContentWidth: Style.bar.iconFont + badgeWidth + Style.space(5)
-  readonly property int barSlot: barContentWidth + Style.space(10)
+  readonly property int badgeHeight: Style.space(12)
+  readonly property int barThickness: bar ? bar.barSize : Style.bar.sizeHorizontal
+  // The mailbox is the button's icon and the badge sits beside it, or under
+  // it on a vertical bar. Omarchy 4.5 fits a button's whole icon into the
+  // bar's icon size, so a badge drawn inside the icon would shrink with it.
+  readonly property int badgeExtent: badgeShown
+    ? (barVertical ? badgeHeight : badgeWidth) + Style.space(5)
+    : 0
+  readonly property int barSlot: Style.bar.iconFont + Style.space(15) + badgeExtent
+  readonly property int iconExtent: barSlot - badgeExtent
 
-  implicitWidth: bar && bar.vertical ? (bar ? bar.barSize : Style.bar.sizeHorizontal) : barSlot
-  implicitHeight: bar && bar.vertical ? barSlot : (bar ? bar.barSize : Style.bar.sizeHorizontal)
+  implicitWidth: barVertical ? barThickness : barSlot
+  implicitHeight: barVertical ? barSlot : barThickness
+
+  function barPressed(b) {
+    if (b === Qt.RightButton) {
+      root.openSearch()
+    } else if (b === Qt.MiddleButton) {
+      root.refresh()
+    } else {
+      root.toggle()
+    }
+  }
 
   function validToken(t) {
     return typeof t === "string" && /^[A-Za-z0-9_-]{1,512}$/.test(t)
@@ -303,8 +325,12 @@ Panel {
     if (!(n > 0)) n = 25
     return Math.max(1, Math.min(50, n))
   }
+  // 0 turns timed checks off: mail is still checked at start, on open, and
+  // on refresh. Anything else that is not a number means the default.
   readonly property int refreshMs: {
-    var n = parseInt(setting("refreshIntervalSec", 60), 10)
+    var raw = setting("refreshIntervalSec", 60)
+    if (raw === 0 || raw === "0") return 0
+    var n = parseInt(raw, 10)
     if (!(n > 0)) n = 60
     return Math.max(15, Math.min(3600, n)) * 1000
   }
@@ -677,7 +703,12 @@ Panel {
     }
   }
 
-  Component.onCompleted: now = Date.now() / 1000
+  // The bar passes this widget's settings in after it loads, so the first
+  // check waits a turn to see them, whatever the interval is.
+  Component.onCompleted: {
+    now = Date.now() / 1000
+    Qt.callLater(root.refresh)
+  }
 
   Process {
     id: listProc
@@ -716,10 +747,9 @@ Panel {
   }
 
   Timer {
-    interval: root.refreshMs
-    running: true
+    interval: Math.max(15000, root.refreshMs)
+    running: root.refreshMs > 0
     repeat: true
-    triggeredOnStart: true
     onTriggered: {
       root.now = Date.now() / 1000
       root.refresh()
@@ -742,61 +772,63 @@ Panel {
 
   BarIconButton {
     id: button
-    anchors.fill: parent
     bar: root.bar
+    width: root.barVertical ? root.width : root.iconExtent
+    height: root.barVertical ? root.iconExtent : root.height
     opacity: root.hasAlert ? 0.5 : 1
-    slotSize: root.barSlot
-    opticalSize: root.barContentWidth
+    slotSize: root.iconExtent
     tooltipText: root.barTooltip()
 
     iconComponent: Component {
-      Item {
-        Row {
-          anchors.centerIn: parent
-          spacing: Style.space(5)
-
-          MailSlotIcon {
-            anchors.verticalCenter: parent.verticalCenter
-            iconSize: Style.bar.iconCanvas
-            color: button.foreground
-            flagColor: button.foreground
-            hasMail: root.hasUnread && root.reachable
-          }
-
-          Rectangle {
-            anchors.verticalCenter: parent.verticalCenter
-            visible: root.badgeCount > 0 || root.showAlertBadge
-            height: Style.space(12)
-            width: root.badgeWidth
-            radius: height / 2
-            color: root.showAlertBadge
-              ? Qt.rgba(root.alertColor.r, root.alertColor.g, root.alertColor.b, 0.18)
-              : Qt.rgba(button.foreground.r, button.foreground.g,
-                        button.foreground.b, 0.14)
-
-            Text {
-              anchors.centerIn: parent
-              text: root.showAlertBadge ? "!" : root.badgeCount
-              textFormat: Text.PlainText
-              font.family: root.fontFamily
-              font.pixelSize: Style.font.caption
-              renderType: Text.NativeRendering
-              color: root.showAlertBadge ? root.alertColor : button.foreground
-            }
-          }
-        }
+      MailSlotIcon {
+        iconSize: Style.bar.iconCanvas
+        color: button.foreground
+        flagColor: button.foreground
+        hasMail: root.hasUnread && root.reachable
       }
     }
 
-    onPressed: function(b) {
-      if (b === Qt.RightButton) {
-        root.openSearch()
-      } else if (b === Qt.MiddleButton) {
-        root.refresh()
-      } else {
-        root.toggle()
+    onPressed: function(b) { root.barPressed(b) }
+  }
+
+  // A bar button of its own, so the bar forwards clicks to it while the
+  // panel is open and shows the same tooltip as the mailbox.
+  WidgetButton {
+    id: badgeArea
+    bar: root.bar
+    x: root.barVertical ? 0 : button.width
+    y: root.barVertical ? button.height : 0
+    fixedWidth: root.barVertical ? root.width : root.badgeExtent
+    fixedHeight: root.barVertical ? root.badgeExtent : root.height
+    width: fixedWidth
+    height: fixedHeight
+    labelVisible: false
+    hasVisualContent: root.badgeShown
+    opacity: button.opacity
+    tooltipText: button.tooltipText
+
+    Rectangle {
+      x: root.barVertical ? (parent.width - width) / 2 : 0
+      y: root.barVertical ? 0 : (parent.height - height) / 2
+      width: root.badgeWidth
+      height: root.badgeHeight
+      radius: height / 2
+      color: root.showAlertBadge
+        ? Qt.rgba(root.alertColor.r, root.alertColor.g, root.alertColor.b, 0.18)
+        : Qt.rgba(button.foreground.r, button.foreground.g, button.foreground.b, 0.14)
+
+      Text {
+        anchors.centerIn: parent
+        text: root.badgeText
+        textFormat: Text.PlainText
+        font.family: root.fontFamily
+        font.pixelSize: Style.font.caption
+        renderType: Text.NativeRendering
+        color: root.showAlertBadge ? root.alertColor : button.foreground
       }
     }
+
+    onPressed: function(b) { root.barPressed(b) }
   }
 
   KeyboardPanel {

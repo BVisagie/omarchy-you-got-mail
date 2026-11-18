@@ -3,13 +3,18 @@
 from __future__ import annotations
 
 import json
+import math
 import os
+import re
 import subprocess
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from urllib.parse import urlsplit
 
 from common import (
     FETCH_CAP,
+    Cancelled,
+    ResponseTooLargeError,
     account_error,
     classify_account_error,
     decode_id,
@@ -19,12 +24,167 @@ from common import (
     load_accounts,
     max_messages,
     needs_sign_in,
+    one_line,
     provider_path,
+    run_capped,
     secret_path,
+    stop_active,
 )
 
 LIST_TIMEOUT = 45
 READ_ALL_TIMEOUT = 120
+
+# Provider output is data from a mail server or another program. Everything
+# the panel draws or acts on is checked and cut to size here, once, so one
+# odd value can neither fail the other accounts nor flood the panel.
+MAX_COUNT = 10_000_000
+MAX_TS = 4_102_444_800  # 2100-01-01
+MAX_ID = 512
+MAX_URL = 2048
+MAX_TEXT = 300
+MAX_SNIPPET = 400
+MAX_ERROR = 500
+MAX_LABELS = 10
+MAX_LABEL = 60
+MAX_PROVIDER_OUTPUT = 16 * 1024 * 1024
+
+
+def _bounded_int(value, ceiling: int) -> int:
+    """A whole number in 0..ceiling; anything that is not a number is 0."""
+    if isinstance(value, bool):
+        return 0
+    if isinstance(value, int):
+        number = value
+    elif isinstance(value, float) and math.isfinite(value):
+        number = int(value)
+    elif isinstance(value, str) and value.strip().isascii():
+        try:
+            number = int(value.strip())
+        except ValueError:
+            return 0
+    else:
+        return 0
+    return min(max(number, 0), ceiling)
+
+
+def _count(value) -> int:
+    return _bounded_int(value, MAX_COUNT)
+
+
+def _ts(value) -> int:
+    ts = _bounded_int(value, MAX_TS + 1)
+    return ts if ts <= MAX_TS else 0
+
+
+def _clean(value: str) -> str:
+    # JSON can carry a lone surrogate, which cannot be written back out.
+    return value.encode("utf-8", "replace").decode("utf-8")
+
+
+def _text(value, limit: int) -> str:
+    if isinstance(value, bool) or not isinstance(value, (str, int, float)):
+        return ""
+    return one_line(_clean(str(value)), limit)
+
+
+# The panel opens only links of this shape (MailState.validUrl); anything else
+# is unusable here too, so the CLI and the panel agree. JavaScript's \s also
+# covers U+FEFF, which Python's does not, and its \d is ASCII only.
+PANEL_URL = re.compile(r"https://[A-Za-z0-9.-]+(?::[0-9]+)?(?:[/?#][^\s\ufeff]*)?")
+
+# A link that is present but unusable stays unusable: an empty link would let
+# a click mark the message read without opening anything.
+BAD_URL = "invalid:"
+
+
+def _url(value) -> str:
+    if value is None or value == "":
+        return ""
+    if not isinstance(value, str):
+        return BAD_URL
+    try:
+        value.encode("utf-8")  # a lone surrogate would be rewritten, not kept
+    except UnicodeEncodeError:
+        return BAD_URL
+    url = value
+    # A control character cannot travel whole to the browser, so a link
+    # carrying one, even at its end, is not opened.
+    if len(url) > MAX_URL or not PANEL_URL.fullmatch(url) or any(
+        ord(ch) < 0x20 or ord(ch) == 0x7F for ch in url
+    ):
+        return BAD_URL
+    # A host and, if given, a port the browser can use.
+    try:
+        parts = urlsplit(url)
+        parts.port
+    except ValueError:
+        return BAD_URL
+    host = parts.hostname
+    if not host:
+        return BAD_URL
+    # A browser reads a host whose last label is a number as an IPv4 address,
+    # so it must be one the browser can parse.
+    last = host.rstrip(".").rsplit(".", 1)[-1]
+    if re.fullmatch(r"[0-9]+|0[xX][0-9a-fA-F]*", last) and not _browser_ipv4(host):
+        return BAD_URL
+    return url
+
+
+def _browser_ipv4(host: str) -> bool:
+    """The WHATWG URL IPv4 parser: 1 to 4 parts, each decimal, 0x hex or
+    0-led octal, the last filling the bytes the others leave (127.1 is
+    127.0.0.1)."""
+    parts = host.split(".")
+    if len(parts) > 1 and parts[-1] == "":
+        parts.pop()
+    if not 1 <= len(parts) <= 4:
+        return False
+    numbers = []
+    for part in parts:
+        if re.fullmatch(r"0[xX][0-9a-fA-F]*", part):
+            numbers.append(int(part[2:] or "0", 16))
+        elif re.fullmatch(r"0[0-7]+", part):
+            numbers.append(int(part, 8))
+        elif re.fullmatch(r"0|[1-9][0-9]*", part):
+            numbers.append(int(part))
+        else:
+            return False
+    if any(number > 255 for number in numbers[:-1]):
+        return False
+    return numbers[-1] < 256 ** (5 - len(numbers))
+
+
+def _search_url(value) -> str:
+    # An inbox link has no read side effect, so an unusable one is just absent.
+    url = _url(value)
+    return "" if url == BAD_URL else url
+
+
+def _error(payload: dict, fallback: str) -> str:
+    return _text(payload.get("error"), MAX_ERROR) or fallback
+
+
+def _each(accounts: list[dict], work) -> list:
+    """work(account) for every account, up to 8 at once; the results in the
+    order they finished.
+
+    Providers run in sessions of their own, out of reach of a terminal's
+    Ctrl+C, and the pool would wait for them, still reading or marking mail.
+    So an interrupt at any point, while submitting or collecting, cancels the
+    accounts still queued and stops the providers running before it waits.
+    """
+    # All results are gathered before the caller sees any, so what the caller
+    # does with them, even exiting, cannot look like an interrupt here.
+    pool = ThreadPoolExecutor(max_workers=min(8, len(accounts)))
+    try:
+        futures = [pool.submit(work, acc) for acc in accounts]
+        results = [future.result() for future in as_completed(futures)]
+    except BaseException:
+        stop_active()  # and no account that slips through can start one
+        pool.shutdown(wait=True, cancel_futures=True)
+        raise
+    pool.shutdown(wait=True)
+    return results
 
 
 def _run_provider(account: dict, args: list[str], timeout: int = LIST_TIMEOUT) -> dict:
@@ -36,43 +196,74 @@ def _run_provider(account: dict, args: list[str], timeout: int = LIST_TIMEOUT) -
     env["YOU_GOT_MAIL_MAX"] = os.environ.get("YOU_GOT_MAIL_MAX", str(max_messages()))
     env["YOU_GOT_MAIL_FETCH"] = os.environ.get("YOU_GOT_MAIL_FETCH", env["YOU_GOT_MAIL_MAX"])
     try:
-        proc = subprocess.run(
-            [str(provider_path(provider)), *args],
-            capture_output=True,
-            text=True,
-            env=env,
-            timeout=timeout,
-            check=False,
+        proc = run_capped(
+            [str(provider_path(provider)), *args], env, timeout, MAX_PROVIDER_OUTPUT
         )
     except subprocess.TimeoutExpired:
         return {"ok": False, "error": f"{account['id']}: timed out"}
-    except OSError as exc:
+    except ResponseTooLargeError:
+        return {"ok": False, "error": f"{account['id']}: provider sent more output than expected"}
+    except Cancelled:
+        return {"ok": False, "error": f"{account['id']}: stopped"}
+    except (OSError, ValueError) as exc:
         return {"ok": False, "error": f"{account['id']}: {exc}"}
     text = (proc.stdout or "").strip()
     if not text:
-        err = (proc.stderr or "").strip()
+        err = _text(proc.stderr, MAX_ERROR)
         return {"ok": False, "error": f"{account['id']}: {err or 'no output'}"}
     try:
-        payload = json.loads(text.splitlines()[-1])
-    except json.JSONDecodeError:
+        payload = json.loads(text.rsplit("\n", 1)[-1])
+    except (ValueError, RecursionError):
         return {"ok": False, "error": f"{account['id']}: provider returned invalid JSON"}
     if not isinstance(payload, dict):
         return {"ok": False, "error": f"{account['id']}: provider returned invalid JSON"}
-    if proc.returncode != 0 and payload.get("ok"):
+    # Only a JSON true is success; "false" and 1 are not.
+    payload["ok"] = payload.get("ok") is True
+    if proc.returncode != 0 and payload["ok"]:
         return {"ok": False, "error": f"{account['id']}: provider exited {proc.returncode}"}
     return payload
 
 
-def _tag_messages(account: dict, payload: dict) -> list[dict]:
-    label = str(account.get("label") or account["id"])
+def _tag_messages(account: dict, payload: dict, limit: int) -> list[dict]:
+    label = _text(account.get("label") or account["id"], MAX_TEXT)
+    rows = payload.get("messages")
     tagged = []
-    for msg in payload.get("messages") or []:
-        if not isinstance(msg, dict) or not msg.get("id"):
+    for msg in rows if isinstance(rows, list) else []:
+        if len(tagged) >= limit:
+            break
+        if not isinstance(msg, dict):
             continue
-        item = dict(msg)
-        item["id"] = encode_id(account["id"], str(msg["id"]))
-        item["account"] = label
-        tagged.append(item)
+        local_id = msg.get("id")
+        if isinstance(local_id, bool) or not isinstance(local_id, (str, int)):
+            continue
+        local_id = str(local_id)
+        # NUL cannot travel back as a command argument when the row is read.
+        if not local_id or "\x00" in local_id:
+            continue
+        # The panel takes ids whose encoded part fits MAX_ID characters.
+        try:
+            opaque = encode_id(account["id"], local_id)
+        except UnicodeEncodeError:
+            continue
+        if len(opaque.split(":", 1)[1]) > MAX_ID:
+            continue
+        labels = msg.get("labels")
+        tagged.append(
+            {
+                "id": opaque,
+                "account": label,
+                "subject": _text(msg.get("subject"), MAX_TEXT),
+                "from": _text(msg.get("from"), MAX_TEXT),
+                "snippet": _text(msg.get("snippet"), MAX_SNIPPET),
+                "ts": _ts(msg.get("ts")),
+                "url": _url(msg.get("url")),
+                "labels": [
+                    _text(lab, MAX_LABEL)
+                    for lab in (labels if isinstance(labels, list) else [])[:MAX_LABELS]
+                    if _text(lab, MAX_LABEL)
+                ],
+            }
+        )
     return tagged
 
 
@@ -99,31 +290,40 @@ def cmd_list(page_token: str) -> None:
     emails = []
     payloads: dict[str, dict] = {}
 
+    # Each worker keeps only the checked, bounded part of its reply, so what
+    # is held until every account finishes does not grow with reply size.
     def work(acc: dict) -> tuple[dict, dict, float]:
         payload = _run_provider(acc, ["list", "--limit", fetch])
-        return acc, payload, time.time()
+        if not payload.get("ok"):
+            return acc, {"ok": False, "error": _error(payload, "failed")}, time.time()
+        summary = {
+            "ok": True,
+            "unread": _count(payload.get("unread")),
+            "email": _text(payload.get("email"), MAX_TEXT),
+            "searchUrl": _search_url(payload.get("searchUrl")),
+            "rows": _tag_messages(acc, payload, int(fetch)),
+        }
+        return acc, summary, time.time()
 
     checked_at: dict[str, float] = {}
-    with ThreadPoolExecutor(max_workers=min(8, len(accounts))) as pool:
-        futures = [pool.submit(work, acc) for acc in accounts]
-        for fut in as_completed(futures):
-            acc, payload, finished_at = fut.result()
-            if not payload.get("ok"):
-                msg = account_error(acc, str(payload.get("error") or "failed"))
-                errors.append(msg)
-                error_by_id[acc["id"]] = msg
-                continue
-            payloads[acc["id"]] = payload
-            checked_at[acc["id"]] = finished_at
-            unread += int(payload.get("unread") or 0)
-            if payload.get("email"):
-                emails.append(str(payload["email"]))
-            merged.extend(_tag_messages(acc, payload))
+    for acc, payload, finished_at in _each(accounts, work):
+        if not payload["ok"]:
+            msg = account_error(acc, payload["error"])
+            errors.append(msg)
+            error_by_id[acc["id"]] = msg
+            continue
+        payloads[acc["id"]] = payload
+        checked_at[acc["id"]] = finished_at
+        # QML holds the total in a 32-bit int.
+        unread = min(unread + payload["unread"], MAX_COUNT)
+        if payload["email"]:
+            emails.append(payload["email"])
+        merged.extend(payload["rows"])
 
     inboxes = []
     signin = False
     for acc in accounts:
-        label = str(acc.get("label") or acc["id"])
+        label = _text(acc.get("label") or acc["id"], MAX_TEXT)
         payload = payloads.get(acc["id"])
         if payload:
             inboxes.append(
@@ -131,8 +331,8 @@ def cmd_list(page_token: str) -> None:
                     "id": acc["id"],
                     "account": label,
                     "checkedAt": checked_at[acc["id"]],
-                    "unread": int(payload.get("unread") or 0),
-                    "searchUrl": str(payload.get("searchUrl") or ""),
+                    "unread": payload["unread"],
+                    "searchUrl": payload["searchUrl"],
                     "ok": True,
                     "needsSignIn": False,
                 }
@@ -175,7 +375,7 @@ def cmd_list(page_token: str) -> None:
         )
         return
 
-    merged.sort(key=lambda m: int(m.get("ts") or 0), reverse=True)
+    merged.sort(key=lambda m: m["ts"], reverse=True)
     chunk = merged[start : start + per]
     # A message in the global top N must be in each account's top N, so
     # fetching `start + per` from every provider is enough for this page.
@@ -213,9 +413,15 @@ def cmd_read(opaque: str) -> None:
     acc = accounts.get(account_id)
     if not acc:
         die("unknown account")
-    payload = _run_provider(acc, ["read", local_id])
-    if not payload.get("ok"):
-        die(str(payload.get("error") or "could not mark as read"))
+    # Through _each like the others: the provider runs on a worker thread,
+    # which a signal never interrupts, and an interrupt here stops it.
+    def work(acc: dict) -> dict:
+        payload = _run_provider(acc, ["read", local_id])
+        return {"ok": bool(payload.get("ok")), "error": _error(payload, "could not mark as read")}
+
+    (result,) = _each([acc], work)
+    if not result["ok"]:
+        die(result["error"])
     emit({"ok": True})
 
 
@@ -225,18 +431,21 @@ def cmd_read_all() -> None:
     marked = 0
     succeeded = 0
 
+    # Only what the totals need is kept until every account finishes.
     def work(acc: dict) -> tuple[dict, dict]:
-        return acc, _run_provider(acc, ["read-all"], timeout=READ_ALL_TIMEOUT)
+        payload = _run_provider(acc, ["read-all"], timeout=READ_ALL_TIMEOUT)
+        return acc, {
+            "ok": bool(payload.get("ok")),
+            "marked": _count(payload.get("marked")),
+            "error": _error(payload, "failed"),
+        }
 
-    with ThreadPoolExecutor(max_workers=min(8, len(accounts))) as pool:
-        futures = [pool.submit(work, acc) for acc in accounts]
-        for fut in as_completed(futures):
-            acc, payload = fut.result()
-            marked += int(payload.get("marked") or 0)
-            if payload.get("ok"):
-                succeeded += 1
-                continue
-            errors.append(account_error(acc, str(payload.get("error") or "failed")))
+    for acc, payload in _each(accounts, work):
+        marked = min(marked + payload["marked"], MAX_COUNT)
+        if payload["ok"]:
+            succeeded += 1
+            continue
+        errors.append(account_error(acc, payload["error"]))
 
     signin = any(needs_sign_in(e) for e in errors)
     if succeeded == 0:
