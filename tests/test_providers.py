@@ -1024,6 +1024,36 @@ class GmailProviderProcessTests(unittest.TestCase):
             self.assertFalse(payload["ok"], token)
             self.assertEqual(batches, [], token)
 
+    def test_read_all_refuses_a_later_page_with_null_messages(self) -> None:
+        payload = self._run(
+            'case " $* " in\n'
+            "  *pageToken*) printf '{\"messages\":null}\\n' ;;\n"
+            "  *\" messages list \"*) printf '{\"messages\":[{\"id\":\"abc1\"}],\"nextPageToken\":\"p2\"}\\n' ;;\n"
+            '  *" batchModify "*) echo marked >> "$XDG_CACHE_HOME/batches.log"; printf \'{}\\n\' ;;\n'
+            "  *) printf '{}\\n' ;;\n"
+            "esac\n",
+            "read-all",
+        )
+        self.assertFalse(payload["ok"])
+        self.assertEqual(payload.get("marked", 0), 0)
+
+    def test_nothing_from_a_failed_lookup_is_used(self) -> None:
+        payload = self._run(
+            'case " $* " in\n'
+            "  *\" users getProfile \"*) printf '{\"emailAddress\":\"other@gmail.com\"}\\n'; exit 2 ;;\n"
+            "  *\" messages list \"*) printf '{\"messages\":[{\"id\":\"abc1\"}]}\\n' ;;\n"
+            "  *\" messages get \"*) printf '{\"id\":\"abc1\",\"threadId\":\"beef\",\"snippet\":\"x\"}\\n'; exit 2 ;;\n"
+            "  *) printf '{}\\n' ;;\n"
+            "esac\n",
+            "list",
+            "--limit",
+            "2",
+        )
+        self.assertTrue(payload["ok"], payload)
+        self.assertEqual(payload["email"], "")
+        self.assertNotIn("authuser", payload["messages"][0]["url"])
+        self.assertTrue(payload["messages"][0]["url"].endswith("#all/abc1"))
+
     def test_a_page_from_a_failed_gws_is_not_used(self) -> None:
         payload = self._run(
             'case " $* " in\n'

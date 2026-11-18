@@ -198,10 +198,10 @@ gws_list() {
   status=$?
   [ "$status" -eq "$NOT_SAVED" ] && fail_not_saved
   fail_if_too_large
-  # Exactly one JSON object, whose messages, when present, are a list; a
+  # Exactly one JSON object, whose messages key, when present, is a list; a
   # reply holding several objects, or messages of another shape, is no page.
   if printf '%s' "$out" | jq -e -s 'length == 1 and (.[0] | type) == "object"
-      and ((.[0].messages == null) or ((.[0].messages | type) == "array"))' >/dev/null 2>&1; then
+      and ((.[0] | has("messages") | not) or ((.[0].messages | type) == "array"))' >/dev/null 2>&1; then
     if printf '%s' "$out" | jq -e '.error' >/dev/null 2>&1; then
       gmail_error "$(printf '%s' "$out" | jq -r '.error.message // "could not read unread mail" | tostring | .[0:500]')"
     fi
@@ -249,7 +249,7 @@ usable_email() {
 }
 
 account_email() {
-  local cached email
+  local cached email status
   # Measured before jq reads it, like the other cache files.
   if readable_file "$PROFILE_FILE" && [ "$(wc -c <"$PROFILE_FILE")" -le 4096 ]; then
     cached="$(jq -r "$EMAIL_FILTER" "$PROFILE_FILE" 2>/dev/null)"
@@ -257,7 +257,10 @@ account_email() {
   fi
   email="$(gws_gmail users getProfile --params '{"userId":"me"}' 2>/dev/null \
     | jq -r "$EMAIL_FILTER" 2>/dev/null)"
-  [ "$?" -eq "$NOT_SAVED" ] && return "$NOT_SAVED"
+  status=$?
+  [ "$status" -eq "$NOT_SAVED" ] && return "$NOT_SAVED"
+  # Nothing from a gws that failed is kept, and nothing is cached from it.
+  [ "$status" -eq 0 ] || return 1
   usable_email "$email" || return 1
   printf '{"emailAddress":%s}\n' "$(printf '%s' "$email" | jq -Rs .)" \
     | write_private "$PROFILE_FILE" || return "$NOT_SAVED"
@@ -308,7 +311,7 @@ unread_total() {
 }
 
 fill_labels_from_cache() {
-  local ids unknown fetched
+  local ids unknown fetched status
   ids="$1"
 
   unknown="$(jq -r --slurpfile cache "$CACHE_FILE" --slurpfile map "$LABEL_FILE" '
@@ -322,7 +325,10 @@ fill_labels_from_cache() {
     | jq -c '[.labels[]? | select(.type == "user")
               | {key: (.id | tostring | .[0:64]), value: ((.name // "") | tostring | split("/") | last | strings | .[0:60])}]
               | .[0:10000] | from_entries' 2>/dev/null)"
-  [ "$?" -eq "$NOT_SAVED" ] && return "$NOT_SAVED"
+  status=$?
+  [ "$status" -eq "$NOT_SAVED" ] && return "$NOT_SAVED"
+  # Labels from a gws that failed are not cached; rows just show none.
+  [ "$status" -eq 0 ] || return 0
   [ -n "$fetched" ] || return 0
   printf '%s\n' "$fetched" | write_private "$LABEL_FILE" || return "$NOT_SAVED"
 }
@@ -345,10 +351,18 @@ fill_cache() {
       # A part that cannot be saved (a full disk) fails the worker, and
       # with it the check, rather than leaving the message without details.
       gws gmail users messages get --params "$params" 2>/dev/null \
-        | head -c "$((GWS_MAX_BYTES + 1))" > "$out.raw" || exit 1
+        | head -c "$((GWS_MAX_BYTES + 1))" > "$out.raw"
+      status=("${PIPESTATUS[@]}")
+      [ "${status[1]}" -eq 0 ] || exit 1
+      # Size first: head stopping an oversized reply also makes gws fail.
       if [ "$(wc -c < "$out.raw")" -gt "$GWS_MAX_BYTES" ]; then
         rm -f "$out.raw"
         : > "$too_large" || exit 1
+        exit 0
+      fi
+      # A gws that failed leaves the message without details, as before.
+      if [ "${status[0]}" -ne 0 ]; then
+        rm -f "$out.raw"
         exit 0
       fi
       # Each field is cut here, so a part stays a few kilobytes and the merge
