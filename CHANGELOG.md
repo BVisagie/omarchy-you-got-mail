@@ -7,6 +7,10 @@ Versions match `manifest.json`. Git tags are created at release time.
 Hardening for mail data, and the last release for Omarchy 4.0. Version 3.0.0
 needs Omarchy 4.5.
 
+- On Omarchy 4.5 the bar mailbox and its count were drawn tiny, because 4.5
+  fits a bar button's whole icon into the bar's icon size. The count now
+  sits beside the mailbox, or under it on a vertical bar, and both are full
+  size. Clicks and the tooltip work on either.
 - Everything a provider sends back is checked before the panel sees it. A
   count or time that is not a number no longer fails every account: it is
   read as 0. Subjects, senders, previews, labels, ids and links are cut to
@@ -21,7 +25,8 @@ needs Omarchy 4.5.
   repository without write access, and fails on a tracked symlink or a file
   named like an installer, both of which Omarchy or its plugin marketplace
   refuse. Dependabot proposes action updates weekly.
-- Accounts, credentials and existing settings are unchanged.
+- Accounts, credentials and existing settings are unchanged. On Omarchy 4.5,
+  run `omarchy restart shell` after updating.
 
 ## 2.9.0
 

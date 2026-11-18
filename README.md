@@ -83,8 +83,9 @@ That fast-forwards the git checkout in
 [CHANGELOG.md](CHANGELOG.md) for what changed in each release.
 
 Version 2.10.0 uses your existing accounts and widget settings; no migration
-or new sign-in is required unless a provider's login has expired. Plugin
-changes reload automatically. Last-check times start fresh after a reload.
+or new sign-in is required unless a provider's login has expired. On
+Omarchy 4.5 the shell keeps the old widget code after an update until you
+run `omarchy restart shell`. Last-check times start fresh after a reload.
 
 ## Accounts
 
