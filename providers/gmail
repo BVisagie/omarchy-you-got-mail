@@ -153,7 +153,7 @@ gws_gmail() {
   # A reply that could not be saved whole (a full disk) is no reply.
   if [ "$saved" -ne 0 ]; then
     rm -f -- "$REPLY_FILE"
-    return 1
+    return "$NOT_SAVED"
   fi
   if [ "$(wc -c <"$REPLY_FILE")" -gt "$GWS_MAX_BYTES" ]; then
     : >"$TOO_LARGE"
@@ -163,6 +163,14 @@ gws_gmail() {
   cat -- "$REPLY_FILE"
   rm -f -- "$REPLY_FILE"
   return "$rc"
+}
+
+# Returned when a reply or cache file could not be written (a full disk).
+# It survives $(...) and pipes (pipefail), so a lookup in a subshell can
+# still fail the check instead of passing for "no answer".
+NOT_SAVED=75
+fail_not_saved() {
+  gmail_error "could not write to the Gmail cache"
 }
 
 fail_if_too_large() {
@@ -177,7 +185,8 @@ gws_list() {
   local dest="$1" errfile="$CACHE_DIR/gws.err" out msg
   shift
   [[ "$dest" =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]] || die "internal error"
-  out="$(gws_gmail "$@" 2>"$errfile")" || true
+  out="$(gws_gmail "$@" 2>"$errfile")"
+  [ "$?" -eq "$NOT_SAVED" ] && fail_not_saved
   fail_if_too_large
   if printf '%s' "$out" | jq -e 'type == "object" and .error' >/dev/null 2>&1; then
     gmail_error "$(printf '%s' "$out" | jq -r '.error.message // "could not read unread mail"')"
@@ -194,7 +203,7 @@ gws_list() {
 ensure_json_object() {
   local file="$1"
   readable_file "$file" && jq -e 'type == "object"' -- "$file" >/dev/null 2>&1 && return 0
-  printf '{}\n' | write_private "$file"
+  printf '{}\n' | write_private "$file" || fail_not_saved
 }
 
 account_email() {
@@ -205,8 +214,10 @@ account_email() {
   fi
   email="$(gws_gmail users getProfile --params '{"userId":"me"}' 2>/dev/null \
     | jq -r '.emailAddress // empty' 2>/dev/null)"
+  [ "$?" -eq "$NOT_SAVED" ] && return "$NOT_SAVED"
   [ -n "$email" ] || return 1
-  printf '{"emailAddress":%s}\n' "$(printf '%s' "$email" | jq -Rs .)" | write_private "$PROFILE_FILE"
+  printf '{"emailAddress":%s}\n' "$(printf '%s' "$email" | jq -Rs .)" \
+    | write_private "$PROFILE_FILE" || return "$NOT_SAVED"
   printf '%s' "$email"
 }
 
@@ -266,7 +277,9 @@ fill_labels_from_cache() {
   fetched="$(gws_gmail users labels list --params '{"userId":"me"}' 2>/dev/null \
     | jq -c '[.labels[]? | select(.type == "user")
               | {key: .id, value: (.name | split("/") | last)}] | from_entries' 2>/dev/null)"
-  [ -n "$fetched" ] && printf '%s\n' "$fetched" | write_private "$LABEL_FILE"
+  [ "$?" -eq "$NOT_SAVED" ] && return "$NOT_SAVED"
+  [ -n "$fetched" ] || return 0
+  printf '%s\n' "$fetched" | write_private "$LABEL_FILE" || return "$NOT_SAVED"
 }
 
 fill_cache() {
@@ -329,7 +342,10 @@ fill_cache() {
         | .[0:1000]
         | from_entries
       ' "$CACHE_FILE" "${parts[@]}" 2>/dev/null)"
-    [ -n "$merged" ] && printf '%s\n' "$merged" | write_private "$CACHE_FILE"
+    if [ -z "$merged" ] || ! printf '%s\n' "$merged" | write_private "$CACHE_FILE"; then
+      rm -f -- "$parts_prefix".*
+      gmail_error "could not save message details"
+    fi
   fi
   shopt -u nullglob
 
@@ -425,12 +441,17 @@ cmd_list() {
 
   listed="$(printf '%s' "$ids" | jq 'length')"
   unread_total unread "$listed" "$next" "$token"
-  email="$(account_email)" || email=""
+  email="$(account_email)"
+  case "$?" in
+    0) ;;
+    "$NOT_SAVED") fail_not_saved ;;
+    *) email="" ;;
+  esac
 
   ensure_json_object "$CACHE_FILE"
   ensure_json_object "$LABEL_FILE"
   fill_cache "$ids"
-  fill_labels_from_cache "$ids"
+  fill_labels_from_cache "$ids" || fail_not_saved
   fail_if_too_large
   render "$ids" "$unread" "$email" "$next" "$token"
 }

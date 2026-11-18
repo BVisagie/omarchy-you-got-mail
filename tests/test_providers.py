@@ -820,6 +820,72 @@ class GmailProviderProcessTests(unittest.TestCase):
         self.assertFalse(payload["ok"])
         self.assertIn("could not save message details", payload["error"])
 
+    GWS_ONE_MESSAGE = (
+        'case " $* " in\n'
+        '  *" users getProfile "*) printf \'{"emailAddress":"you@gmail.com"}\\n\' ;;\n'
+        '  *" messages list "*) printf \'{"messages":[{"id":"abc1"}],"resultSizeEstimate":1}\\n\' ;;\n'
+        '  *" messages get "*) printf \'{"id":"abc1","snippet":"hi","payload":{"headers":[{"name":"Subject","value":"Invoice"}]}}\\n\' ;;\n'
+        "  *) printf '{}\\n' ;;\n"
+        "esac\n"
+    )
+
+    def test_a_profile_that_cannot_be_saved_fails_the_check(self) -> None:
+        real_head = shutil_which("head")
+        payload = self._run(
+            self.GWS_ONE_MESSAGE,
+            "list",
+            "--limit",
+            "5",
+            bins={"head": 'data=$(cat); [[ $data == *emailAddress* ]] && exit 1\n'
+                          f'printf "%s" "$data" | "{real_head}" "$@"\n'},
+        )
+        self.assertFalse(payload["ok"])
+        self.assertIn("could not write to the Gmail cache", payload["error"])
+
+    def test_a_message_cache_that_cannot_be_written_fails_the_check(self) -> None:
+        real_mv = shutil_which("mv")
+        payload = self._run(
+            self.GWS_ONE_MESSAGE,
+            "list",
+            "--limit",
+            "5",
+            bins={"mv": 'for last; do :; done; [[ $last == */messages.json ]] && exit 1\n'
+                        f'exec "{real_mv}" "$@"\n'},
+        )
+        self.assertFalse(payload["ok"])
+        # The empty cache it starts from cannot be written either.
+        self.assertIn("could not write to the Gmail cache", payload["error"])
+
+    def test_a_merged_message_cache_that_cannot_be_written_fails_the_check(self) -> None:
+        real_mv = shutil_which("mv")
+
+        def prepare(cache) -> None:
+            import os
+
+            cache.mkdir(parents=True, mode=0o700)
+            os.chmod(cache.parent, 0o700)
+            (cache / "messages.json").write_text("{}\n")
+            (cache / "labels.json").write_text("{}\n")
+            (cache / "messages.json").chmod(0o600)
+            (cache / "labels.json").chmod(0o600)
+
+        payload = self._run(
+            self.GWS_ONE_MESSAGE,
+            "list",
+            "--limit",
+            "5",
+            prepare=prepare,
+            bins={"mv": 'for last; do :; done; [[ $last == */messages.json ]] && exit 1\n'
+                        f'exec "{real_mv}" "$@"\n'},
+        )
+        self.assertFalse(payload["ok"])
+        self.assertIn("could not save message details", payload["error"])
+
+    def test_one_message_list_succeeds_with_its_subject(self) -> None:
+        payload = self._run(self.GWS_ONE_MESSAGE, "list", "--limit", "5")
+        self.assertTrue(payload["ok"], payload)
+        self.assertEqual(payload["messages"][0]["subject"], "Invoice")
+
     def test_oversized_profile_fails_the_check(self) -> None:
         payload = self._run(
             'case " $* " in\n'
