@@ -543,8 +543,11 @@ def run_capped(
             thread.join(1)
         raise
     finally:
-        for stream in (proc.stdout, proc.stderr):
-            stream.close()
+        # A reader still blocked (a process that escaped the stop holds the
+        # pipe) owns its stream's lock; closing it would wait as long.
+        for thread, stream in zip(threads, (proc.stdout, proc.stderr)):
+            if not thread.is_alive():
+                stream.close()
     if too_large.is_set():
         raise ResponseTooLargeError(f"printed more than {limit // (1024 * 1024)} MB")
     return subprocess.CompletedProcess(

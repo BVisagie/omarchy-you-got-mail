@@ -97,6 +97,12 @@ def _url(value) -> str:
     return url
 
 
+def _search_url(value) -> str:
+    # An inbox link has no read side effect, so an unusable one is just absent.
+    url = _url(value)
+    return "" if url == BAD_URL else url
+
+
 def _error(payload: dict, fallback: str) -> str:
     return _text(payload.get("error"), MAX_ERROR) or fallback
 
@@ -117,7 +123,7 @@ def _run_provider(account: dict, args: list[str], timeout: int = LIST_TIMEOUT) -
         return {"ok": False, "error": f"{account['id']}: timed out"}
     except ResponseTooLargeError:
         return {"ok": False, "error": f"{account['id']}: provider sent more output than expected"}
-    except OSError as exc:
+    except (OSError, ValueError) as exc:
         return {"ok": False, "error": f"{account['id']}: {exc}"}
     text = (proc.stdout or "").strip()
     if not text:
@@ -149,7 +155,8 @@ def _tag_messages(account: dict, payload: dict, limit: int) -> list[dict]:
         if isinstance(local_id, bool) or not isinstance(local_id, (str, int)):
             continue
         local_id = str(local_id)
-        if not local_id:
+        # NUL cannot travel back as a command argument when the row is read.
+        if not local_id or "\x00" in local_id:
             continue
         # The panel takes ids whose encoded part fits MAX_ID characters.
         try:
@@ -235,7 +242,7 @@ def cmd_list(page_token: str) -> None:
                     "account": label,
                     "checkedAt": checked_at[acc["id"]],
                     "unread": _count(payload.get("unread")),
-                    "searchUrl": _url(payload.get("searchUrl")).replace(BAD_URL, ""),
+                    "searchUrl": _search_url(payload.get("searchUrl")),
                     "ok": True,
                     "needsSignIn": False,
                 }

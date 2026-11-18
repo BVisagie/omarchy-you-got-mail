@@ -328,8 +328,9 @@ Panel {
   // 0 turns timed checks off: mail is still checked at start, on open, and
   // on refresh. Anything else that is not a number means the default.
   readonly property int refreshMs: {
-    var n = parseInt(setting("refreshIntervalSec", 60), 10)
-    if (n === 0) return 0
+    var raw = setting("refreshIntervalSec", 60)
+    if (raw === 0 || String(raw).trim() === "0") return 0
+    var n = parseInt(raw, 10)
     if (!(n > 0)) n = 60
     return Math.max(15, Math.min(3600, n)) * 1000
   }

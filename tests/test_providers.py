@@ -677,6 +677,22 @@ class GmailProviderProcessTests(unittest.TestCase):
         self.assertEqual(payload["email"], "you@gmail.com")
 
 
+    def test_oversized_message_details_fail_the_check(self) -> None:
+        payload = self._run(
+            'case " $* " in\n'
+            '  *" users getProfile "*) printf \'{"emailAddress":"you@gmail.com"}\\n\' ;;\n'
+            '  *" messages list "*) printf \'{"messages":[{"id":"abc1"}],"resultSizeEstimate":1}\\n\' ;;\n'
+            '  *" labels list "*) printf \'{"labels":[]}\\n\' ;;\n'
+            "  *\" messages get \"*) printf '{\"id\":\"abc1\",\"snippet\":\"'; head -c 9000000 /dev/zero | tr '\\0' a; printf '\"}\\n' ;;\n"
+            "  *) printf '{}\\n' ;;\n"
+            "esac\n",
+            "list",
+            "--limit",
+            "5",
+        )
+        self.assertFalse(payload["ok"])
+        self.assertIn("more output than expected", payload["error"])
+
     def test_oversized_gws_reply_is_refused(self) -> None:
         payload = self._run(
             'case " $* " in\n'

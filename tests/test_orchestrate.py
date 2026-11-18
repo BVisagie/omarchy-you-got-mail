@@ -48,6 +48,12 @@ class ProviderResultTests(unittest.TestCase):
             self.assertFalse(result["ok"])
             self.assertIn("invalid JSON", result["error"])
 
+    def test_argument_the_os_refuses_is_an_account_error(self) -> None:
+        with patch.object(orchestrate, "run_capped", side_effect=ValueError("embedded null byte")):
+            result = orchestrate._run_provider(_account("gmail", "gmail", "Gmail"), ["read", "a\x00"])
+        self.assertFalse(result["ok"])
+        self.assertIn("embedded null byte", result["error"])
+
     def test_oversized_provider_output_is_an_account_error(self) -> None:
         with patch.object(
             orchestrate, "run_capped", side_effect=orchestrate.ResponseTooLargeError("big")
@@ -449,7 +455,8 @@ class ProviderDataBoundsTests(unittest.TestCase):
 
     def test_bad_ids_and_urls_are_dropped(self) -> None:
         # 385 characters encode to 514: too long for the panel's id check.
-        rows = [message("i" * 385, 100), {"id": True}, {"id": ["x"]}, "row", message("ok", 50)]
+        rows = [message("i" * 385, 100), {"id": True}, {"id": ["x"]}, "row", message("a\x00b", 75),
+                message("ok", 50)]
         rows[-1]["url"] = "javascript:alert(1)"
         payload = self._list(
             {"a": {"ok": True, "unread": 2, "searchUrl": "http://plain.test/", "messages": rows}}
@@ -459,6 +466,9 @@ class ProviderDataBoundsTests(unittest.TestCase):
         # message read without opening it.
         self.assertEqual(payload["messages"][0]["url"], orchestrate.BAD_URL)
         self.assertEqual(payload["inboxes"][0]["searchUrl"], "")
+        url = "https://mail.example.test/#search/invalid:thing"
+        payload = self._list({"a": {"ok": True, "unread": 0, "searchUrl": url, "messages": []}})
+        self.assertEqual(payload["inboxes"][0]["searchUrl"], url)
         row = message("none", 1)
         row["url"] = ""
         payload = self._list({"a": {"ok": True, "unread": 1, "messages": [row]}})

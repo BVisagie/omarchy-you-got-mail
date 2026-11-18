@@ -42,8 +42,9 @@ class PanelContractTests(unittest.TestCase):
 
     def test_refresh_interval_zero_turns_timed_checks_off(self) -> None:
         refresh = self._property("refreshMs")
-        self.assertIn("if (n === 0) return 0", refresh)
-        self.assertLess(refresh.index("n === 0"), refresh.index("!(n > 0)"))
+        # Only an explicit 0 turns checks off; "0oops" is not a setting.
+        self.assertIn('if (raw === 0 || String(raw).trim() === "0") return 0', refresh)
+        self.assertLess(refresh.index("raw === 0"), refresh.index("!(n > 0)"))
         self.assertIn("Math.max(15, Math.min(3600, n)) * 1000", refresh)
         timer = self.qml.split("interval: Math.max(15000, root.refreshMs)")[1].split("}")[0]
         self.assertIn("running: root.refreshMs > 0", timer)
