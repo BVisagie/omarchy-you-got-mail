@@ -905,6 +905,63 @@ class GmailProviderProcessTests(unittest.TestCase):
         cached = json.loads((dirs[0] / "messages.json").read_text())
         self.assertEqual(len(cached["abc1"]["snippet"]), 1000)
 
+    def _list_with_details(self, details: str, ids: str = '[{"id":"abc1"}]', prepare=None) -> tuple:
+        import json
+
+        dirs = []
+
+        def keep(cache) -> None:
+            if prepare:
+                prepare(cache)
+            dirs.append(cache)
+
+        payload = self._run(
+            'case " $* " in\n'
+            '  *" users getProfile "*) printf \'{"emailAddress":"you@gmail.com"}\\n\' ;;\n'
+            f'  *" messages list "*) printf \'{{"messages":{ids},"resultSizeEstimate":1}}\\n\' ;;\n'
+            f"  *\" messages get \"*) printf '%s\\n' '{details}' ;;\n"
+            "  *) printf '{}\\n' ;;\n"
+            "esac\n",
+            "list",
+            "--limit",
+            "2",
+            prepare=keep,
+        )
+        path = dirs[0] / "messages.json"
+        return payload, (json.loads(path.read_text()) if path.exists() else {})
+
+    def test_message_details_must_be_one_object_for_the_asked_id(self) -> None:
+        for details in ('{"id":"abc1","snippet":"a"} {"id":"zzz9","snippet":"b"}',
+                        '{"id":"other","snippet":"a"}', '[{"id":"abc1"}]'):
+            payload, cached = self._list_with_details(details)
+            self.assertTrue(payload["ok"], payload)
+            self.assertEqual(cached, {}, details)
+
+    def test_an_out_of_range_internal_date_is_zero(self) -> None:
+        payload, cached = self._list_with_details('{"id":"abc1","internalDate":"' + "9" * 5000 + '"}')
+        self.assertEqual(cached["abc1"]["ts"], 0)
+
+    def test_no_more_ids_are_looked_up_than_were_asked_for(self) -> None:
+        ids = "[" + ",".join(f'{{"id":"a{i:03x}"}}' for i in range(40)) + "]"
+        payload, cached = self._list_with_details('{"id":"x"}', ids=ids)
+        self.assertTrue(payload["ok"], payload)
+        self.assertEqual(len(payload["messages"]), 2)
+
+    def test_an_oversized_old_cache_starts_over(self) -> None:
+        def prepare(cache) -> None:
+            import os
+
+            cache.mkdir(parents=True, mode=0o700)
+            os.chmod(cache.parent, 0o700)
+            big = cache / "messages.json"
+            big.write_text('{"old":"' + "x" * (9 * 1024 * 1024) + '"}')
+            big.chmod(0o600)
+
+        payload, cached = self._list_with_details('{"id":"abc1","snippet":"hi"}', prepare=prepare)
+        self.assertTrue(payload["ok"], payload)
+        self.assertNotIn("old", cached)
+        self.assertIn("abc1", cached)
+
     def test_one_message_list_succeeds_with_its_subject(self) -> None:
         payload = self._run(self.GWS_ONE_MESSAGE, "list", "--limit", "5")
         self.assertTrue(payload["ok"], payload)
