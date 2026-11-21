@@ -11,7 +11,6 @@ import hashlib
 import http.server
 import json
 import secrets
-import socket
 import sys
 import threading
 import time
@@ -73,19 +72,93 @@ def _pkce() -> tuple[str, str]:
     return verifier, challenge
 
 
-def _free_port() -> int:
-    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
-        sock.bind(("127.0.0.1", 0))
-        return int(sock.getsockname()[1])
+# How long the browser sign-in waits for Microsoft's redirect back.
+LOGIN_TIMEOUT = 300
+# A connection to the listener that goes this long without a byte is dropped.
+CONNECTION_TIMEOUT = 10
+
+_SIGNED_IN = b"<html><body><p>Signed in. You can close this tab.</p></body></html>"
+_FAILED = b"<html><body><p>Sign-in failed. Return to the terminal.</p></body></html>"
+_NOT_THIS = b"<html><body><p>Not this sign-in.</p></body></html>"
+
+
+def _same(a: str, b: str) -> bool:
+    return secrets.compare_digest(a.encode("utf-8"), b.encode("utf-8"))
+
+
+class _CallbackServer(http.server.ThreadingHTTPServer):
+    """One-shot listener for the redirect back to http://localhost:<port>/.
+
+    Any local program can reach this port, so only a request to / carrying
+    this sign-in's state ends the wait. Everything else is refused and the
+    listener keeps waiting. Each connection has its own thread and a read
+    timeout, so one that never finishes its request cannot hold the others.
+    """
+
+    daemon_threads = True
+
+    def __init__(self, state: str) -> None:
+        # Port 0: the listener holds its port from the start, so no other
+        # program can take it between choosing a port and listening on it.
+        super().__init__(("127.0.0.1", 0), _CallbackHandler)
+        self.state = state
+        self.result: dict[str, str] = {}
+        self.finished = threading.Event()
+        self._lock = threading.Lock()
+
+    def take(self, result: dict[str, str]) -> None:
+        with self._lock:
+            if not self.finished.is_set():
+                self.result = result
+                self.finished.set()
+
+
+class _CallbackHandler(http.server.BaseHTTPRequestHandler):
+    timeout = CONNECTION_TIMEOUT
+
+    def do_GET(self) -> None:  # noqa: N802
+        server: _CallbackServer = self.server  # type: ignore[assignment]
+        parsed = urllib.parse.urlsplit(self.path)
+        qs = urllib.parse.parse_qs(parsed.query)
+        result = {
+            "code": (qs.get("code") or [""])[0],
+            "state": (qs.get("state") or [""])[0],
+            "error": (qs.get("error") or [""])[0],
+            "error_description": (qs.get("error_description") or [""])[0],
+        }
+        if (
+            parsed.path != "/"
+            or not (result["code"] or result["error"])
+            or not _same(result["state"], server.state)
+        ):
+            self._reply(400, _NOT_THIS)
+            return
+        server.take(result)
+        ok = bool(result["code"]) and not result["error"]
+        self._reply(200 if ok else 400, _SIGNED_IN if ok else _FAILED)
+
+    def _reply(self, status: int, body: bytes) -> None:
+        self.send_response(status)
+        self.send_header("Content-Type", "text/html; charset=utf-8")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def log_message(self, format: str, *args: object) -> None:  # noqa: A003
+        return
 
 
 def browser_login(client_id: str, tenant: str = "common") -> dict:
     """Sign in via the system browser and a one-shot http://localhost listener."""
     verifier, challenge = _pkce()
-    port = _free_port()
+    state = secrets.token_urlsafe(16)
+    try:
+        server = _CallbackServer(state)
+    except OSError as exc:
+        raise RuntimeError(f"could not listen on localhost: {exc}") from None
+    port = int(server.server_address[1])
     # Entra treats http://localhost (any port) as a public-client loopback URI.
     redirect = f"http://localhost:{port}/"
-    state = secrets.token_urlsafe(16)
     base = AUTH.format(tenant=tenant or "common")
     authorize = (
         f"{base}/authorize?"
@@ -104,71 +177,31 @@ def browser_login(client_id: str, tenant: str = "common") -> dict:
         )
     )
 
-    class Handler(http.server.BaseHTTPRequestHandler):
-        def do_GET(self) -> None:  # noqa: N802
-            parsed = urllib.parse.urlparse(self.path)
-            qs = urllib.parse.parse_qs(parsed.query)
-            if not qs.get("code") and not qs.get("error"):
-                self.send_response(204)
-                self.end_headers()
-                return
-            self.server.result = {  # type: ignore[attr-defined]
-                "code": (qs.get("code") or [""])[0],
-                "state": (qs.get("state") or [""])[0],
-                "error": (qs.get("error") or [""])[0],
-                "error_description": (qs.get("error_description") or [""])[0],
-            }
-            self.server.done = True  # type: ignore[attr-defined]
-            ok = bool(self.server.result["code"])  # type: ignore[attr-defined]
-            body = (
-                b"<html><body><p>Signed in. You can close this tab.</p></body></html>"
-                if ok
-                else b"<html><body><p>Sign-in failed. Return to the terminal.</p></body></html>"
-            )
-            self.send_response(200 if ok else 400)
-            self.send_header("Content-Type", "text/html; charset=utf-8")
-            self.send_header("Content-Length", str(len(body)))
-            self.end_headers()
-            self.wfile.write(body)
-
-        def log_message(self, format: str, *args: object) -> None:  # noqa: A003
-            return
-
-    try:
-        server = http.server.HTTPServer(("127.0.0.1", port), Handler)
-    except OSError as exc:
-        raise RuntimeError(f"could not listen on localhost: {exc}") from None
-    server.result = {}  # type: ignore[attr-defined]
-    server.done = False  # type: ignore[attr-defined]
-    server.timeout = 0.5
-
-    def _serve() -> None:
-        while not server.done:  # type: ignore[attr-defined]
-            server.handle_request()
-
-    thread = threading.Thread(target=_serve, daemon=True)
-    sys.stderr.write(
-        "\nOpen this URL if the browser does not appear:\n"
-        f"  {authorize}\n\n"
-        "Sign in as the Outlook mailbox you want to add.\n"
-    )
-    sys.stderr.flush()
-    try:
-        webbrowser.open(authorize)
-    except Exception:
-        pass
+    thread = threading.Thread(target=server.serve_forever, kwargs={"poll_interval": 0.2}, daemon=True)
     thread.start()
-    deadline = time.time() + 300
-    while time.time() < deadline and thread.is_alive() and not server.done:  # type: ignore[attr-defined]
-        time.sleep(0.2)
-    server.done = True  # type: ignore[attr-defined]
-    thread.join(timeout=2)
-    server.server_close()
-    result = getattr(server, "result", {}) or {}
+    try:
+        sys.stderr.write(
+            "\nOpen this URL if the browser does not appear:\n"
+            f"  {authorize}\n\n"
+            "Sign in as the Outlook mailbox you want to add.\n"
+        )
+        sys.stderr.flush()
+        try:
+            webbrowser.open(authorize)
+        except Exception:
+            pass
+        server.finished.wait(LOGIN_TIMEOUT)
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=2)
+    result = dict(server.result)
+    # The listener takes only a matching state; checked again, as it is the
+    # one thing that ties this redirect to this sign-in.
+    if not result or not _same(result.get("state", ""), state):
+        raise RuntimeError("Outlook sign-in timed out or was cancelled")
     if result.get("error"):
         raise RuntimeError(result.get("error_description") or result["error"])
-    if result.get("state") and result["state"] != state:
-        raise RuntimeError("Outlook sign-in state mismatch")
     code = result.get("code") or ""
     if not code:
         raise RuntimeError("Outlook sign-in timed out or was cancelled")
