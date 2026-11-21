@@ -45,6 +45,9 @@ class FileTooLargeError(ValueError):
         super().__init__(message)
 
 
+_DNS_LABEL = re.compile(r"[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?")
+
+
 class UnexpectedUrlError(ValueError):
     """A URL that is not https:// on the one host a request may go to."""
 
@@ -81,14 +84,16 @@ def read_http_body(fp: object, limit: int = MAX_HTTP_BODY) -> bytes:
     return bytes(data)
 
 
-def check_https_url(url: object, host: str) -> None:
+def check_https_url(url: object, host: str, *, subdomains: bool = False) -> None:
     """Raise UnexpectedUrlError unless url is https://<host>/ on port 443.
 
     Providers send a mailbox token with each request, and some URLs come
     from the service itself (a JMAP session's apiUrl, a Graph nextLink), so
     each one is checked before a request is built. A user name or password
     in the URL, another port, a control character or space, or a host that
-    differs at all (case aside) is refused.
+    differs at all (case aside) is refused. With subdomains, a host one DNS
+    label below <host> is taken too (phl.api.fastmail.com for
+    api.fastmail.com), but nothing deeper and no other host.
     """
     if not isinstance(url, str) or any(ord(ch) <= 0x20 or ord(ch) == 0x7F for ch in url):
         raise UnexpectedUrlError()
@@ -97,11 +102,18 @@ def check_https_url(url: object, host: str) -> None:
         port = parts.port
     except ValueError:
         raise UnexpectedUrlError() from None
+    hostname = parts.hostname or ""
+    host = host.lower()
+    on_host = hostname == host or (
+        subdomains
+        and hostname.endswith("." + host)
+        and _DNS_LABEL.fullmatch(hostname[: -len(host) - 1]) is not None
+    )
     if (
         parts.scheme != "https"
         or parts.username is not None
         or parts.password is not None
-        or parts.hostname != host.lower()
+        or not on_host
         or port not in (None, 443)
     ):
         raise UnexpectedUrlError()
@@ -141,14 +153,16 @@ def open_https(
     data: bytes | None = None,
     headers: dict[str, str] | None = None,
     timeout: float = 30,
+    subdomains: bool = False,
 ) -> object:
     """Open url, which must be https://<host>, without following redirects.
 
-    The URL is checked before the request (and any token in headers) exists.
-    Raises UnexpectedUrlError, or what urllib raises: HTTPError for any
-    status outside 2xx, redirects included, and URLError.
+    The URL is checked before the request (and any token in headers) exists;
+    subdomains is as for check_https_url. Raises UnexpectedUrlError, or what
+    urllib raises: HTTPError for any status outside 2xx, redirects included,
+    and URLError.
     """
-    check_https_url(url, host)
+    check_https_url(url, host, subdomains=subdomains)
     opener = https_opener()
     import urllib.request
 

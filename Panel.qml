@@ -1155,7 +1155,8 @@ Panel {
                 : root.trn("markAll.confirm", root.unread,
                   "Press A again to mark %1 unread as read", "Press A again to mark %1 unread as read")
               textFormat: Text.PlainText
-              elide: Text.ElideRight
+              // Wraps, not elides, so "in all accounts" is never cut off.
+              wrapMode: Text.Wrap
               font.family: root.fontFamily
               font.pixelSize: Style.font.caption
               color: bar ? bar.urgent : Color.urgent

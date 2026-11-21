@@ -21,7 +21,9 @@ from common import (
     read_http_body,
 )
 
-# The token goes only here. The session's apiUrl must be on this host too.
+# The session comes from this host. Fastmail routes each account to a pod,
+# and the session's apiUrl can name it (https://phl.api.fastmail.com/jmap/api/),
+# so JMAP calls may also go one label below. The token goes nowhere else.
 HOST = "api.fastmail.com"
 SESSION_URL = f"https://{HOST}/jmap/session"
 USING = [
@@ -32,19 +34,26 @@ READ_ALL_BUDGET = 100
 QUERY_PAGE = 200
 
 
-def _try_request(url: str, token: str, payload: dict | None = None) -> tuple[dict | None, str]:
+def _try_request(
+    url: str, token: str, payload: dict | None = None, *, pod: bool = False
+) -> tuple[dict | None, str]:
     data = None if payload is None else json.dumps(payload).encode()
     headers = {"Authorization": f"Bearer {token}"}
     if data is not None:
         headers["Content-Type"] = "application/json"
     try:
         with open_https(
-            url, HOST, method="GET" if data is None else "POST", data=data, headers=headers
+            url,
+            HOST,
+            method="GET" if data is None else "POST",
+            data=data,
+            headers=headers,
+            subdomains=pod,
         ) as resp:
             raw = read_http_body(resp).decode()
             return json.loads(raw), ""
     except UnexpectedUrlError:
-        return None, f"Fastmail gave a URL outside https://{HOST}"
+        return None, f"Fastmail gave a URL outside {HOST} and its pods"
     except urllib.error.HTTPError as exc:
         if exc.code in (401, 403):
             return None, "unauthorized"
@@ -57,8 +66,8 @@ def _try_request(url: str, token: str, payload: dict | None = None) -> tuple[dic
         return None, "Fastmail returned invalid JSON"
 
 
-def _request(url: str, token: str, payload: dict | None = None) -> dict:
-    data, err = _try_request(url, token, payload)
+def _request(url: str, token: str, payload: dict | None = None, *, pod: bool = False) -> dict:
+    data, err = _try_request(url, token, payload, pod=pod)
     if err:
         acc = _bootstrap.account()
         die(account_error(acc, err, provider="fastmail") if acc else err)
@@ -73,7 +82,7 @@ def _jmap(session: dict, token: str, calls: list) -> list:
     api = session.get("apiUrl")
     if not api:
         die("Fastmail session had no apiUrl")
-    body = _request(api, token, {"using": USING, "methodCalls": calls})
+    body = _request(api, token, {"using": USING, "methodCalls": calls}, pod=True)
     return body.get("methodResponses") or []
 
 
@@ -81,7 +90,7 @@ def _try_jmap(session: dict, token: str, calls: list) -> tuple[list | None, str]
     api = session.get("apiUrl")
     if not api:
         return None, "Fastmail session had no apiUrl"
-    body, err = _try_request(api, token, {"using": USING, "methodCalls": calls})
+    body, err = _try_request(api, token, {"using": USING, "methodCalls": calls}, pod=True)
     if err:
         return None, err
     return (body or {}).get("methodResponses") or [], ""

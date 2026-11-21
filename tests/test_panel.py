@@ -340,6 +340,9 @@ class PanelContractTests(unittest.TestCase):
         self.assertIn('root.trn("markAll.confirmAccounts", root.unread,', label)
         self.assertIn("in all accounts", label)
         self.assertIn('root.trn("markAll.confirm", root.unread,', label)
+        # Wrapped, so a large font or narrow panel cannot cut off "in all accounts".
+        self.assertIn("wrapMode: Text.Wrap", label)
+        self.assertNotIn("elide:", label)
 
     def test_refresh_requests_are_coalesced(self) -> None:
         self.assertIn("property bool refreshPending", self.qml)

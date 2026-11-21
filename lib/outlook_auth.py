@@ -46,6 +46,10 @@ def _post(url: str, data: dict) -> dict:
         raise RuntimeError("Outlook returned invalid JSON") from None
     except urllib.error.HTTPError as exc:
         try:
+            # A redirect is not followed, and its body (often a page of HTML)
+            # is not read or shown: the status says enough.
+            if 300 <= exc.code < 400:
+                raise RuntimeError(f"Outlook sign-in HTTP {exc.code}") from None
             try:
                 detail = read_http_body(exc, MAX_HTTP_ERROR).decode("utf-8")
             except ResponseTooLargeError as err:

@@ -290,6 +290,33 @@ class HttpsOnlyTests(unittest.TestCase):
             with self.assertRaises(common.UnexpectedUrlError, msg=repr(url)):
                 common.check_https_url(url, host)
 
+    def test_check_https_url_with_subdomains_takes_one_label_below_the_host(self) -> None:
+        host = "api.fastmail.com"
+        for url in (
+            "https://api.fastmail.com/jmap/api/",
+            "https://phl.api.fastmail.com/jmap/api/",
+            "https://PHL.Api.Fastmail.com/jmap/api/",
+            "https://pod-2.api.fastmail.com:443/jmap/api/",
+        ):
+            common.check_https_url(url, host, subdomains=True)
+        for url in (
+            "https://a.phl.api.fastmail.com/",
+            "https://evilapi.fastmail.com/",
+            "https://.api.fastmail.com/",
+            "https://-x.api.fastmail.com/",
+            "https://x-.api.fastmail.com/",
+            "https://x_y.api.fastmail.com/",
+            "https://phl.api.fastmail.com.example.test/",
+            "https://user@phl.api.fastmail.com/",
+            "https://phl.api.fastmail.com:8443/",
+            "http://phl.api.fastmail.com/",
+        ):
+            with self.assertRaises(common.UnexpectedUrlError, msg=url):
+                common.check_https_url(url, host, subdomains=True)
+        # Without subdomains, a pod is another host.
+        with self.assertRaises(common.UnexpectedUrlError):
+            common.check_https_url("https://phl.api.fastmail.com/jmap/api/", host)
+
     def test_opener_handles_only_https_and_follows_no_redirect(self) -> None:
         import urllib.request
 
