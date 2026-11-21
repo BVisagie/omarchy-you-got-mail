@@ -20,7 +20,7 @@ See [CHANGELOG.md](../CHANGELOG.md) for what changed in each release.
 
 ## Staying on Omarchy 4.0
 
-Version 3.0.0 needs Omarchy 4.5, and `omarchy plugin add` and `update`
+Version 3.0.0 and later need Omarchy 4.5, and `omarchy plugin add` and `update`
 always take the newest commit. On Omarchy 4.0, pin the checkout to 2.10.0,
 the last release that supports it.
 
