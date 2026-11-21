@@ -121,6 +121,22 @@ class BrowserLoginListenerTests(unittest.TestCase):
             self._login(visit)
         self.assertEqual(str(caught.exception), "The user cancelled")
 
+    def test_a_broken_connection_prints_nothing_to_the_terminal(self) -> None:
+        import io
+
+        server = outlook_auth._CallbackServer("s")
+        try:
+            with patch.object(outlook_auth.sys, "stderr", new_callable=io.StringIO) as err, patch(
+                "sys.stderr", new=err
+            ):
+                try:
+                    raise ConnectionResetError("peer reset")
+                except ConnectionResetError:
+                    server.handle_error(None, ("127.0.0.1", 1))
+            self.assertEqual(err.getvalue(), "")
+        finally:
+            server.server_close()
+
     def test_the_listener_owns_its_port_from_the_start(self) -> None:
         # No port is picked, released and bound again for another program to take.
         self.assertFalse(hasattr(outlook_auth, "_free_port"))

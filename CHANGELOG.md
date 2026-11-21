@@ -21,9 +21,10 @@ settings are unchanged. Run `omarchy restart shell` after updating.
   failed check.
 - Outlook browser sign-in waits for Microsoft's redirect back with this
   sign-in's state, and nothing else. Another program on the computer can no
-  longer end or cancel sign-in through the local address, a reply without
-  the state is refused, and a connection that sends nothing no longer holds
-  the sign-in up. The local listener keeps its port from the start.
+  longer end or cancel sign-in through the local address or print errors
+  into its terminal, a reply without the state is refused, and a connection
+  that sends nothing no longer holds the sign-in up. The local listener
+  keeps its port from the start.
 
 ## 3.0.0
 

@@ -112,6 +112,11 @@ class _CallbackServer(http.server.ThreadingHTTPServer):
                 self.result = result
                 self.finished.set()
 
+    def handle_error(self, request: object, client_address: object) -> None:
+        # socketserver prints a traceback when a connection breaks mid-reply;
+        # any local program could put those in the sign-in terminal.
+        return
+
 
 class _CallbackHandler(http.server.BaseHTTPRequestHandler):
     timeout = CONNECTION_TIMEOUT
