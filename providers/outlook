@@ -10,7 +10,6 @@ import sys
 import time
 import urllib.error
 import urllib.parse
-import urllib.request
 from datetime import datetime
 from pathlib import Path
 
@@ -18,11 +17,13 @@ import _bootstrap
 from common import (
     FileTooLargeError,
     ResponseTooLargeError,
+    UnexpectedUrlError,
     account_error,
     die,
     emit,
     load_secret,
     one_line,
+    open_https,
     read_http_body,
     read_owned_file,
     save_secret,
@@ -31,7 +32,9 @@ from common import (
 )
 from outlook_auth import refresh_access_token
 
-GRAPH = "https://graph.microsoft.com/v1.0"
+# The token goes only here, and each @odata.nextLink must be on this host too.
+GRAPH_HOST = "graph.microsoft.com"
+GRAPH = f"https://{GRAPH_HOST}/v1.0"
 SKIP_WELL_KNOWN = ("junkemail", "deleteditems", "drafts")
 CACHE_TTL = 6 * 3600
 READ_ALL_BUDGET = 100
@@ -46,16 +49,16 @@ def _try_http(
     extra_headers: dict[str, str] | None = None,
 ) -> tuple[dict | None, str]:
     data = None if payload is None else json.dumps(payload).encode()
-    req = urllib.request.Request(url, data=data, method=method)
-    req.add_header("Authorization", f"Bearer {token}")
+    headers = {"Authorization": f"Bearer {token}"}
     if data is not None:
-        req.add_header("Content-Type", "application/json")
-    for key, value in (extra_headers or {}).items():
-        req.add_header(key, value)
+        headers["Content-Type"] = "application/json"
+    headers.update(extra_headers or {})
     try:
-        with urllib.request.urlopen(req, timeout=30) as resp:
+        with open_https(url, GRAPH_HOST, method=method, data=data, headers=headers) as resp:
             raw = read_http_body(resp).decode()
             return (json.loads(raw) if raw else {}), ""
+    except UnexpectedUrlError:
+        return None, f"Microsoft Graph gave a URL outside https://{GRAPH_HOST}"
     except urllib.error.HTTPError as exc:
         return None, f"Outlook HTTP {exc.code}"
     except urllib.error.URLError:

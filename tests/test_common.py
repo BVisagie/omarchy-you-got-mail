@@ -7,6 +7,8 @@ import subprocess
 import sys
 import tempfile
 import unittest
+import urllib.error
+import urllib.parse
 from pathlib import Path
 from unittest.mock import patch
 
@@ -252,6 +254,130 @@ class HttpBodyTests(unittest.TestCase):
         self.assertEqual(raw, b"abcd")
         with self.assertRaises(common.ResponseTooLargeError):
             common.read_http_body(self._body(b"a" * (limit + 1), content_length="-1"), limit)
+
+
+class HttpsOnlyTests(unittest.TestCase):
+    def test_check_https_url_takes_only_https_on_the_one_host(self) -> None:
+        host = "api.fastmail.com"
+        for url in (
+            "https://api.fastmail.com/jmap/api/",
+            "https://API.Fastmail.com/jmap/api/",
+            "https://api.fastmail.com:443/jmap/api/?a=b#c",
+        ):
+            common.check_https_url(url, host)
+        for url in (
+            "http://api.fastmail.com/jmap/api/",
+            "https://api.fastmail.com.example.test/",
+            "https://example.test/?host=api.fastmail.com",
+            "https://user@api.fastmail.com/",
+            "https://user:pw@api.fastmail.com/",
+            "https://example.test\\@api.fastmail.com/",
+            "https://api.fastmail.com:8443/",
+            "https://api.fastmail.com:nope/",
+            "https://api.fastmail.com./",
+            "https://[::1]/",
+            "//api.fastmail.com/jmap/api/",
+            "file:///etc/passwd",
+            "ftp://api.fastmail.com/",
+            "data:,{}",
+            "https://api.fastmail.com/a b",
+            "https://api.fastmail.com/\r\nX-Injected: 1",
+            "https://api.fastmail.com/\x7f",
+            "",
+            None,
+            42,
+        ):
+            with self.assertRaises(common.UnexpectedUrlError, msg=repr(url)):
+                common.check_https_url(url, host)
+
+    def test_opener_handles_only_https_and_follows_no_redirect(self) -> None:
+        import urllib.request
+
+        kinds = {type(h) for h in common._HTTPS_OPENER.handlers}
+        self.assertIn(urllib.request.HTTPSHandler, kinds)
+        for unwanted in (
+            urllib.request.HTTPRedirectHandler,
+            urllib.request.HTTPHandler,
+            urllib.request.FileHandler,
+            urllib.request.FTPHandler,
+            urllib.request.DataHandler,
+            urllib.request.HTTPCookieProcessor,
+        ):
+            self.assertFalse(any(isinstance(h, unwanted) for h in common._HTTPS_OPENER.handlers), unwanted)
+        # Even past the URL check, http: and file: have no handler here.
+        for url in ("http://127.0.0.1:9/", "file:///etc/passwd"):
+            with self.assertRaises(urllib.error.URLError):
+                common._HTTPS_OPENER.open(urllib.request.Request(url), timeout=1)
+
+    def _serve(self, status: int, headers: dict, body: "io.BytesIO"):
+        """Answer the real opener chain's https_open with one canned response."""
+        import email.message
+        import urllib.request
+
+        handler = next(h for h in common._HTTPS_OPENER.handlers if isinstance(h, urllib.request.HTTPSHandler))
+        message = email.message.Message()
+        for key, value in headers.items():
+            message[key] = value
+        requests = []
+
+        def https_open(req):
+            requests.append(req)
+            resp = urllib.request.addinfourl(body, message, req.full_url, status)
+            resp.msg = "canned"
+            return resp
+
+        return patch.object(handler, "https_open", side_effect=https_open), requests
+
+    def test_redirect_is_an_error_with_its_body_unread_and_no_second_request(self) -> None:
+        import io
+        import urllib.error
+
+        class Body(io.BytesIO):
+            reads = 0
+
+            def read(self, *args):
+                Body.reads += 1
+                return super().read(*args)
+
+        for status in (301, 302, 303, 307, 308):
+            Body.reads = 0
+            served, requests = self._serve(status, {"Location": "https://example.test/steal"}, Body(b"x" * 1024))
+            with served, self.assertRaises(urllib.error.HTTPError) as caught:
+                common.open_https(
+                    "https://api.fastmail.com/jmap/session",
+                    "api.fastmail.com",
+                    headers={"Authorization": "Bearer tok"},
+                )
+            caught.exception.close()
+            self.assertEqual(caught.exception.code, status)
+            self.assertEqual(len(requests), 1, status)
+            # full_url, not host: an https_proxy setting moves host to the proxy.
+            self.assertEqual(urllib.parse.urlsplit(requests[0].full_url).hostname, "api.fastmail.com")
+            self.assertEqual(Body.reads, 0, status)
+
+    def test_success_passes_through_and_headers_are_unredirected(self) -> None:
+        import io
+
+        served, requests = self._serve(200, {"Content-Type": "application/json"}, io.BytesIO(b"{}"))
+        with served:
+            with common.open_https(
+                "https://graph.microsoft.com/v1.0/me",
+                "graph.microsoft.com",
+                method="POST",
+                data=b"{}",
+                headers={"Authorization": "Bearer tok", "Content-Type": "application/json"},
+            ) as resp:
+                self.assertEqual(common.read_http_body(resp), b"{}")
+        (req,) = requests
+        self.assertEqual(req.get_method(), "POST")
+        self.assertEqual(req.unredirected_hdrs["Authorization"], "Bearer tok")
+        self.assertEqual(req.headers, {})
+
+    def test_open_https_checks_the_url_before_opening(self) -> None:
+        with patch.object(common._HTTPS_OPENER, "open") as opened:
+            with self.assertRaises(common.UnexpectedUrlError):
+                common.open_https("https://example.test/", "api.fastmail.com", headers={"Authorization": "Bearer tok"})
+        opened.assert_not_called()
 
 
 class PrivateWriteTests(unittest.TestCase):

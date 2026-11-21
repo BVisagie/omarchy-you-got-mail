@@ -7,13 +7,23 @@ import json
 import sys
 import time
 import urllib.error
-import urllib.request
 from email.utils import parseaddr
 
 import _bootstrap
-from common import ResponseTooLargeError, account_error, die, emit, one_line, read_http_body
+from common import (
+    ResponseTooLargeError,
+    UnexpectedUrlError,
+    account_error,
+    die,
+    emit,
+    one_line,
+    open_https,
+    read_http_body,
+)
 
-SESSION_URL = "https://api.fastmail.com/jmap/session"
+# The token goes only here. The session's apiUrl must be on this host too.
+HOST = "api.fastmail.com"
+SESSION_URL = f"https://{HOST}/jmap/session"
 USING = [
     "urn:ietf:params:jmap:core",
     "urn:ietf:params:jmap:mail",
@@ -24,14 +34,17 @@ QUERY_PAGE = 200
 
 def _try_request(url: str, token: str, payload: dict | None = None) -> tuple[dict | None, str]:
     data = None if payload is None else json.dumps(payload).encode()
-    req = urllib.request.Request(url, data=data, method="GET" if data is None else "POST")
-    req.add_header("Authorization", f"Bearer {token}")
+    headers = {"Authorization": f"Bearer {token}"}
     if data is not None:
-        req.add_header("Content-Type", "application/json")
+        headers["Content-Type"] = "application/json"
     try:
-        with urllib.request.urlopen(req, timeout=30) as resp:
+        with open_https(
+            url, HOST, method="GET" if data is None else "POST", data=data, headers=headers
+        ) as resp:
             raw = read_http_body(resp).decode()
             return json.loads(raw), ""
+    except UnexpectedUrlError:
+        return None, f"Fastmail gave a URL outside https://{HOST}"
     except urllib.error.HTTPError as exc:
         if exc.code in (401, 403):
             return None, "unauthorized"

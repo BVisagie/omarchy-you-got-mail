@@ -17,27 +17,30 @@ import threading
 import time
 import urllib.error
 import urllib.parse
-import urllib.request
 import webbrowser
 
 from common import (
     MAX_HTTP_ERROR,
     ResponseTooLargeError,
+    UnexpectedUrlError,
+    open_https,
     read_http_body,
 )
 
 
 SCOPE = "offline_access User.Read Mail.ReadWrite"
-AUTH = "https://login.microsoftonline.com/{tenant}/oauth2/v2.0"
+LOGIN_HOST = "login.microsoftonline.com"
+AUTH = "https://" + LOGIN_HOST + "/{tenant}/oauth2/v2.0"
 
 
 def _post(url: str, data: dict) -> dict:
     body = urllib.parse.urlencode(data).encode()
-    req = urllib.request.Request(url, data=body, method="POST")
-    req.add_header("Content-Type", "application/x-www-form-urlencoded")
+    headers = {"Content-Type": "application/x-www-form-urlencoded"}
     try:
-        with urllib.request.urlopen(req, timeout=30) as resp:
+        with open_https(url, LOGIN_HOST, method="POST", data=body, headers=headers) as resp:
             return json.loads(read_http_body(resp).decode())
+    except UnexpectedUrlError:
+        raise RuntimeError(f"Outlook sign-in URL is not on https://{LOGIN_HOST}") from None
     except ResponseTooLargeError as exc:
         raise RuntimeError(str(exc)) from None
     except (json.JSONDecodeError, UnicodeDecodeError):

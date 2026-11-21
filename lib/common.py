@@ -16,6 +16,8 @@ import sys
 import tempfile
 import threading
 import time
+import urllib.parse
+import urllib.request
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -40,6 +42,13 @@ class ResponseTooLargeError(ValueError):
 
 class FileTooLargeError(ValueError):
     def __init__(self, message: str = "file too large") -> None:
+        super().__init__(message)
+
+
+class UnexpectedUrlError(ValueError):
+    """A URL that is not https:// on the one host a request may go to."""
+
+    def __init__(self, message: str = "unexpected URL") -> None:
         super().__init__(message)
 
 
@@ -70,6 +79,72 @@ def read_http_body(fp: object, limit: int = MAX_HTTP_BODY) -> bytes:
     if len(data) > limit:
         raise ResponseTooLargeError()
     return bytes(data)
+
+
+def check_https_url(url: object, host: str) -> None:
+    """Raise UnexpectedUrlError unless url is https://<host>/ on port 443.
+
+    Providers send a mailbox token with each request, and some URLs come
+    from the service itself (a JMAP session's apiUrl, a Graph nextLink), so
+    each one is checked before a request is built. A user name or password
+    in the URL, another port, a control character or space, or a host that
+    differs at all (case aside) is refused.
+    """
+    if not isinstance(url, str) or any(ord(ch) <= 0x20 or ord(ch) == 0x7F for ch in url):
+        raise UnexpectedUrlError()
+    try:
+        parts = urllib.parse.urlsplit(url)
+        port = parts.port
+    except ValueError:
+        raise UnexpectedUrlError() from None
+    if (
+        parts.scheme != "https"
+        or parts.username is not None
+        or parts.password is not None
+        or parts.hostname != host.lower()
+        or port not in (None, 443)
+    ):
+        raise UnexpectedUrlError()
+
+
+# urllib's default opener follows a redirect to any host, http:// included,
+# with the request's headers (Authorization too), and reads the whole
+# redirect body before any size cap applies. This one handles https only and
+# follows no redirect: a 3xx is an HTTPError whose body is never read, and
+# no http:, file:, ftp: or data: URL opens. Proxy settings still apply.
+_HTTPS_OPENER = urllib.request.OpenerDirector()
+for _handler in (
+    urllib.request.ProxyHandler(),
+    urllib.request.UnknownHandler(),
+    urllib.request.HTTPSHandler(),
+    urllib.request.HTTPDefaultErrorHandler(),
+    urllib.request.HTTPErrorProcessor(),
+):
+    _HTTPS_OPENER.add_handler(_handler)
+del _handler
+
+
+def open_https(
+    url: str,
+    host: str,
+    *,
+    method: str = "GET",
+    data: bytes | None = None,
+    headers: dict[str, str] | None = None,
+    timeout: float = 30,
+) -> object:
+    """Open url, which must be https://<host>, without following redirects.
+
+    The URL is checked before the request (and any token in headers) exists.
+    Raises UnexpectedUrlError, or what urllib raises: HTTPError for any
+    status outside 2xx, redirects included, and URLError.
+    """
+    check_https_url(url, host)
+    req = urllib.request.Request(url, data=data, method=method)
+    for key, value in (headers or {}).items():
+        # Unredirected: never copied onto another request, should one be made.
+        req.add_unredirected_header(key, value)
+    return _HTTPS_OPENER.open(req, timeout=timeout)
 
 
 def die(message: str, code: int = 0) -> None:
