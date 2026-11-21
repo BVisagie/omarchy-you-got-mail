@@ -2,6 +2,33 @@
 
 Versions match `manifest.json`. Git tags are created at release time.
 
+## 3.0.1
+
+Fixes from the marketplace review of 3.0.0. Accounts, credentials and
+settings are unchanged. Run `omarchy restart shell` after updating.
+
+- Holding Shift+A no longer marks all unread as read. A held key's repeats
+  are ignored, so mark-all takes two separate presses of `A` or two clicks,
+  and a second one within half a second, such as a double-click, does not
+  confirm it. Holding `a` marks one message read, not one after another.
+  With more than one account, the confirm line says it covers all accounts,
+  and it wraps rather than being cut off.
+- Fastmail and Outlook send the mailbox token only over `https://` to the
+  provider's own hosts: `api.fastmail.com` and the Fastmail pod a session
+  names for the account (such as `phl.api.fastmail.com`),
+  `graph.microsoft.com`, and `login.microsoftonline.com` for Outlook
+  sign-in. The API address a Fastmail session names and each Outlook
+  next-page link are checked before they are used. Redirects are not
+  followed, so a redirect cannot carry the token elsewhere or send a reply
+  larger than the size cap; it counts as a failed check, and sign-in shows
+  only its status.
+- Outlook browser sign-in ends only on a request to the local address that
+  carries this sign-in's state. One without that state, from another
+  program on the computer for instance, is refused and sign-in keeps
+  waiting. A connection that sends nothing no longer holds sign-in up, one
+  that breaks prints nothing into the terminal, and the local listener keeps
+  its port from the start.
+
 ## 3.0.0
 
 For Omarchy 4.5. On Omarchy 4.0, stay on 2.10.0 (see docs/UPDATING.md).

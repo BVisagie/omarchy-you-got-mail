@@ -60,6 +60,8 @@ Panel {
   property bool readStarted: false
   property int readExitCode: 0
   property bool markAllArmed: false
+  // Date.now() of the last mark-all click or A press; see requestMarkAll.
+  property double lastMarkAllRequest: 0
   property bool markAllBusy: false
   property bool refreshPending: false
   property bool reconciling: false
@@ -110,7 +112,7 @@ Panel {
       if (found >= 0) cursor = found
     }
     auxiliaryMenu.contentY = 0
-    keyCatcher.forceActiveFocus()
+    keyGate.forceActiveFocus()
   }
 
   function addAccount() {
@@ -563,14 +565,21 @@ Panel {
     if (markAllArmTimer.running) markAllArmTimer.stop()
   }
 
+  // Marks every account's unread as read, so it takes two separate requests.
+  // keyGate stops a held A. Here, a request within 500 ms of the one before,
+  // such as a double-click's second click, arms but does not confirm.
   function requestMarkAll() {
     if (!root.hasUnread || !root.reachable || listProc.running || root.readBusy
         || root.markAllBusy || root.reconciling) return
+    var now = Date.now()
+    var hurried = now - root.lastMarkAllRequest < 500
+    root.lastMarkAllRequest = now
     if (!root.markAllArmed) {
       root.markAllArmed = true
       markAllArmTimer.restart()
       return
     }
+    if (hurried) return
     root.cancelMarkAllConfirm()
     root.markAllBusy = true
     readAllProc.command = [root.script, "read-all"]
@@ -847,7 +856,7 @@ Panel {
     owner: root
     bar: root.bar
     open: root.opened
-    focusTarget: keyCatcher
+    focusTarget: keyGate
     contentWidth: panel.fittedContentWidth(Style.space(400))
     contentHeight: panel.fittedContentHeight(content.implicitHeight)
 
@@ -860,6 +869,18 @@ Panel {
       onDeleteRequested: root.actionWarning = ""
       onTabRequested: function(direction) { root.switchPanel(direction) }
       onTextKey: function(t) { root.handleTextKey(t) }
+
+      // Holds the keyboard focus, so it sees each key before keyCatcher.
+      // textKey does not say whether a press is a held key's repeat, so a
+      // held a or A stops here: each mark-read takes its own press, and a held
+      // A cannot confirm mark-all. Every other key passes on to keyCatcher.
+      Item {
+        id: keyGate
+        Keys.onPressed: function(event) {
+          if (event.isAutoRepeat && (event.text === "a" || event.text === "A"))
+            event.accepted = true
+        }
+      }
 
       Column {
         id: content
@@ -1126,10 +1147,16 @@ Panel {
               id: markAllConfirmLabel
               anchors.verticalCenter: parent.verticalCenter
               width: parent.width
-              text: root.trn("markAll.confirm", root.unread,
-                "Press A again to mark %1 unread as read", "Press A again to mark %1 unread as read")
+              // Every account's unread is marked, so with more than one, say so.
+              text: root.accountCount > 1
+                ? root.trn("markAll.confirmAccounts", root.unread,
+                  "Press A again to mark %1 unread as read in all accounts",
+                  "Press A again to mark %1 unread as read in all accounts")
+                : root.trn("markAll.confirm", root.unread,
+                  "Press A again to mark %1 unread as read", "Press A again to mark %1 unread as read")
               textFormat: Text.PlainText
-              elide: Text.ElideRight
+              // Wraps, not elides, so "in all accounts" is never cut off.
+              wrapMode: Text.Wrap
               font.family: root.fontFamily
               font.pixelSize: Style.font.caption
               color: bar ? bar.urgent : Color.urgent

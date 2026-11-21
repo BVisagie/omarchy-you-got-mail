@@ -18,7 +18,7 @@
 | Accounts button or `m` | account counts, individual inbox links, Add account, setup guide |
 | Help button or `?` | keyboard and mouse controls |
 | Speaker button or `s` | turn the new-mail sound on or off |
-| Header envelope-open or `A` | mark all unread as read (click or press twice to confirm) |
+| Header envelope-open or `A` | mark all unread as read, in every account (click or press `A` again to confirm; holding `A` or double-clicking does not confirm) |
 | `a` | mark the message under the cursor as read, without opening it |
 | Header external-link or `i` | same as right-click |
 | Click a message | open **that** thread in the browser and take it off the pile; an IMAP account opens its webmail inbox if an `https://` one is set, only marks the message read if none is set, and leaves it unread if the address is not `https://` |

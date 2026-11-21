@@ -1,9 +1,12 @@
 from __future__ import annotations
 
+import json
 import unittest
 from unittest.mock import MagicMock, patch
 
 from support import capture_json, load_provider
+
+import common
 
 
 def shutil_which(name: str) -> str:
@@ -1407,14 +1410,14 @@ class BoundedHttpTests(unittest.TestCase):
 
     def test_outlook_rejects_oversized_body(self) -> None:
         huge = b"{" + b"x" * (self.out.read_http_body.__defaults__[0] + 1)
-        with patch.object(self.out.urllib.request, "urlopen", return_value=self._resp(huge)):
+        with patch.object(common.https_opener(), "open", return_value=self._resp(huge)):
             data, err = self.out._try_http("GET", "https://graph.microsoft.com/v1.0/me", "tok")
         self.assertIsNone(data)
         self.assertEqual(err, "response too large")
 
     def test_fastmail_rejects_oversized_body(self) -> None:
         huge = b"{" + b"x" * (self.fm.read_http_body.__defaults__[0] + 1)
-        with patch.object(self.fm.urllib.request, "urlopen", return_value=self._resp(huge)):
+        with patch.object(common.https_opener(), "open", return_value=self._resp(huge)):
             data, err = self.fm._try_request("https://api.fastmail.com/jmap/session", "tok")
         self.assertIsNone(data)
         self.assertEqual(err, "response too large")
@@ -1423,7 +1426,7 @@ class BoundedHttpTests(unittest.TestCase):
         import outlook_auth
 
         huge = b"{" + b"x" * (outlook_auth.read_http_body.__defaults__[0] + 1)
-        with patch.object(outlook_auth.urllib.request, "urlopen", return_value=self._resp(huge)):
+        with patch.object(common.https_opener(), "open", return_value=self._resp(huge)):
             with self.assertRaises(RuntimeError) as caught:
                 outlook_auth._post("https://login.microsoftonline.com/common/oauth2/v2.0/token", {})
         self.assertIn("too large", str(caught.exception))
@@ -1441,10 +1444,162 @@ class BoundedHttpTests(unittest.TestCase):
             hdrs=None,
             fp=fp,
         )
-        with patch.object(outlook_auth.urllib.request, "urlopen", side_effect=err):
+        with patch.object(common.https_opener(), "open", side_effect=err):
             with self.assertRaises(RuntimeError) as caught:
                 outlook_auth._post("https://login.microsoftonline.com/common/oauth2/v2.0/token", {})
         self.assertIn("too large", str(caught.exception))
+
+
+class TokenOriginTests(unittest.TestCase):
+    """A mailbox token goes only to its provider's https host, checked first."""
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        cls.out = load_provider("outlook")
+        cls.fm = load_provider("fastmail")
+
+    @staticmethod
+    def _json(body: dict):
+        import io
+
+        resp = io.BytesIO(json.dumps(body).encode())
+        resp.headers = {}
+        return resp
+
+    def test_fastmail_api_url_off_its_host_is_never_opened(self) -> None:
+        for api in (
+            "https://api.fastmail.com.example.test/jmap/api/",
+            "https://example.test/jmap/api/",
+            "http://api.fastmail.com/jmap/api/",
+            "https://user@api.fastmail.com/jmap/api/",
+            "https://api.fastmail.com:8443/jmap/api/",
+            # A pod is one label below api.fastmail.com, and only that.
+            "https://phl.api.fastmail.com.example.test/jmap/api/",
+            "https://a.phl.api.fastmail.com/jmap/api/",
+            "https://evilapi.fastmail.com/jmap/api/",
+            "https://phl.fastmail.com/jmap/api/",
+            "http://phl.api.fastmail.com/jmap/api/",
+        ):
+            session = {"apiUrl": api}
+            with patch.object(common.https_opener(), "open") as opened:
+                responses, err = self.fm._try_jmap(session, "tok", [])
+            opened.assert_not_called()
+            self.assertIsNone(responses)
+            self.assertEqual(err, "Fastmail gave a URL outside api.fastmail.com and its pods", api)
+
+            with patch.object(common.https_opener(), "open") as opened:
+                payload = capture_json(self.fm._jmap, session, "tok", [])
+            opened.assert_not_called()
+            self.assertFalse(payload["ok"])
+            self.assertIn("outside api.fastmail.com and its pods", payload["error"])
+
+    def test_fastmail_sends_the_token_only_to_its_host_and_unredirected(self) -> None:
+        seen = []
+
+        def opened(req, timeout=None):
+            seen.append(req)
+            return self._json({"methodResponses": []})
+
+        with patch.object(common.https_opener(), "open", side_effect=opened):
+            responses, err = self.fm._try_jmap({"apiUrl": "https://api.fastmail.com/jmap/api/"}, "tok", [])
+        self.assertEqual((responses, err), ([], ""))
+        (req,) = seen
+        self.assertEqual(req.host, "api.fastmail.com")
+        self.assertEqual(req.unredirected_hdrs.get("Authorization"), "Bearer tok")
+        self.assertNotIn("Authorization", req.headers)
+
+    def test_fastmail_uses_the_pod_its_session_names(self) -> None:
+        # Fastmail routes accounts to pods, and the session's apiUrl names one.
+        seen = []
+
+        def opened(req, timeout=None):
+            seen.append(req)
+            return self._json({"methodResponses": [["Email/query", {"ids": []}, "q"]]})
+
+        session = {"apiUrl": "https://phl.api.fastmail.com/jmap/api/"}
+        with patch.object(common.https_opener(), "open", side_effect=opened):
+            responses, err = self.fm._try_jmap(session, "tok", [])
+            again = self.fm._jmap(session, "tok", [])
+        self.assertEqual(err, "")
+        self.assertEqual(responses, again)
+        self.assertEqual([r.host for r in seen], ["phl.api.fastmail.com"] * 2)
+        self.assertEqual(seen[0].unredirected_hdrs.get("Authorization"), "Bearer tok")
+
+    def test_fastmail_session_comes_only_from_api_fastmail_com(self) -> None:
+        with patch.object(common.https_opener(), "open") as opened:
+            data, err = self.fm._try_request("https://phl.api.fastmail.com/jmap/session", "tok")
+        opened.assert_not_called()
+        self.assertIsNone(data)
+        self.assertIn("outside api.fastmail.com", err)
+        self.assertEqual(self.fm.SESSION_URL, "https://api.fastmail.com/jmap/session")
+
+    def test_outlook_next_link_off_graph_is_never_opened(self) -> None:
+        for link in (
+            "https://graph.microsoft.com.example.test/v1.0/me/messages?$skip=100",
+            "http://graph.microsoft.com/v1.0/me/messages?$skip=100",
+            "https://example.test/v1.0/me/messages",
+        ):
+            pages = [self._json({"value": [{"id": "m1"}], "@odata.nextLink": link})]
+            with patch.object(common.https_opener(), "open", side_effect=pages) as opened:
+                payload = capture_json(self.out._unread_message_ids, "tok", "inbox")
+            self.assertEqual(opened.call_count, 1, link)
+            self.assertFalse(payload["ok"])
+            self.assertEqual(payload["error"], "Microsoft Graph gave a URL outside https://graph.microsoft.com")
+
+    def test_outlook_follows_next_links_on_graph(self) -> None:
+        pages = [
+            self._json({"value": [{"id": "m1"}], "@odata.nextLink": "https://graph.microsoft.com/v1.0/me/messages?$skip=1"}),
+            self._json({"value": [{"id": "m2"}]}),
+        ]
+        with patch.object(common.https_opener(), "open", side_effect=pages) as opened:
+            ids = self.out._unread_message_ids("tok", "inbox")
+        self.assertEqual(ids, ["m1", "m2"])
+        self.assertEqual(opened.call_count, 2)
+        for call in opened.call_args_list:
+            self.assertEqual(call.args[0].host, "graph.microsoft.com")
+            self.assertEqual(call.args[0].unredirected_hdrs.get("Authorization"), "Bearer tok")
+
+    def test_outlook_sign_in_redirect_is_reported_by_status_with_its_body_unread(self) -> None:
+        import io
+        import outlook_auth
+        import urllib.error
+
+        class Body(io.BytesIO):
+            reads = 0
+
+            def read(self, *args):
+                Body.reads += 1
+                return super().read(*args)
+
+        body = Body(b"<html><body>Object moved to <a href='https://example.test/'>here</a></body></html>")
+        err = urllib.error.HTTPError(
+            "https://login.microsoftonline.com/consumers/oauth2/v2.0/token", 302, "Found", hdrs=None, fp=body
+        )
+        with patch.object(common.https_opener(), "open", side_effect=err):
+            with self.assertRaises(RuntimeError) as caught:
+                outlook_auth.refresh_access_token("client", "refresh", "consumers")
+        self.assertEqual(str(caught.exception), "Outlook sign-in HTTP 302")
+        self.assertEqual(Body.reads, 0)
+        self.assertTrue(body.closed)
+
+    def test_outlook_sign_in_posts_only_to_the_login_host(self) -> None:
+        import outlook_auth
+
+        with patch.object(common.https_opener(), "open") as opened:
+            with self.assertRaises(RuntimeError) as caught:
+                outlook_auth.refresh_access_token("client", "refresh", "contoso.example test")
+        opened.assert_not_called()
+        self.assertIn("not on https://login.microsoftonline.com", str(caught.exception))
+        seen = []
+
+        def token(req, timeout=None):
+            seen.append(req)
+            return self._json({"access_token": "a"})
+
+        with patch.object(common.https_opener(), "open", side_effect=token):
+            outlook_auth.refresh_access_token("client", "refresh", "consumers")
+        self.assertEqual(seen[0].host, "login.microsoftonline.com")
+        self.assertEqual(seen[0].get_method(), "POST")
 
 
 if __name__ == "__main__":
