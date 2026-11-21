@@ -86,6 +86,10 @@
     "one": "Press A again to mark %1 unread as read",
     "other": "Press A again to mark %1 unread as read"
   },
+  "markAll.confirmAccounts": {
+    "one": "Press A again to mark %1 unread as read in all accounts",
+    "other": "Press A again to mark %1 unread as read in all accounts"
+  },
   "markAll.failed": "could not mark all as read",
   "page.number": "page %1",
   "read.processFailed": "Could not mark as read (process failed).",

@@ -496,3 +496,57 @@ test('the vertical badge shortens past 999 in the language\'s digits', () => {
   p.I18n.formatNumber = value => String(value).replace(/\d/g, d => '۰۱۲۳۴۵۶۷۸۹'[d]);
   assert.equal(p.tr('badge.overThousand', '%1k+', [p.I18n.formatNumber(1)]), '۱k+');
 });
+
+// Mark-all with a stepped clock. Starting the read-all process is the commit.
+function markAllPanel() {
+  const p = setup();
+  const clock = {ms: 1_000_000};
+  p.Date = class extends Date { static now() { return clock.ms; } };
+  return {p, clock};
+}
+
+test('mark-all confirms on a second request at least 500 ms after the one before', () => {
+  const {p, clock} = markAllPanel();
+  p.requestMarkAll();
+  assert.equal(p.markAllArmed, true);
+  assert.equal(p.readAllProc.running, false);
+  clock.ms += 500;
+  p.requestMarkAll();
+  assert.equal(p.markAllBusy, true);
+  assert.equal(p.readAllProc.running, true);
+  assert.deepEqual(Array.from(p.readAllProc.command), ['/test/you-got-mail', 'read-all']);
+});
+
+test('a double-click on mark-all arms it but does not confirm', () => {
+  const {p, clock} = markAllPanel();
+  p.requestMarkAll();
+  clock.ms += 180;
+  p.requestMarkAll();
+  assert.equal(p.markAllArmed, true);
+  assert.equal(p.readAllProc.running, false);
+  // A later, separate click still confirms.
+  clock.ms += 700;
+  p.requestMarkAll();
+  assert.equal(p.readAllProc.running, true);
+});
+
+test('a held A that reaches the panel never confirms mark-all', () => {
+  // keyGate drops the repeats in the shell; this is the fallback should any
+  // arrive. Omarchy's default key repeat: the first after 250 ms, then 40 a second.
+  const {p, clock} = markAllPanel();
+  p.handleTextKey('A');
+  assert.equal(p.markAllArmed, true);
+  clock.ms += 250;
+  p.handleTextKey('A');
+  for (let repeat = 0; repeat < 120; repeat++) {
+    clock.ms += 25;
+    p.handleTextKey('A');
+  }
+  assert.equal(p.markAllArmed, true);
+  assert.equal(p.markAllBusy, false);
+  assert.equal(p.readAllProc.running, false);
+  // Released, then pressed again on purpose: that is the confirmation.
+  clock.ms += 600;
+  p.handleTextKey('A');
+  assert.equal(p.readAllProc.running, true);
+});

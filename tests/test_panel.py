@@ -309,6 +309,38 @@ class PanelContractTests(unittest.TestCase):
         self.assertIn("Header envelope-open or `A`", usage)
         self.assertIn("mark the message under the cursor as read, without opening it", usage)
 
+    def test_held_a_repeats_stop_at_the_key_gate(self) -> None:
+        # Omarchy's PanelKeyCatcher passes text without isAutoRepeat, so a
+        # focused item inside it drops a held a or A before keyCatcher sees it.
+        catcher = self.qml.split("    PanelKeyCatcher {\n      id: keyCatcher")[1].split("\n    }\n")[0]
+        gate = catcher.split("      Item {\n        id: keyGate")[1].split("\n      }\n")[0]
+        self.assertIn("Keys.onPressed: function(event) {", gate)
+        self.assertIn('if (event.isAutoRepeat && (event.text === "a" || event.text === "A"))', gate)
+        self.assertIn("event.accepted = true", gate)
+        # Nothing else is accepted there, so every other key reaches keyCatcher.
+        self.assertEqual(gate.count("event.accepted"), 1)
+        self.assertNotIn("handleTextKey", gate)
+        self.assertIn("    focusTarget: keyGate\n", self.qml)
+        self.assertNotIn("focusTarget: keyCatcher", self.qml)
+        self.assertIn("keyGate.forceActiveFocus()", self._function("showView"))
+        self.assertNotIn("keyCatcher.forceActiveFocus()", self.qml)
+
+    def test_mark_all_needs_two_separate_requests(self) -> None:
+        self.assertIn("property double lastMarkAllRequest: 0", self.qml)
+        request = self._function("requestMarkAll")
+        self.assertIn("var hurried = now - root.lastMarkAllRequest < 500", request)
+        self.assertIn("root.lastMarkAllRequest = now", request)
+        # Arming happens first; only the confirming request is held back.
+        self.assertLess(request.index("root.markAllArmed = true"), request.index("if (hurried) return"))
+        self.assertLess(request.index("if (hurried) return"), request.index("readAllProc.running = true"))
+
+    def test_mark_all_confirm_names_every_account_when_there_are_several(self) -> None:
+        label = self.qml.split("id: markAllConfirmLabel")[1].split("\n            }\n")[0]
+        self.assertIn("text: root.accountCount > 1", label)
+        self.assertIn('root.trn("markAll.confirmAccounts", root.unread,', label)
+        self.assertIn("in all accounts", label)
+        self.assertIn('root.trn("markAll.confirm", root.unread,', label)
+
     def test_refresh_requests_are_coalesced(self) -> None:
         self.assertIn("property bool refreshPending", self.qml)
         self.assertIn("if (listProc.running) {", self.qml)
