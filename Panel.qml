@@ -566,8 +566,8 @@ Panel {
   }
 
   // Marks every account's unread as read, so it takes two separate requests.
-  // A second one within 500 ms of the one before (a double-click, or a held
-  // key's repeats should any get past keyGate) arms but never confirms.
+  // keyGate stops a held A. Here, a request within 500 ms of the one before,
+  // such as a double-click's second click, arms but does not confirm.
   function requestMarkAll() {
     if (!root.hasUnread || !root.reachable || listProc.running || root.readBusy
         || root.markAllBusy || root.reconciling) return

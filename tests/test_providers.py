@@ -1410,14 +1410,14 @@ class BoundedHttpTests(unittest.TestCase):
 
     def test_outlook_rejects_oversized_body(self) -> None:
         huge = b"{" + b"x" * (self.out.read_http_body.__defaults__[0] + 1)
-        with patch.object(common._HTTPS_OPENER, "open", return_value=self._resp(huge)):
+        with patch.object(common.https_opener(), "open", return_value=self._resp(huge)):
             data, err = self.out._try_http("GET", "https://graph.microsoft.com/v1.0/me", "tok")
         self.assertIsNone(data)
         self.assertEqual(err, "response too large")
 
     def test_fastmail_rejects_oversized_body(self) -> None:
         huge = b"{" + b"x" * (self.fm.read_http_body.__defaults__[0] + 1)
-        with patch.object(common._HTTPS_OPENER, "open", return_value=self._resp(huge)):
+        with patch.object(common.https_opener(), "open", return_value=self._resp(huge)):
             data, err = self.fm._try_request("https://api.fastmail.com/jmap/session", "tok")
         self.assertIsNone(data)
         self.assertEqual(err, "response too large")
@@ -1426,7 +1426,7 @@ class BoundedHttpTests(unittest.TestCase):
         import outlook_auth
 
         huge = b"{" + b"x" * (outlook_auth.read_http_body.__defaults__[0] + 1)
-        with patch.object(common._HTTPS_OPENER, "open", return_value=self._resp(huge)):
+        with patch.object(common.https_opener(), "open", return_value=self._resp(huge)):
             with self.assertRaises(RuntimeError) as caught:
                 outlook_auth._post("https://login.microsoftonline.com/common/oauth2/v2.0/token", {})
         self.assertIn("too large", str(caught.exception))
@@ -1444,11 +1444,10 @@ class BoundedHttpTests(unittest.TestCase):
             hdrs=None,
             fp=fp,
         )
-        with patch.object(common._HTTPS_OPENER, "open", side_effect=err):
+        with patch.object(common.https_opener(), "open", side_effect=err):
             with self.assertRaises(RuntimeError) as caught:
                 outlook_auth._post("https://login.microsoftonline.com/common/oauth2/v2.0/token", {})
         self.assertIn("too large", str(caught.exception))
-
 
 
 class TokenOriginTests(unittest.TestCase):
@@ -1476,13 +1475,13 @@ class TokenOriginTests(unittest.TestCase):
             "https://api.fastmail.com:8443/jmap/api/",
         ):
             session = {"apiUrl": api}
-            with patch.object(common._HTTPS_OPENER, "open") as opened:
+            with patch.object(common.https_opener(), "open") as opened:
                 responses, err = self.fm._try_jmap(session, "tok", [])
             opened.assert_not_called()
             self.assertIsNone(responses)
             self.assertEqual(err, "Fastmail gave a URL outside https://api.fastmail.com", api)
 
-            with patch.object(common._HTTPS_OPENER, "open") as opened:
+            with patch.object(common.https_opener(), "open") as opened:
                 payload = capture_json(self.fm._jmap, session, "tok", [])
             opened.assert_not_called()
             self.assertFalse(payload["ok"])
@@ -1495,7 +1494,7 @@ class TokenOriginTests(unittest.TestCase):
             seen.append(req)
             return self._json({"methodResponses": []})
 
-        with patch.object(common._HTTPS_OPENER, "open", side_effect=opened):
+        with patch.object(common.https_opener(), "open", side_effect=opened):
             responses, err = self.fm._try_jmap({"apiUrl": "https://api.fastmail.com/jmap/api/"}, "tok", [])
         self.assertEqual((responses, err), ([], ""))
         (req,) = seen
@@ -1510,7 +1509,7 @@ class TokenOriginTests(unittest.TestCase):
             "https://example.test/v1.0/me/messages",
         ):
             pages = [self._json({"value": [{"id": "m1"}], "@odata.nextLink": link})]
-            with patch.object(common._HTTPS_OPENER, "open", side_effect=pages) as opened:
+            with patch.object(common.https_opener(), "open", side_effect=pages) as opened:
                 payload = capture_json(self.out._unread_message_ids, "tok", "inbox")
             self.assertEqual(opened.call_count, 1, link)
             self.assertFalse(payload["ok"])
@@ -1521,7 +1520,7 @@ class TokenOriginTests(unittest.TestCase):
             self._json({"value": [{"id": "m1"}], "@odata.nextLink": "https://graph.microsoft.com/v1.0/me/messages?$skip=1"}),
             self._json({"value": [{"id": "m2"}]}),
         ]
-        with patch.object(common._HTTPS_OPENER, "open", side_effect=pages) as opened:
+        with patch.object(common.https_opener(), "open", side_effect=pages) as opened:
             ids = self.out._unread_message_ids("tok", "inbox")
         self.assertEqual(ids, ["m1", "m2"])
         self.assertEqual(opened.call_count, 2)
@@ -1532,7 +1531,7 @@ class TokenOriginTests(unittest.TestCase):
     def test_outlook_sign_in_posts_only_to_the_login_host(self) -> None:
         import outlook_auth
 
-        with patch.object(common._HTTPS_OPENER, "open") as opened:
+        with patch.object(common.https_opener(), "open") as opened:
             with self.assertRaises(RuntimeError) as caught:
                 outlook_auth.refresh_access_token("client", "refresh", "contoso.example test")
         opened.assert_not_called()
@@ -1543,7 +1542,7 @@ class TokenOriginTests(unittest.TestCase):
             seen.append(req)
             return self._json({"access_token": "a"})
 
-        with patch.object(common._HTTPS_OPENER, "open", side_effect=token):
+        with patch.object(common.https_opener(), "open", side_effect=token):
             outlook_auth.refresh_access_token("client", "refresh", "consumers")
         self.assertEqual(seen[0].host, "login.microsoftonline.com")
         self.assertEqual(seen[0].get_method(), "POST")

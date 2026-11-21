@@ -133,9 +133,12 @@ class _CallbackHandler(http.server.BaseHTTPRequestHandler):
         ):
             self._reply(400, _NOT_THIS)
             return
-        server.take(result)
         ok = bool(result["code"]) and not result["error"]
-        self._reply(200 if ok else 400, _SIGNED_IN if ok else _FAILED)
+        try:
+            # The page first, so the browser has it before the listener closes.
+            self._reply(200 if ok else 400, _SIGNED_IN if ok else _FAILED)
+        finally:
+            server.take(result)
 
     def _reply(self, status: int, body: bytes) -> None:
         self.send_response(status)

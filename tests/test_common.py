@@ -293,7 +293,7 @@ class HttpsOnlyTests(unittest.TestCase):
     def test_opener_handles_only_https_and_follows_no_redirect(self) -> None:
         import urllib.request
 
-        kinds = {type(h) for h in common._HTTPS_OPENER.handlers}
+        kinds = {type(h) for h in common.https_opener().handlers}
         self.assertIn(urllib.request.HTTPSHandler, kinds)
         for unwanted in (
             urllib.request.HTTPRedirectHandler,
@@ -303,18 +303,18 @@ class HttpsOnlyTests(unittest.TestCase):
             urllib.request.DataHandler,
             urllib.request.HTTPCookieProcessor,
         ):
-            self.assertFalse(any(isinstance(h, unwanted) for h in common._HTTPS_OPENER.handlers), unwanted)
+            self.assertFalse(any(isinstance(h, unwanted) for h in common.https_opener().handlers), unwanted)
         # Even past the URL check, http: and file: have no handler here.
         for url in ("http://127.0.0.1:9/", "file:///etc/passwd"):
             with self.assertRaises(urllib.error.URLError):
-                common._HTTPS_OPENER.open(urllib.request.Request(url), timeout=1)
+                common.https_opener().open(urllib.request.Request(url), timeout=1)
 
     def _serve(self, status: int, headers: dict, body: "io.BytesIO"):
         """Answer the real opener chain's https_open with one canned response."""
         import email.message
         import urllib.request
 
-        handler = next(h for h in common._HTTPS_OPENER.handlers if isinstance(h, urllib.request.HTTPSHandler))
+        handler = next(h for h in common.https_opener().handlers if isinstance(h, urllib.request.HTTPSHandler))
         message = email.message.Message()
         for key, value in headers.items():
             message[key] = value
@@ -374,7 +374,7 @@ class HttpsOnlyTests(unittest.TestCase):
         self.assertEqual(req.headers, {})
 
     def test_open_https_checks_the_url_before_opening(self) -> None:
-        with patch.object(common._HTTPS_OPENER, "open") as opened:
+        with patch.object(common.https_opener(), "open") as opened:
             with self.assertRaises(common.UnexpectedUrlError):
                 common.open_https("https://example.test/", "api.fastmail.com", headers={"Authorization": "Bearer tok"})
         opened.assert_not_called()

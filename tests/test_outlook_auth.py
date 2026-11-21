@@ -19,6 +19,7 @@ class BrowserLoginListenerTests(unittest.TestCase):
         """Run browser_login; visit(port, state) plays the browser and others."""
         posted: list[dict] = []
         failures: list[BaseException] = []
+        visitors: list[threading.Thread] = []
 
         def fake_open(url: str) -> bool:
             query = urllib.parse.parse_qs(urllib.parse.urlsplit(url).query)
@@ -31,7 +32,9 @@ class BrowserLoginListenerTests(unittest.TestCase):
                 except BaseException as exc:  # surfaced after the login returns
                     failures.append(exc)
 
-            threading.Thread(target=run, daemon=True).start()
+            visitor = threading.Thread(target=run, daemon=True)
+            visitors.append(visitor)
+            visitor.start()
             return True
 
         def fake_post(url: str, data: dict) -> dict:
@@ -46,6 +49,10 @@ class BrowserLoginListenerTests(unittest.TestCase):
             try:
                 return outlook_auth.browser_login("client", "consumers"), posted
             finally:
+                # The visitor's own checks and statuses count only once it is done.
+                for visitor in visitors:
+                    visitor.join(timeout=10)
+                    self.assertFalse(visitor.is_alive(), "the visitor did not finish")
                 for exc in failures:
                     raise exc
 

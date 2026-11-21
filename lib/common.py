@@ -17,7 +17,7 @@ import tempfile
 import threading
 import time
 import urllib.parse
-import urllib.request
+from functools import cache
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -107,21 +107,30 @@ def check_https_url(url: object, host: str) -> None:
         raise UnexpectedUrlError()
 
 
-# urllib's default opener follows a redirect to any host, http:// included,
-# with the request's headers (Authorization too), and reads the whole
-# redirect body before any size cap applies. This one handles https only and
-# follows no redirect: a 3xx is an HTTPError whose body is never read, and
-# no http:, file:, ftp: or data: URL opens. Proxy settings still apply.
-_HTTPS_OPENER = urllib.request.OpenerDirector()
-for _handler in (
-    urllib.request.ProxyHandler(),
-    urllib.request.UnknownHandler(),
-    urllib.request.HTTPSHandler(),
-    urllib.request.HTTPDefaultErrorHandler(),
-    urllib.request.HTTPErrorProcessor(),
-):
-    _HTTPS_OPENER.add_handler(_handler)
-del _handler
+@cache
+def https_opener() -> "urllib.request.OpenerDirector":
+    """The one opener open_https uses, built on first use.
+
+    urllib's default opener follows a redirect to any host, http:// included,
+    with the request's headers (Authorization too), and reads the whole
+    redirect body before any size cap applies. This one handles https only and
+    follows no redirect: a 3xx is an HTTPError whose body is never read, and
+    no http:, file:, ftp: or data: URL opens. Proxy settings still apply.
+    urllib.request is imported here, so providers that make no HTTPS calls
+    do not load it.
+    """
+    import urllib.request
+
+    opener = urllib.request.OpenerDirector()
+    for handler in (
+        urllib.request.ProxyHandler(),
+        urllib.request.UnknownHandler(),
+        urllib.request.HTTPSHandler(),
+        urllib.request.HTTPDefaultErrorHandler(),
+        urllib.request.HTTPErrorProcessor(),
+    ):
+        opener.add_handler(handler)
+    return opener
 
 
 def open_https(
@@ -140,11 +149,14 @@ def open_https(
     status outside 2xx, redirects included, and URLError.
     """
     check_https_url(url, host)
+    opener = https_opener()
+    import urllib.request
+
     req = urllib.request.Request(url, data=data, method=method)
     for key, value in (headers or {}).items():
         # Unredirected: never copied onto another request, should one be made.
         req.add_unredirected_header(key, value)
-    return _HTTPS_OPENER.open(req, timeout=timeout)
+    return opener.open(req, timeout=timeout)
 
 
 def die(message: str, code: int = 0) -> None:

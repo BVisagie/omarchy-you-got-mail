@@ -530,9 +530,10 @@ test('a double-click on mark-all arms it but does not confirm', () => {
   assert.equal(p.readAllProc.running, true);
 });
 
-test('a held A that reaches the panel never confirms mark-all', () => {
-  // keyGate drops the repeats in the shell; this is the fallback should any
-  // arrive. Omarchy's default key repeat: the first after 250 ms, then 40 a second.
+test('A presses at Omarchy\'s default key repeat do not confirm mark-all', () => {
+  // keyGate drops a held key's repeats in the shell. Were any to arrive, the
+  // 500 ms rule holds them back only when the repeat delay is shorter, as
+  // Omarchy's default is: the first after 250 ms, then 40 a second.
   const {p, clock} = markAllPanel();
   p.handleTextKey('A');
   assert.equal(p.markAllArmed, true);
